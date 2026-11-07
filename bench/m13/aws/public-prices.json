@@ -1,0 +1,38 @@
+{
+  "retrieved_on": "2026-11-04",
+  "source": "https://b0.p.awsstatic.com/pricing/2.0/meteredUnitMaps/ec2/USD/current/ec2-ondemand-without-sec-sel/Asia%20Pacific%20(Tokyo)/Linux/index.json",
+  "records": [
+    {
+      "rateCode": "5JPUS4UJNNTMFMDG.JRTCKXETXF.6YS6EN2CT7",
+      "price": "0.8988000000",
+      "Location": "Asia Pacific (Tokyo)",
+      "Instance Family": "Compute optimized",
+      "vCPU": "16",
+      "Instance Type": "c7i.4xlarge",
+      "Memory": "32 GiB",
+      "Storage": "EBS only",
+      "Network Performance": "Up to 12500 Megabit",
+      "plc:OperatingSystem": "Linux",
+      "plc:InstanceFamily": "Compute Optimized",
+      "Operating System": "Linux",
+      "Pre Installed S/W": "NA",
+      "License Model": "No License required"
+    },
+    {
+      "rateCode": "XMSGK9PAHCXJYSKE.JRTCKXETXF.6YS6EN2CT7",
+      "price": "0.4494000000",
+      "Location": "Asia Pacific (Tokyo)",
+      "Instance Family": "Compute optimized",
+      "vCPU": "8",
+      "Instance Type": "c7i.2xlarge",
+      "Memory": "16 GiB",
+      "Storage": "EBS only",
+      "Network Performance": "Up to 12500 Megabit",
+      "plc:OperatingSystem": "Linux",
+      "plc:InstanceFamily": "Compute Optimized",
+      "Operating System": "Linux",
+      "Pre Installed S/W": "NA",
+      "License Model": "No License required"
+    }
+  ]
+}

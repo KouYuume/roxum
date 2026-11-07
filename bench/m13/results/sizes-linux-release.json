@@ -1,0 +1,17 @@
+{
+  "roxum-dev": {
+    "bytes": 2222752,
+    "stripped_bytes": 2014000,
+    "file": "ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, BuildID[sha1]=a210c09df56b7fa19c8e08d409521a748cd10c37, with debug_info, not stripped"
+  },
+  "roxum-size": {
+    "bytes": 1925288,
+    "stripped_bytes": 1810088,
+    "file": "ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, BuildID[sha1]=8a88d5366039ab4fab02fd113b0cbe9848fe168b, with debug_info, not stripped"
+  },
+  "roxum-speed": {
+    "bytes": 1944784,
+    "stripped_bytes": 1829640,
+    "file": "ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, BuildID[sha1]=aa9bb543d2f68cc96cedf10b874e9ee6048dbeec, with debug_info, not stripped"
+  }
+}

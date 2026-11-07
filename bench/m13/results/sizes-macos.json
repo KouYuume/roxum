@@ -1,0 +1,32 @@
+{
+  "axum-debug": {
+    "bytes": 6188656,
+    "stripped_bytes": 3331256,
+    "file": "Mach-O 64-bit executable arm64"
+  },
+  "axum-release": {
+    "bytes": 1101792,
+    "stripped_bytes": 867840,
+    "file": "Mach-O 64-bit executable arm64"
+  },
+  "go-default": {
+    "bytes": 7168114,
+    "stripped_bytes": 6814376,
+    "file": "Mach-O 64-bit executable arm64"
+  },
+  "roxum-dev": {
+    "bytes": 1473440,
+    "stripped_bytes": 1365752,
+    "file": "Mach-O 64-bit executable arm64"
+  },
+  "roxum-size": {
+    "bytes": 1177744,
+    "stripped_bytes": 1090584,
+    "file": "Mach-O 64-bit executable arm64"
+  },
+  "roxum-speed": {
+    "bytes": 1194128,
+    "stripped_bytes": 1107112,
+    "file": "Mach-O 64-bit executable arm64"
+  }
+}

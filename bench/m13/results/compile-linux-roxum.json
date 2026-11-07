@@ -1,0 +1,88 @@
+{
+  "date": "2026-11-06T14:22:54.734995+00:00",
+  "machine": "Linux-6.12.54-linuxkit-aarch64-with-glibc2.36",
+  "cpus": 8,
+  "server": "roxum",
+  "version": "Roc compiler version nightly-2026-11-04-2622062",
+  "runs": 3,
+  "profiles": {
+    "dev": {
+      "clean": {
+        "median_s": 0.99,
+        "runs_s": [
+          1.06,
+          0.98,
+          0.99
+        ]
+      },
+      "unchanged": {
+        "median_s": 0.55,
+        "runs_s": [
+          0.54,
+          0.55,
+          0.56
+        ]
+      },
+      "one_line": {
+        "median_s": 0.78,
+        "runs_s": [
+          0.79,
+          0.77,
+          0.78
+        ]
+      }
+    },
+    "speed": {
+      "clean": {
+        "median_s": 4.13,
+        "runs_s": [
+          4.13,
+          4.06,
+          4.34
+        ]
+      },
+      "unchanged": {
+        "median_s": 3.6,
+        "runs_s": [
+          3.56,
+          3.6,
+          3.77
+        ]
+      },
+      "one_line": {
+        "median_s": 3.82,
+        "runs_s": [
+          3.82,
+          3.82,
+          3.97
+        ]
+      }
+    },
+    "size": {
+      "clean": {
+        "median_s": 3.74,
+        "runs_s": [
+          3.88,
+          3.74,
+          3.7
+        ]
+      },
+      "unchanged": {
+        "median_s": 3.5,
+        "runs_s": [
+          3.56,
+          3.5,
+          3.46
+        ]
+      },
+      "one_line": {
+        "median_s": 3.74,
+        "runs_s": [
+          3.74,
+          3.48,
+          3.82
+        ]
+      }
+    }
+  }
+}

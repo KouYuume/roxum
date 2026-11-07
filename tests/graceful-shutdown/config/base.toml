@@ -1,0 +1,4 @@
+# The test writes config/local.toml with its delay server's port and the
+# drain timeout of each case.
+delay_port = 1
+drain_timeout_milliseconds = 20000

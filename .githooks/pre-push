@@ -1,0 +1,4 @@
+#!/bin/sh
+# Refuses to push a commit whose tree has not passed the local checks
+# (docs/contributing.md). Enable with: git config core.hooksPath .githooks
+exec python3 "$(git rev-parse --show-toplevel)/tools/verify_local_check.py" pre-push "$@"

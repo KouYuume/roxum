@@ -1,0 +1,90 @@
+name: Release
+
+# A merge into main publishes a release when the core version in
+# integrations/compatibility.json has no tag yet: it runs the full checks, builds
+# the bundles, and creates the tag and GitHub Release v<version> with the
+# version's section of CHANGELOG.md as its notes. A merge whose version is
+# already tagged publishes nothing. See docs/design/versioning.md.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Releases run one at a time and are never cancelled half-published.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      publish: ${{ steps.version.outputs.publish }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # The tags, to tell whether this version is released.
+          fetch-depth: 0
+      - name: Decide whether this commit publishes a release
+        id: version
+        run: |
+          version=$(python3 -c 'import json; print(json.load(open("integrations/compatibility.json"))["core"]["version"])')
+          if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+            echo "v$version is already released; nothing to publish"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            # Fails when the version, CHANGELOG.md, and the integrations' versions disagree.
+            python3 tools/release_version.py
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  checks:
+    needs: version
+    if: needs.version.outputs.publish == 'true'
+    uses: ./.github/workflows/full-checks.yml
+
+  publish:
+    needs: [version, checks]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      ROC_SRC: ${{ github.workspace }}/.roc-src
+      ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: 0.16.0
+      - name: Check out the pinned Roc source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: roc-lang/roc
+          # Keep this ref in sync with .roc-revision; check-roc-toolchain.sh enforces it.
+          ref: 262206271cf05db948eef2b96fae88a1aca07b19
+          path: .roc-src
+      - name: Install the pinned Roc nightly
+        # The pinned Roc needs a newer Zig to build than the host uses, so CI
+        # takes the nightly built from it; the source above is for the checks.
+        run: |
+          tools/install-roc-nightly.sh "$GITHUB_WORKSPACE/.roc-bin"
+          echo "$GITHUB_WORKSPACE/.roc-bin" >> "$GITHUB_PATH"
+      - name: Verify Roc compiler and source revision
+        run: tools/check-roc-toolchain.sh
+      - name: Build the bundles
+        run: zig build release "-Drelease-url=https://github.com/${{ github.repository }}/releases/download/v$VERSION"
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "v$VERSION"
+          zig-out/release/*.tar.zst zig-out/release/release.json
+          --target "$GITHUB_SHA"
+          --title "roxum $VERSION"
+          --notes-file zig-out/release/release-notes.md

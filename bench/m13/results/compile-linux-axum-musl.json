@@ -1,0 +1,36 @@
+{
+  "date": "2026-11-06T14:29:13.272898+00:00",
+  "machine": "Linux-6.12.54-linuxkit-aarch64-with-glibc2.41",
+  "cpus": 8,
+  "server": "axum-musl",
+  "version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "runs": 3,
+  "profiles": {
+    "release": {
+      "clean": {
+        "median_s": 14.72,
+        "runs_s": [
+          14.72,
+          14.72,
+          14.73
+        ]
+      },
+      "unchanged": {
+        "median_s": 0.03,
+        "runs_s": [
+          0.03,
+          0.04,
+          0.03
+        ]
+      },
+      "one_line": {
+        "median_s": 6.04,
+        "runs_s": [
+          6.27,
+          6.04,
+          6.02
+        ]
+      }
+    }
+  }
+}

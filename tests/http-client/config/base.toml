@@ -1,0 +1,6 @@
+# The test writes config/local.toml with the ports of its servers.
+plain_port = 1
+ec_port = 1
+rsa_port = 1
+closed_port = 1
+ca_file = ""

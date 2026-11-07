@@ -1,0 +1,253 @@
+name: Full checks
+
+# Every check on macOS and Linux, in every Roc backend and allocator mode.
+# Contributors run these locally before pushing (docs/contributing.md); the
+# release workflow runs them before it publishes, and they can be started by
+# hand from the Actions tab.
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: 0.16.0
+      - name: Check out the pinned Roc source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: roc-lang/roc
+          # Keep this ref in sync with .roc-revision; check-roc-toolchain.sh enforces it.
+          ref: 262206271cf05db948eef2b96fae88a1aca07b19
+          path: .roc-src
+      - name: Install the pinned Roc nightly
+        # The pinned Roc needs a newer Zig to build than the host uses, so CI
+        # takes the nightly built from it; the source above is for the checks.
+        run: |
+          tools/install-roc-nightly.sh "$GITHUB_WORKSPACE/.roc-bin"
+          echo "$GITHUB_WORKSPACE/.roc-bin" >> "$GITHUB_PATH"
+      - name: Verify Roc compiler and source revision
+        env:
+          ROC_SRC: ${{ github.workspace }}/.roc-src
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: tools/check-roc-toolchain.sh
+      - name: Verify generated Roc ABI glue
+        env:
+          ROC_SRC: ${{ github.workspace }}/.roc-src
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: tools/regen-glue.sh --check
+      - name: Run semantic Roc ABI sentinel
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-abi
+      - name: Verify hosted narrow integer ABI
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: tests/hosted-u8-abi/run.sh
+      - name: Run full Roc E2E in every backend and allocator mode
+        run: |
+          for opt in speed dev interpreter; do
+            zig build test-e2e -Dopt="$opt"
+            zig build test-e2e -Dopt="$opt" -Dcontract-alloc=true
+          done
+      - name: Run unit, differential, and incremental tests
+        run: zig build test
+      - name: Verify platform-dependent package boundary
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-m9p1
+      - name: Verify exact platform identity
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-m9p2
+      - name: Verify integration release manifest
+        run: zig build test-m9p3
+      - name: Verify roxum SSE integration
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-m9p4
+      - name: Verify core Middleware contract
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-m9-1
+      - name: Verify Router Middleware integration
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-m9-2
+      - name: Verify SetHeader integration
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-m9-3
+      - name: Verify RequestId and Trace integration
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-m9-3b
+      - name: Verify NormalizePath integration
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-m9-4a
+      - name: Verify CORS integration
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-m9-4b
+      - name: Verify configurable connection timeouts
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-m11a
+      - name: Verify the per-process stream limit
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-stream-limit
+      - name: Verify file reads and injected secrets
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-file-secret
+      - name: Verify settings files
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-config
+      - name: Verify worker counts and listen options
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-listen-options
+      - name: Verify stopping with a drain
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-graceful-shutdown
+      - name: Verify admission limits
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-admission
+      - name: Verify the access log
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-observability
+      - name: Verify outbound TCP and TLS
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-tcp
+      - name: Verify roxum-http-client against local servers
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-http-client
+      - name: Install PostgreSQL for the roxum-postgres tests
+        run: brew install postgresql@17 && echo "$(brew --prefix postgresql@17)/bin" >> "$GITHUB_PATH"
+      - name: Verify roxum-postgres against PostgreSQL
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-postgres
+      - name: Verify the layered sample application
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-layered-app
+      - name: Verify the first goal end to end (M20d)
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-crud-service
+      - name: Verify trusted proxy headers integration
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-m11b
+      - name: Install pinned Caddy
+        env:
+          CADDY_VERSION: 2.8.4
+          # SHA-512 from caddy_2.8.4_checksums.txt in the Caddy release.
+          CADDY_SHA512: 16b930bc4fc4d5c5e713cf4c6955c0c33215c7014244effc102c49d6552a8790c4bf53c2c5e89333aae5b6e4f057148e5ffd994e0249bdffacc65d8dd8ff8a87
+        run: |
+          archive="$RUNNER_TEMP/caddy.tar.gz"
+          curl -fsSLo "$archive" \
+            "https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_mac_arm64.tar.gz"
+          echo "${CADDY_SHA512}  ${archive}" | shasum -a 512 -c
+          mkdir -p "$RUNNER_TEMP/caddy"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/caddy" caddy
+          echo "CADDY_BIN=$RUNNER_TEMP/caddy/caddy" >> "$GITHUB_ENV"
+      - name: Verify forwarded client information behind Caddy
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-m11c
+      - name: Run the M-1 execution-model contract suite
+        env:
+          ROC_SRC: ${{ github.workspace }}/.roc-src
+        run: zig build test-contract
+      - name: Verify dbg / crash logs and debug mode
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-m9b-4
+      - name: Verify build-time page values
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-m9b-2
+      - name: Verify the DDD example and its layer boundary
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-m9b-5
+      - name: Verify the release bundle
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-m13a
+      - name: Verify the guide examples and the API reference
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-m13b
+      - name: Run typed Roc Router fuzzing
+        run: zig build fuzz-router
+      - name: Run optimized HTTP tests
+        run: zig build test-http1-release
+      - name: Run coverage-guided HTTP parser and chunked fuzzing
+        run: tools/fuzz.sh 10000
+      - name: Verify pinned httparse outcomes
+        run: >-
+          cargo run --locked
+          --manifest-path tools/http1-differential/Cargo.toml
+          -- tests/zig/fixtures/http1_differential.tsv
+      - name: Compare the HTTP contract with axum
+        run: tools/axum-contract/run.sh
+      - name: Explore httparse safety differences
+        run: |
+          cargo run --locked \
+            --manifest-path tools/http1-differential/Cargo.toml \
+            -- --explore /tmp/roxum-http1-differential.tsv
+          zig run \
+            --dep http1_parser \
+            -Mroot=tools/http1-differential/roxum_explore.zig \
+            -Mhttp1_parser=platform/host/http1/parser.zig \
+            -- /tmp/roxum-http1-differential.tsv
+
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: 0.16.0
+      - name: Check out the pinned Roc source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: roc-lang/roc
+          # Keep this ref in sync with .roc-revision; check-roc-toolchain.sh enforces it.
+          ref: 262206271cf05db948eef2b96fae88a1aca07b19
+          path: .roc-src
+      - name: Install the pinned Roc nightly
+        # The pinned Roc needs a newer Zig to build than the host uses, so CI
+        # takes the nightly built from it; the source above is for the checks.
+        run: |
+          tools/install-roc-nightly.sh "$GITHUB_WORKSPACE/.roc-bin"
+          echo "$GITHUB_WORKSPACE/.roc-bin" >> "$GITHUB_PATH"
+      - name: Verify Roc compiler and source revision
+        env:
+          ROC_SRC: ${{ github.workspace }}/.roc-src
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: tools/check-roc-toolchain.sh
+      - name: Install PostgreSQL for the roxum-postgres tests
+        run: sudo apt-get install -y --no-install-recommends postgresql
+      - name: Run the release checks (x64musl)
+        env:
+          ROC_SRC: ${{ github.workspace }}/.roc-src
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: tools/release-check.sh

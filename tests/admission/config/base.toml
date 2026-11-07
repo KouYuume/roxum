@@ -1,0 +1,10 @@
+# The test writes config/local.toml with its delay server's port and the
+# limits of each case.
+delay_port = 1
+threads = 1
+maximum_queued_requests = 1024
+queue_timeout_milliseconds = 5000
+maximum_requests_in_progress = 1024
+maximum_connections = 4096
+# 0: Server.MemoryLimit.Auto; otherwise Bytes(request_memory_bytes).
+request_memory_bytes = 0

@@ -1,0 +1,21 @@
+# Settings shared by every environment, compiled into the program.
+# config/local.toml, read from the working directory at startup, overrides
+# the keys it names.
+
+[listen]
+port = 8080
+# threads = 4    # left out: one thread per usable CPU
+
+[tax]
+# The tax-rate service: GET url with a bearer token answers {"rate_percent": 10}.
+url = "http://127.0.0.1:8090/rates/JP"
+# A file holding only the token, like the database password.
+token_file = "config/tax-token"
+
+[database]
+host = "127.0.0.1"
+port = 5432
+user = "app"
+name = "app"
+# A file holding only the password, such as a mounted Kubernetes secret.
+password_file = "config/database-password"

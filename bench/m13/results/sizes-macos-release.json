@@ -1,0 +1,17 @@
+{
+  "roxum-dev": {
+    "bytes": 1248240,
+    "stripped_bytes": 1200104,
+    "file": "Mach-O 64-bit executable arm64"
+  },
+  "roxum-size": {
+    "bytes": 936112,
+    "stripped_bytes": 908424,
+    "file": "Mach-O 64-bit executable arm64"
+  },
+  "roxum-speed": {
+    "bytes": 952512,
+    "stripped_bytes": 924952,
+    "file": "Mach-O 64-bit executable arm64"
+  }
+}

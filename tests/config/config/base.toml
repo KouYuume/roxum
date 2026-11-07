@@ -1,0 +1,14 @@
+# The base settings, compiled into the program.
+name = "config-test"
+
+[listen]
+port = 0
+
+[database]
+host = "localhost"
+port = 5432
+replicas = ["replica-a", "replica-b"]
+
+[log]
+level = "info"
+json = false

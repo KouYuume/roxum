@@ -1,0 +1,62 @@
+{
+  "date": "2026-11-06T14:27:43.389571+00:00",
+  "machine": "Linux-6.12.54-linuxkit-aarch64-with-glibc2.41",
+  "cpus": 8,
+  "server": "axum",
+  "version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "runs": 3,
+  "profiles": {
+    "debug": {
+      "clean": {
+        "median_s": 8.54,
+        "runs_s": [
+          8.65,
+          8.26,
+          8.54
+        ]
+      },
+      "unchanged": {
+        "median_s": 0.03,
+        "runs_s": [
+          0.03,
+          0.03,
+          0.04
+        ]
+      },
+      "one_line": {
+        "median_s": 0.65,
+        "runs_s": [
+          0.64,
+          0.65,
+          0.67
+        ]
+      }
+    },
+    "release": {
+      "clean": {
+        "median_s": 14.49,
+        "runs_s": [
+          14.48,
+          14.7,
+          14.49
+        ]
+      },
+      "unchanged": {
+        "median_s": 0.03,
+        "runs_s": [
+          0.03,
+          0.03,
+          0.03
+        ]
+      },
+      "one_line": {
+        "median_s": 6.06,
+        "runs_s": [
+          6.15,
+          6.05,
+          6.06
+        ]
+      }
+    }
+  }
+}

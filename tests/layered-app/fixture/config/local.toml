@@ -1,0 +1,2 @@
+# Overrides for local development. Each deployment provides its own file at
+# config/local.toml; it may be empty, but it must exist.

@@ -1,0 +1,88 @@
+{
+  "date": "2026-11-06T14:16:33.152693+00:00",
+  "machine": "macOS-27.0.1-arm64-arm-64bit",
+  "cpus": 8,
+  "server": "roxum",
+  "version": "Roc compiler version nightly-2026-11-04-2622062",
+  "runs": 3,
+  "profiles": {
+    "dev": {
+      "clean": {
+        "median_s": 0.85,
+        "runs_s": [
+          0.86,
+          0.83,
+          0.85
+        ]
+      },
+      "unchanged": {
+        "median_s": 0.45,
+        "runs_s": [
+          0.46,
+          0.45,
+          0.43
+        ]
+      },
+      "one_line": {
+        "median_s": 0.63,
+        "runs_s": [
+          0.63,
+          0.63,
+          0.61
+        ]
+      }
+    },
+    "speed": {
+      "clean": {
+        "median_s": 3.34,
+        "runs_s": [
+          3.34,
+          3.34,
+          3.29
+        ]
+      },
+      "unchanged": {
+        "median_s": 2.98,
+        "runs_s": [
+          3.01,
+          2.98,
+          2.93
+        ]
+      },
+      "one_line": {
+        "median_s": 3.13,
+        "runs_s": [
+          3.13,
+          3.15,
+          3.12
+        ]
+      }
+    },
+    "size": {
+      "clean": {
+        "median_s": 2.99,
+        "runs_s": [
+          2.98,
+          2.99,
+          3.02
+        ]
+      },
+      "unchanged": {
+        "median_s": 2.65,
+        "runs_s": [
+          2.64,
+          2.65,
+          2.68
+        ]
+      },
+      "one_line": {
+        "median_s": 2.82,
+        "runs_s": [
+          2.82,
+          2.81,
+          2.84
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,5 @@
+/app-speed
+/app-dev
+/app-interpreter
+/platform/targets/arm64mac/host.o
+/platform/targets/arm64mac/libhost.a

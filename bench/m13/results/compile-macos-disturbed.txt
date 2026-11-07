@@ -1,0 +1,15 @@
+The first macOS run on 2026-11-06, left out of docs/performance.md. A process
+left over from earlier work used about half a CPU throughout (load average 4.8
+at the start). It was stopped and every macOS build was measured again; the
+JSON files hold that second run. This run's JSON was overwritten, so only the
+printed medians (seconds) remain:
+
+roxum      dev      clean   1.05s  unchanged   0.53s  one_line   0.85s
+roxum      speed    clean   4.08s  unchanged   3.65s  one_line   3.87s
+roxum      size     clean   3.88s  unchanged   3.39s  one_line   3.52s
+axum       debug    clean  10.66s  unchanged   0.07s  one_line   0.53s
+axum       release  clean  23.11s  unchanged   0.13s  one_line  11.84s
+go         default  clean   8.38s  unchanged   0.13s  one_line   0.55s
+roxum-host host     clean  41.04s  unchanged   0.37s
+
+The sizes were identical to those in sizes-macos.json.

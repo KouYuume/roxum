@@ -1,0 +1,32 @@
+#!/bin/bash
+set -euo pipefail
+
+# Install the shutdown timer before packages so setup failure does not leave compute running.
+cat > /etc/systemd/system/benchmark-stop.service <<'UNIT'
+[Unit]
+Description=Stop temporary benchmark instance
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/shutdown -h now
+UNIT
+cat > /etc/systemd/system/benchmark-stop.timer <<'UNIT'
+[Unit]
+Description=Time limit for temporary benchmark instance
+[Timer]
+OnBootSec=${shutdown_after_hours}h
+AccuracySec=1min
+Unit=benchmark-stop.service
+[Install]
+WantedBy=timers.target
+UNIT
+systemctl daemon-reload
+systemctl enable --now benchmark-stop.timer
+
+# Keep toolchain installation separate and record resolved OS package versions.
+dnf install -y git jq python3 sysstat tar xz gcc gcc-c++ make util-linux time procps-ng
+systemctl enable --now amazon-ssm-agent
+install -d -o ec2-user -g ec2-user /opt/roxum-bench
+rpm -qa | sort > /opt/roxum-bench/os-packages.txt
+uname -a > /opt/roxum-bench/kernel.txt
+lscpu > /opt/roxum-bench/cpu.txt
+date --iso-8601=seconds > /opt/roxum-bench/bootstrap-complete

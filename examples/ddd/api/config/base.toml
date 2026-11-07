@@ -1,0 +1,9 @@
+# Settings compiled into the program; config/local.toml in the working
+# directory overrides them.
+
+[database]
+host = "127.0.0.1"
+port = 5432
+user = "app"
+name = "app"
+password_file = "config/database-password"

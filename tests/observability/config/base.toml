@@ -1,0 +1,9 @@
+# The test writes config/local.toml with the access log mode and the queue
+# timeout of each case.
+# "off", "json_lines", or "json_lines_with_path".
+access_log = "off"
+queue_timeout_milliseconds = 5000
+# 0 leaves the admin port off; otherwise Server.Metrics.Listen on 127.0.0.1.
+metrics_port = 0
+# The test's delay server, which `/wait/{milliseconds}` calls through a pool.
+delay_port = 1

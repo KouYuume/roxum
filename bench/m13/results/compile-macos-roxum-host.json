@@ -1,0 +1,28 @@
+{
+  "date": "2026-11-06T14:19:39.005332+00:00",
+  "machine": "macOS-27.0.1-arm64-arm-64bit",
+  "cpus": 8,
+  "server": "roxum-host",
+  "version": "zig 0.16.0",
+  "runs": 3,
+  "profiles": {
+    "host": {
+      "clean": {
+        "median_s": 30.46,
+        "runs_s": [
+          30.9,
+          30.46,
+          29.96
+        ]
+      },
+      "unchanged": {
+        "median_s": 0.25,
+        "runs_s": [
+          0.25,
+          0.25,
+          0.25
+        ]
+      }
+    }
+  }
+}

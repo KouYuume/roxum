@@ -1,0 +1,36 @@
+{
+  "date": "2026-11-06T14:30:16.457165+00:00",
+  "machine": "Linux-6.12.54-linuxkit-aarch64-with-glibc2.36",
+  "cpus": 8,
+  "server": "go",
+  "version": "go version go1.23.12 linux/arm64",
+  "runs": 3,
+  "profiles": {
+    "default": {
+      "clean": {
+        "median_s": 4.91,
+        "runs_s": [
+          5.07,
+          4.85,
+          4.91
+        ]
+      },
+      "unchanged": {
+        "median_s": 0.07,
+        "runs_s": [
+          0.07,
+          0.07,
+          0.07
+        ]
+      },
+      "one_line": {
+        "median_s": 0.23,
+        "runs_s": [
+          0.23,
+          0.22,
+          0.24
+        ]
+      }
+    }
+  }
+}

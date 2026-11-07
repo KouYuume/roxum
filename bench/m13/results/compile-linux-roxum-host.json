@@ -1,0 +1,28 @@
+{
+  "date": "2026-11-06T14:24:09.969356+00:00",
+  "machine": "Linux-6.12.54-linuxkit-aarch64-with-glibc2.36",
+  "cpus": 8,
+  "server": "roxum-host",
+  "version": "zig 0.16.0",
+  "runs": 3,
+  "profiles": {
+    "host": {
+      "clean": {
+        "median_s": 49.57,
+        "runs_s": [
+          49.28,
+          55.48,
+          49.57
+        ]
+      },
+      "unchanged": {
+        "median_s": 2.74,
+        "runs_s": [
+          2.74,
+          2.8,
+          2.71
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "axum-debug": {
+    "bytes": 26825256,
+    "stripped_bytes": 2692384,
+    "file": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=e39063c675bbc8486315b6b02b82afb9e582663f, for GNU/Linux 3.7.0, with debug_info, not stripped"
+  },
+  "axum-musl-release": {
+    "bytes": 1368816,
+    "stripped_bytes": 987440,
+    "file": "ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, BuildID[sha1]=c0db236e0553aade92df05833ded35bdb65566bc, not stripped"
+  },
+  "axum-release": {
+    "bytes": 1270256,
+    "stripped_bytes": 922472,
+    "file": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=56b4884dc9526bc5327b704e02a2d39a4ed51c8a, for GNU/Linux 3.7.0, not stripped"
+  },
+  "go-default": {
+    "bytes": 7217872,
+    "stripped_bytes": 4864472,
+    "file": "ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, Go BuildID=uhas_Vx8tEIgYOcCSYU-/RMH3c2u4gOaWxaKLRE1t/amwZipbDw1C54qEHuf-2/Ru75-p-j6VNjDfFKZXFn, with debug_info, not stripped"
+  },
+  "roxum-dev": {
+    "bytes": 11136912,
+    "stripped_bytes": 2203320,
+    "file": "ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, BuildID[sha1]=b69694573a26f9322ce56f28dc16da3ad09a585a, with debug_info, not stripped"
+  },
+  "roxum-size": {
+    "bytes": 10839448,
+    "stripped_bytes": 1999408,
+    "file": "ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, BuildID[sha1]=43f89e5a8cd9977817c0f31a57ec55a4414d885d, with debug_info, not stripped"
+  },
+  "roxum-speed": {
+    "bytes": 10858928,
+    "stripped_bytes": 2018944,
+    "file": "ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, BuildID[sha1]=373df2ecbadd3f0dce21c9b95364a20b1cdacab8, with debug_info, not stripped"
+  }
+}
