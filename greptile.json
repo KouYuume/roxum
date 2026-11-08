@@ -1,10 +1,16 @@
 {
   "strictness": 2,
-  "commentTypes": ["logic", "syntax"],
-  "autoReview": ["open", "push"],
+  "commentTypes": [
+    "logic",
+    "syntax"
+  ],
+  "autoReview": [
+    "open",
+    "push"
+  ],
   "triggerOnDrafts": false,
   "ignorePatterns": "platform/host/roc_platform_abi.zig\ntests/contract/*/generated/**\nbench/m13/results/**",
-  "instructions": "roxum is a Web platform for Roc with a Zig host. Keep application policy and pure transformations in Roc and operating-system resources in the host. Code comments and documentation are written in English. Comments should explain contracts, invariants, constraints, or non-obvious reasons, not restate the code or record development history.",
+  "instructions": "roxum is a Web platform for Roc with a Zig host. Keep application policy and pure transformations in Roc and operating-system resources in the host. Code comments and documentation are written in English, except explicitly localized documents such as README.ja.md. Comments should explain contracts, invariants, constraints, or non-obvious reasons, not restate the code or record development history.",
   "customContext": {
     "files": [
       {
@@ -14,51 +20,66 @@
       {
         "path": "roc_coding_rules.md",
         "description": "Rules for pure and effectful Roc functions, -> and =>, and the ! naming convention",
-        "scope": ["**/*.roc"]
+        "scope": [
+          "**/*.roc"
+        ]
       },
       {
         "path": "docs/design/execution-model.md",
         "description": "Ownership and lifetime contracts for request allocations and effect handles",
-        "scope": ["platform/host/**"]
+        "scope": [
+          "platform/host/**"
+        ]
       },
       {
         "path": "docs/design/io-execution.md",
         "description": "Suspension and cancellation contracts for I/O scheduling",
-        "scope": ["platform/host/**"]
+        "scope": [
+          "platform/host/**"
+        ]
       },
       {
         "path": "docs/design/public-api-layout.md",
         "description": "Which modules and types are application-visible",
-        "scope": ["platform/*.roc"]
+        "scope": [
+          "platform/*.roc"
+        ]
       }
     ],
     "rules": [
       {
         "rule": "Do not use inferred enum literals such as .persistent or .request in project-authored Zig code. Qualify values with their type, for example Domain.persistent.",
-        "scope": ["**/*.zig"]
+        "scope": [
+          "**/*.zig"
+        ]
       },
       {
         "rule": "Request allocations and effect handles must not escape their request lifetime.",
-        "scope": ["platform/host/**"]
-      },
-      {
-        "rule": "Generated ABI glue (roc_platform_abi.zig) must not be hand-edited; it is regenerated with tools/regen-glue.sh.",
-        "scope": ["**/roc_platform_abi.zig"]
+        "scope": [
+          "platform/host/**"
+        ]
       },
       {
         "rule": "Follow roc_coding_rules.md: pure functions use ->, effectful functions use => and end their names with !.",
-        "scope": ["**/*.roc"]
+        "scope": [
+          "**/*.roc"
+        ]
       },
       {
         "rule": "Do not expose host implementation types in the public Roc API merely because ABI glue needs them.",
-        "scope": ["platform/*.roc"]
+        "scope": [
+          "platform/*.roc"
+        ]
       },
       {
         "rule": "When public behavior changes, the relevant guides, examples, and contract tests should change in the same pull request, including error behavior."
       },
       {
         "rule": "README.md and README.ja.md must stay aligned when their shared content changes.",
-        "scope": ["README.md", "README.ja.md"]
+        "scope": [
+          "README.md",
+          "README.ja.md"
+        ]
       }
     ]
   }
