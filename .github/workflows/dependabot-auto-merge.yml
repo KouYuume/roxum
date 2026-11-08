@@ -42,7 +42,7 @@ jobs:
           # Keep the author and signature verification on.
       - name: Reserve auto-merge for eligible updates
         if: always()
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           GH_TOKEN: ${{ github.token }}
           METADATA_OK: ${{ steps.metadata.outcome == 'success' }}
@@ -56,7 +56,7 @@ jobs:
       # of the policy script failed.
       - name: Revoke this workflow's reservation after a failure
         if: failure() || cancelled()
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const pr = (await github.rest.pulls.get({ ...context.repo,
