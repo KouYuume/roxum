@@ -40,14 +40,20 @@ for (const level of ['patch', 'minor']) {
 }
 
 for (const directory of ['/tools/axum-contract', '/tools/http1-differential', '/bench/m13/axum']) {
-  for (const name of ['Cargo.toml', 'Cargo.lock']) {
-    test(`accepts ${directory.slice(1)}/${name}`, () => {
-      const f = fixture();
-      f.deps[0].directory = directory;
-      f.files[0].filename = `${directory.slice(1)}/${name}`;
-      assert.equal(check(f), true);
-    });
-  }
+  test(`accepts ${directory.slice(1)}/Cargo.lock`, () => {
+    const f = fixture();
+    f.deps[0].directory = directory;
+    f.files[0].filename = `${directory.slice(1)}/Cargo.lock`;
+    assert.equal(check(f), true);
+  });
+  test(`rejects a rewritten requirement in ${directory.slice(1)}/Cargo.toml`, () => {
+    const f = fixture();
+    f.deps[0].directory = directory;
+    f.files = [{ filename: `${directory.slice(1)}/Cargo.toml`, status: 'modified' },
+      { filename: `${directory.slice(1)}/Cargo.lock`, status: 'modified' }];
+    f.pr.changed_files = 2;
+    assert.equal(check(f), false);
+  });
 }
 
 test('accepts one update across two of the Cargo projects', () => {

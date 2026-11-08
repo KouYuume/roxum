@@ -6,8 +6,8 @@ name: Dependency checks
 # and audits with RustSec, builds, and tests the Cargo projects a pull request
 # changed. Each Dependabot security update touches one project, so an advisory
 # in another project does not hold it back; dependency-audit.yml audits every
-# project daily. Pushes to develop, manual runs, and new branches check every
-# project.
+# project daily. Pushes to develop, manual runs, new branches, and changes to
+# this workflow check every project.
 on:
   push:
     branches: [develop]

@@ -1,5 +1,10 @@
 // Policy for .github/workflows/dependabot-auto-merge.yml: reserve auto-merge
-// only for Cargo security updates that stay within patch and minor versions.
+// only for Cargo security updates that change nothing but a Cargo.lock. Cargo
+// keeps such an update within the requirements in Cargo.toml, so it stays
+// compatible in Cargo's sense, which Dependabot's patch and minor labels alone
+// do not promise for 0.x versions. An update that has to rewrite a requirement,
+// such as the pinned axum =0.8.9 the contract compares against, waits for a
+// person.
 // Everything else waits for a person (docs/contributing.md#dependency-updates).
 // The group, directories, branch, and check names must match
 // .github/dependabot.yml and the rulesets in .github/rulesets/.
@@ -13,7 +18,7 @@ const policies = {
   cargo: {
     directories: ['/tools/axum-contract', '/tools/http1-differential', '/bench/m13/axum'],
     group: 'cargo-security-compatible',
-    file: /^(tools\/axum-contract|tools\/http1-differential|bench\/m13\/axum)\/Cargo\.(toml|lock)$/,
+    file: /^(tools\/axum-contract|tools\/http1-differential|bench\/m13\/axum)\/Cargo\.lock$/,
   },
 };
 
@@ -103,9 +108,10 @@ async function run({ github, context, core, merge = execFileSync }) {
       return;
     }
     // GitHub waits for the required checks; the CLI refuses if the head moved.
+    // When the checks have already passed, gh merges at once instead.
     merge('gh', ['pr', 'merge', String(args.pull_number), '--repo', repository,
       '--auto', '--merge', '--match-head-commit', pr.head.sha], { stdio: 'pipe' });
-    core.info('Auto-merge reserved; GitHub merges once the required checks pass.');
+    core.info('Auto-merge reserved, or merged at once because the required checks had passed.');
   }
 }
 

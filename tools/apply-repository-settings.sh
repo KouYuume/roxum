@@ -28,7 +28,8 @@ gh api -X PUT "repos/$repo/actions/permissions/fork-pr-contributor-approval" \
     -f approval_policy=all_external_contributors
 echo "fork pull requests: workflows wait for approval"
 
-# The workflow token reads by default; release.yml asks for write itself.
+# The workflow token reads by default; release.yml and dependabot-auto-merge.yml
+# ask for write themselves.
 gh api -X PUT "repos/$repo/actions/permissions/workflow" \
     -f default_workflow_permissions=read -F can_approve_pull_request_reviews=false
 echo "workflow token: read, cannot approve pull requests"
