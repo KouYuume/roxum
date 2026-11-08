@@ -1,0 +1,111 @@
+# Version updates arrive once a month: minor and patch updates together in one
+# pull request per directory, each major update in its own. Security updates
+# arrive as soon as GitHub knows a fix, without waiting for the schedule or the
+# cooldown. dependabot-auto-merge.yml merges the Cargo security updates in
+# cargo-security-compatible once the required checks pass; a person reviews the
+# rest (docs/contributing.md#dependency-updates).
+# Each Cargo directory has its own entry, so each has its own pull request limit.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /tools/axum-contract
+    schedule:
+      interval: monthly
+      time: '09:00'
+      timezone: Asia/Tokyo
+    open-pull-requests-limit: 2
+    cooldown:
+      default-days: 7
+      semver-patch-days: 7
+      semver-minor-days: 7
+      semver-major-days: 14
+    groups:
+      cargo-minor-and-patch:
+        applies-to: version-updates
+        patterns: ['*']
+        update-types: [minor, patch]
+      # dependabot-auto-merge.cjs merges only this group.
+      cargo-security-compatible:
+        applies-to: security-updates
+        patterns: ['*']
+        update-types: [patch, minor]
+  - package-ecosystem: cargo
+    directory: /tools/http1-differential
+    schedule:
+      interval: monthly
+      time: '09:00'
+      timezone: Asia/Tokyo
+    open-pull-requests-limit: 2
+    cooldown:
+      default-days: 7
+      semver-patch-days: 7
+      semver-minor-days: 7
+      semver-major-days: 14
+    groups:
+      cargo-minor-and-patch:
+        applies-to: version-updates
+        patterns: ['*']
+        update-types: [minor, patch]
+      # dependabot-auto-merge.cjs merges only this group.
+      cargo-security-compatible:
+        applies-to: security-updates
+        patterns: ['*']
+        update-types: [patch, minor]
+  - package-ecosystem: cargo
+    directory: /bench/m13/axum
+    schedule:
+      interval: monthly
+      time: '09:00'
+      timezone: Asia/Tokyo
+    open-pull-requests-limit: 2
+    cooldown:
+      default-days: 7
+      semver-patch-days: 7
+      semver-minor-days: 7
+      semver-major-days: 14
+    groups:
+      cargo-minor-and-patch:
+        applies-to: version-updates
+        patterns: ['*']
+        update-types: [minor, patch]
+      # dependabot-auto-merge.cjs merges only this group.
+      cargo-security-compatible:
+        applies-to: security-updates
+        patterns: ['*']
+        update-types: [patch, minor]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+      time: '09:00'
+      timezone: Asia/Tokyo
+    open-pull-requests-limit: 2
+    cooldown:
+      default-days: 7
+    groups:
+      actions-minor-and-patch:
+        applies-to: version-updates
+        patterns: ['*']
+        update-types: [minor, patch]
+      actions-security-compatible:
+        applies-to: security-updates
+        patterns: ['*']
+        update-types: [patch, minor]
+  - package-ecosystem: docker
+    directory: /tools/linux
+    schedule:
+      interval: monthly
+      time: '09:00'
+      timezone: Asia/Tokyo
+    open-pull-requests-limit: 2
+    cooldown:
+      default-days: 7
+    groups:
+      docker-minor-and-patch:
+        applies-to: version-updates
+        patterns: ['*']
+        update-types: [minor, patch]
+      docker-security-compatible:
+        applies-to: security-updates
+        patterns: ['*']
+        update-types: [patch, minor]

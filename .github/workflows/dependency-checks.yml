@@ -1,0 +1,83 @@
+name: Dependency checks
+
+# The Cargo projects under tools/ and bench/ and the Dependabot auto-merge
+# policy, which ci.yml does not check. The rulesets require the
+# `dependency checks` job, so it always reports. It tests the auto-merge policy,
+# and audits with RustSec, builds, and tests the Cargo projects a pull request
+# changed. Each Dependabot security update touches one project, so an advisory
+# in another project does not hold it back; dependency-audit.yml audits every
+# project daily. Pushes to develop, manual runs, and new branches check every
+# project.
+on:
+  push:
+    branches: [develop]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # A new commit on a pull request stops the checks of the previous one.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  dependency-checks:
+    name: dependency checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Find the Cargo projects to check
+        id: changes
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          all="tools/axum-contract tools/http1-differential bench/m13/axum"
+          # A push, a manual run, a new branch, a base this clone lacks, or a
+          # change to this workflow checks every project.
+          if [ "$GITHUB_EVENT_NAME" != pull_request ] || [ -z "$BASE" ] ||
+              ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "projects=$all" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed=$(git diff --name-only "$BASE" HEAD)
+          if grep -qx '.github/workflows/dependency-checks.yml' <<< "$changed"; then
+            echo "projects=$all" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          projects=""
+          for project in $all; do
+            if grep -q "^$project/" <<< "$changed"; then
+              projects="$projects $project"
+            fi
+          done
+          echo "Cargo projects to check:${projects:- none}"
+          echo "projects=${projects# }" >> "$GITHUB_OUTPUT"
+      - name: Test the Dependabot auto-merge policy
+        run: node --test .github/scripts/dependabot-auto-merge.test.cjs
+      - run: rustup toolchain install stable --profile minimal && rustup default stable
+        if: steps.changes.outputs.projects != ''
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: steps.changes.outputs.projects != ''
+        with:
+          workspaces: |
+            tools/axum-contract
+            tools/http1-differential
+            bench/m13/axum
+      - run: cargo install cargo-audit --version 0.22.2 --locked
+        if: steps.changes.outputs.projects != ''
+      - name: Audit, build, and test the changed Cargo projects
+        if: steps.changes.outputs.projects != ''
+        env:
+          PROJECTS: ${{ steps.changes.outputs.projects }}
+        run: |
+          for project in $PROJECTS; do
+            cargo audit --file "$project/Cargo.lock"
+            cargo build --locked --manifest-path "$project/Cargo.toml"
+            cargo test --locked --manifest-path "$project/Cargo.toml"
+          done

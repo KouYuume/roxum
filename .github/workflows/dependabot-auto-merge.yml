@@ -1,0 +1,69 @@
+name: Dependabot auto-merge
+
+# Reserves auto-merge for the Cargo security updates that
+# .github/scripts/dependabot-auto-merge.cjs accepts; GitHub merges them once
+# the required checks pass on top of the latest develop. Every other Dependabot
+# pull request waits for a person (docs/contributing.md#dependency-updates).
+#
+# pull_request_target gives this job a token that can write. It never runs the
+# pull request's code or dependencies: it checks out only the policy script
+# from develop. Do not change the checkout to the pull request's branch.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, edited, converted_to_draft]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependabot-auto-merge-${{ github.event.pull_request.number }}
+  # Do not stop a run between reserving and revoking.
+  cancel-in-progress: false
+
+jobs:
+  auto-merge:
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: refs/heads/develop
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3
+        id: metadata
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          # Keep the author and signature verification on.
+      - name: Reserve auto-merge for eligible updates
+        if: always()
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          GH_TOKEN: ${{ github.token }}
+          METADATA_OK: ${{ steps.metadata.outcome == 'success' }}
+          DEPENDENCIES: ${{ steps.metadata.outputs.updated-dependencies-json }}
+        with:
+          script: |
+            const { run } = require('./.github/scripts/dependabot-auto-merge.cjs');
+            await run({ github, context, core });
+      # A failed or cancelled run must not leave a reservation it made for an
+      # earlier head on the new one. Inline, so it works even when the checkout
+      # of the policy script failed.
+      - name: Revoke this workflow's reservation after a failure
+        if: failure() || cancelled()
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const pr = (await github.rest.pulls.get({ ...context.repo,
+              pull_number: context.payload.pull_request.number })).data;
+            if (pr.auto_merge?.enabled_by?.login === 'github-actions[bot]') {
+              await github.graphql(
+                'mutation($id: ID!) { disablePullRequestAutoMerge(input: {pullRequestId: $id}) { clientMutationId } }',
+                { id: pr.node_id });
+              core.info('Disabled the auto-merge this workflow had reserved.');
+            }
