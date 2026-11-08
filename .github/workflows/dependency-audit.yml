@@ -1,0 +1,39 @@
+name: Dependency audit
+
+# Audits every Cargo lockfile against RustSec once a day, so advisories
+# published for lockfiles nobody changed still surface. A separate workflow
+# from dependency-checks.yml, so that a scheduled run never leaves a skipped
+# `dependency checks` result, which the rulesets would count as passed, on the
+# commit at the tip of develop.
+on:
+  schedule:
+    - cron: '0 15 * * *' # 00:00 JST
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  daily-audit:
+    name: daily audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install stable --profile minimal && rustup default stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: |
+            tools/axum-contract
+            tools/http1-differential
+            bench/m13/axum
+      - run: cargo install cargo-audit --version 0.22.2 --locked
+      - name: Audit the Cargo lockfiles
+        run: |
+          status=0
+          for project in tools/axum-contract tools/http1-differential bench/m13/axum; do
+            cargo audit --file "$project/Cargo.lock" || status=1
+          done
+          exit "$status"

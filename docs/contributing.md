@@ -33,9 +33,10 @@ Claude Code (`.claude/settings.json`) and Codex (`.codex/hooks.json`) run two ho
 
 [`tools/apply-repository-settings.sh`](../tools/apply-repository-settings.sh) applies these settings, and the rulesets in [`.github/rulesets/`](../.github/rulesets/), with no exceptions for anyone, including the maintainer:
 
-- `main` and `develop` change only through pull requests whose `fast checks` passed, merged with a merge commit. They cannot be force-pushed or deleted. Pull requests need no approval, so the maintainer can merge their own.
+- `main` and `develop` change only through pull requests whose `fast checks` and `dependency checks` passed, merged with a merge commit. For `develop`, the checks must have passed on top of its latest commit: when `develop` moves, update the pull request and let the checks run again. The branches cannot be force-pushed or deleted. Pull requests need no approval, so the maintainer can merge their own.
 - Release tags `v*` cannot be moved or deleted. The release workflow creates them.
 - Workflows from forks run only after the maintainer approves them. The workflow token reads by default and cannot approve pull requests.
+- Auto-merge is allowed, for the Dependabot updates described in [Dependency updates](#dependency-updates). Dependabot alerts and security updates are on.
 
 ## CI
 
@@ -44,5 +45,28 @@ Claude Code (`.claude/settings.json`) and Codex (`.codex/hooks.json`) run two ho
 | [`ci.yml`](../.github/workflows/ci.yml) | Pull requests and pushes to `develop` | On Linux: release metadata and changelog, the hook tests, `zig build test`, and the E2E tests in the dev backend; it reports success at once when only Markdown other than the changelog changed |
 | [`full-checks.yml`](../.github/workflows/full-checks.yml) | Before each release, and by hand from the Actions tab | Every check on macOS and Linux, including the ones `tools/check.py` leaves out: the reverse proxy check (Caddy), the ownership contract suite, the hosted-integer ABI check, and the httparse comparison |
 | [`release.yml`](../.github/workflows/release.yml) | Merges into `main` | The full checks, then the release ([versioning](design/versioning.md#releasing)) |
+| [`dependency-checks.yml`](../.github/workflows/dependency-checks.yml) | Pull requests and pushes to `develop`, and by hand | `dependency checks`: tests the auto-merge policy, then audits with `cargo audit`, builds, and tests the Cargo projects (`tools/axum-contract`, `tools/http1-differential`, `bench/m13/axum`) a pull request changed, or all of them on a push, by hand, or when a pull request changes this workflow |
+| [`dependency-audit.yml`](../.github/workflows/dependency-audit.yml) | Daily at 00:00 JST, and by hand | `cargo audit` of every Cargo lockfile, so advisories for lockfiles nobody changed still surface |
+| [`dependabot-auto-merge.yml`](../.github/workflows/dependabot-auto-merge.yml) | Dependabot pull requests | Reserves auto-merge for the updates in [Dependency updates](#dependency-updates), and takes back its reservation from any other |
 
 The local record covers the platform where you ran the checks. Linux differences surface in the full checks before a release; run `tools/linux/test.sh` to check Linux locally in a container.
+
+## Dependency updates
+
+[`.github/dependabot.yml`](../.github/dependabot.yml) covers the Cargo projects above and the GitHub Actions in the workflows. The pinned Roc nightly and Zig are not covered; update them by hand ([toolchain.md](toolchain.md)). Neither is the base image of `tools/linux/Dockerfile`: the floating tag `debian:bookworm-slim` takes in the latest image on each build.
+
+- Version updates arrive on the 1st of each month at 09:00 JST. Minor and patch updates come together in one pull request per directory, each major update in its own, and only releases at least 7 days old (14 for a major Cargo update) are offered. At most two version update pull requests per directory stay open.
+- Security updates arrive as soon as GitHub knows a fix, without waiting for the schedule. Patch and minor fixes come together in one pull request per directory, a major fix in its own.
+
+[`dependabot-auto-merge.yml`](../.github/workflows/dependabot-auto-merge.yml) reserves auto-merge only for a pull request that [`.github/scripts/dependabot-auto-merge.cjs`](../.github/scripts/dependabot-auto-merge.cjs) accepts:
+
+- a Cargo security update in the `cargo-security-compatible` group, with patch and minor updates only,
+- changes to the `Cargo.lock` of the three Cargo projects and nothing else, so every update stays within the requirements in `Cargo.toml`,
+- a single commit that Dependabot wrote and GitHub verified, in this repository, targeting `develop`,
+- and a repository where the rulesets require both checks on top of the latest `develop` and allow auto-merge.
+
+GitHub then merges it with a merge commit once `fast checks` and `dependency checks` pass on top of the latest `develop`. Dependabot does not rebase a pull request only because `develop` moved: comment `@dependabot rebase` on it, and the workflow evaluates the new commit and reserves the merge again. Do not use Update branch, which adds a merge commit of your own and makes the update one a person reviews. The merge is made with the workflow token, so the push to `develop` it causes starts no workflow; the checks already ran on the same tree. The maintainer reviews and merges every other update: version updates, major updates, security updates that rewrite a requirement in `Cargo.toml` (such as the pinned `axum =0.8.9` and `httparse =1.10.1` the comparisons use, or a 0.x minor update), GitHub Actions updates, and any pull request with a commit added by hand. The policy script is read from `develop`, never from the pull request. When you rename a group, a directory, the branch, or a required check, change `dependabot.yml`, the policy script, its tests, and the rulesets together.
+
+When an update does not arrive, look at the update log in Insights → Dependency graph → Dependabot: the schedule, the cooldown, and the open pull request limit can hold it back, and a security update needs a fixed version. When the daily audit fails without a fixed version, decide how to handle the advisory; pull requests that change that Cargo project fail `dependency checks` until then.
+
+When the workflow fails or is cancelled, it takes back the reservation it made. To stop auto-merge, first disable auto-merge on the open Dependabot pull requests, then disable the Dependabot auto-merge workflow in the Actions tab, and check again that no reservation is left. Disabling the workflow alone keeps existing reservations. Update pull requests, alerts, and the audit go on.
