@@ -40,8 +40,14 @@ class TaxService:
                 self.end_headers()
                 self.wfile.write(body)
 
-        self.server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-        self.server.daemon_threads = True
+        class Server(ThreadingHTTPServer):
+            daemon_threads = True
+            # Under load the app opens a connection per waiting quote at once;
+            # with socketserver's backlog of 5, macOS refuses some of them,
+            # and the app answers those quotes with 503.
+            request_queue_size = 128
+
+        self.server = Server(("127.0.0.1", port), Handler)
         self.port = self.server.server_address[1]
 
     def start(self):
