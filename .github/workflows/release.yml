@@ -25,7 +25,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       publish: ${{ steps.version.outputs.publish }}
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           # The tags, to tell whether this version is released.
           fetch-depth: 0
@@ -58,12 +58,12 @@ jobs:
       ROC_SRC: ${{ github.workspace }}/.roc-src
       ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
       - uses: mlugg/setup-zig@v2.2.1
         with:
           version: 0.16.0
       - name: Check out the pinned Roc source
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v7.0.1
         with:
           repository: roc-lang/roc
           # Keep this ref in sync with .roc-revision; check-roc-toolchain.sh enforces it.
