@@ -32,6 +32,8 @@ jobs:
       - run: cargo install cargo-audit --version 0.22.2 --locked
       - name: Audit the Cargo lockfiles
         run: |
+          status=0
           for project in tools/axum-contract tools/http1-differential bench/m13/axum; do
-            cargo audit --file "$project/Cargo.lock"
+            cargo audit --file "$project/Cargo.lock" || status=1
           done
+          exit "$status"
