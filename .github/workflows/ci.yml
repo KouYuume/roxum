@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
       - name: Find whether anything besides Markdown changed
@@ -42,7 +42,16 @@ jobs:
             echo "Only Markdown other than the changelog changed; skipping the checks"
             echo "checked=false" >> "$GITHUB_OUTPUT"
           fi
-      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+      # Fails, without writing, when actions.lock lacks an entry a workflow needs
+      # or the runner would reject a pinned commit.
+      - name: Verify the action lockfile
+        if: steps.changes.outputs.checked == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh extension install github/gh-actions-lock --pin v0.4.0
+          gh actions-lock --verify --no-interactive
+      - uses: mlugg/setup-zig@v2.2.1
         if: steps.changes.outputs.checked == 'true'
         with:
           version: 0.16.0

@@ -29,12 +29,12 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           ref: refs/heads/develop
           persist-credentials: false
           sparse-checkout: .github/scripts
-      - uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3
+      - uses: dependabot/fetch-metadata@v3.1.0
         id: metadata
         continue-on-error: true
         with:
@@ -42,7 +42,7 @@ jobs:
           # Keep the author and signature verification on.
       - name: Reserve auto-merge for eligible updates
         if: always()
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        uses: actions/github-script@v9.0.0
         env:
           GH_TOKEN: ${{ github.token }}
           METADATA_OK: ${{ steps.metadata.outcome == 'success' }}
@@ -56,7 +56,7 @@ jobs:
       # of the policy script failed.
       - name: Revoke this workflow's reservation after a failure
         if: failure() || cancelled()
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        uses: actions/github-script@v9.0.0
         with:
           script: |
             const pr = (await github.rest.pulls.get({ ...context.repo,
