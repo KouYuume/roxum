@@ -23,7 +23,7 @@ See the [comparison](docs/comparison.md) for each criterion and its sources, and
 
 ## Quick start
 
-roxum is under development. Use Zig 0.16.0 and the [pinned Roc revision](.roc-revision); follow the [toolchain setup](docs/toolchain.md). Supported targets are Apple silicon macOS and arm64 / x86_64 Linux with musl.
+roxum is under development. Use Zig 0.17.1 and the [pinned Roc revision](.roc-revision); follow the [toolchain setup](docs/toolchain.md). Supported targets are Apple silicon macOS and arm64 / x86_64 Linux with musl.
 
 From the repository root:
 

@@ -54,7 +54,7 @@ jobs:
       - uses: mlugg/setup-zig@v2.2.1
         if: steps.changes.outputs.checked == 'true'
         with:
-          version: 0.16.0
+          version: 0.17.1
       - name: Install the pinned Roc nightly
         if: steps.changes.outputs.checked == 'true'
         run: |

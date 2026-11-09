@@ -192,7 +192,7 @@ test "response bridge validates encodes and releases after partial writes" {
         .allocator = std.testing.allocator,
     };
     var roc_host = environment.rocHost();
-    const body = [_]u8{'x'} ** 80;
+    const body = @as([80]u8, @splat('x'));
     const response = makeResponse(
         200,
         "x-response-header-longer-than-small",

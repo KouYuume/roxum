@@ -414,9 +414,9 @@ test "quotes, backslashes, control bytes, and DEL are escaped; UTF-8 is kept, ot
 test "the longest line fits its buffer" {
     var buffer: [line_capacity]u8 = undefined;
     var line = Line{ .entry = .{}, .time_unix_milliseconds = std.math.maxInt(i64), .duration_nanoseconds = std.math.maxInt(u64) };
-    line.entry.method.set("\x01" ** maximum_method_bytes);
-    line.entry.path.set("\x01" ** maximum_path_bytes);
-    line.entry.route.set("\x01" ** maximum_route_bytes);
+    line.entry.method.set(&@as([maximum_method_bytes]u8, @splat('\x01')));
+    line.entry.path.set(&@as([maximum_path_bytes]u8, @splat('\x01')));
+    line.entry.route.set(&@as([maximum_route_bytes]u8, @splat('\x01')));
     @memset(&line.entry.request_id.bytes, 0x01);
     line.entry.request_id.len = request_id.maximum_bytes;
     line.entry.status = std.math.maxInt(u16);

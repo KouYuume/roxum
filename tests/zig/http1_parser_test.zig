@@ -548,9 +548,9 @@ test "absolute target authority remains valid across every split position" {
 
 test "vectorized field validation covers its block boundary" {
     const cases = .{
-        "GET / HTTP/1.0\r\nX: " ++ ("a" ** 15) ++ "\r\n\r\n",
-        "GET / HTTP/1.0\r\nX: " ++ ("a" ** 16) ++ "\r\n\r\n",
-        "GET / HTTP/1.0\r\nX: " ++ ("a" ** 17) ++ "\r\n\r\n",
+        "GET / HTTP/1.0\r\nX: " ++ (&@as([15]u8, @splat('a'))) ++ "\r\n\r\n",
+        "GET / HTTP/1.0\r\nX: " ++ (&@as([16]u8, @splat('a'))) ++ "\r\n\r\n",
+        "GET / HTTP/1.0\r\nX: " ++ (&@as([17]u8, @splat('a'))) ++ "\r\n\r\n",
     };
 
     inline for (cases, .{ 15, 16, 17 }) |input, expected_length| {
@@ -571,7 +571,7 @@ test "vectorized field validation covers its block boundary" {
     // of the following block.
     inline for (.{ 0, 1, 16, 17 }) |control_position| {
         const valid =
-            "GET / HTTP/1.0\r\nX: " ++ ("a" ** 17) ++ "\r\n\r\n";
+            "GET / HTTP/1.0\r\nX: " ++ (&@as([17]u8, @splat('a'))) ++ "\r\n\r\n";
         var input = valid.*;
         const value_start = "GET / HTTP/1.0\r\nX: ".len;
         input[value_start + control_position] = 0x01;
@@ -586,9 +586,9 @@ test "vectorized field validation covers its block boundary" {
 
 test "vectorized field validation trims OWS across its block boundary" {
     const cases = .{
-        "GET / HTTP/1.0\r\nX: x" ++ (" " ** 14) ++ "\r\n\r\n",
-        "GET / HTTP/1.0\r\nX: x" ++ (" " ** 15) ++ "\r\n\r\n",
-        "GET / HTTP/1.0\r\nX: x" ++ (" " ** 16) ++ "\r\n\r\n",
+        "GET / HTTP/1.0\r\nX: x" ++ (&@as([14]u8, @splat(' '))) ++ "\r\n\r\n",
+        "GET / HTTP/1.0\r\nX: x" ++ (&@as([15]u8, @splat(' '))) ++ "\r\n\r\n",
+        "GET / HTTP/1.0\r\nX: x" ++ (&@as([16]u8, @splat(' '))) ++ "\r\n\r\n",
     };
 
     inline for (cases) |input| {
@@ -779,7 +779,7 @@ test "Parser handles a 64KiB field value and rejects a corrupt final byte" {
     const prefix = "GET / HTTP/1.0\r\nX: ";
     const suffix = "\r\n\r\n";
     const value_length = 64 * 1024;
-    var input = (prefix ++ ("a" ** value_length) ++ suffix).*;
+    var input = (prefix ++ (&@as([value_length]u8, @splat('a'))) ++ suffix).*;
 
     try expectHeadComplete(
         @intCast(input.len),

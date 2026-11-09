@@ -8,7 +8,7 @@ and the event loops.
 
 - The Roc nightly that roxum is pinned to (see [`docs/toolchain.md`](../toolchain.md)); roxum follows Roc's
   nightly builds closely
-- Zig 0.16.0, to build the platform's host from source
+- Zig 0.17.1, to build the platform's host from source
 - macOS on Apple silicon (`arm64mac`), or Linux on arm64 / x86_64 (`arm64musl` / `x64musl`, statically linked)
 
 ## A first app

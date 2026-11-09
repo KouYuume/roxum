@@ -12,7 +12,7 @@ test "generated RocStr crosses the inline capacity boundary" {
     try environment.capturePersistentBaseline();
     environment.setDomain(Domain.request);
 
-    const source = [_]u8{'x'} ** 25;
+    const source = @as([25]u8, @splat('x'));
     const cases = [_]struct {
         length: usize,
         is_small: bool,

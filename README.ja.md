@@ -23,7 +23,7 @@ roxumはaxumと同じく、ハンドラーの入力を型で受け取り、Goに
 
 ## クイックスタート
 
-roxumは開発中です。Zig 0.16.0と[指定リビジョンのRoc](.roc-revision)を用意し、[ツールチェーンをセットアップ](docs/toolchain.md)してください。対応環境はApple silicon搭載macOSと、muslを使うarm64 / x86_64 Linuxです。
+roxumは開発中です。Zig 0.17.1と[指定リビジョンのRoc](.roc-revision)を用意し、[ツールチェーンをセットアップ](docs/toolchain.md)してください。対応環境はApple silicon搭載macOSと、muslを使うarm64 / x86_64 Linuxです。
 
 リポジトリのルートで実行します。
 

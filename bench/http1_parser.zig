@@ -31,13 +31,13 @@ const typical =
 const many_headers =
     "GET /many HTTP/1.1\r\n" ++
     "Host: example.com\r\n" ++
-    ("X-Benchmark-Header: abcdefghijklmnopqrstuvwxyz0123456789\r\n" ** 63) ++
+    (@as(*const [63 * "X-Benchmark-Header: abcdefghijklmnopqrstuvwxyz0123456789\r\n".len]u8, @ptrCast(&@as([63]["X-Benchmark-Header: abcdefghijklmnopqrstuvwxyz0123456789\r\n".len]u8, @splat("X-Benchmark-Header: abcdefghijklmnopqrstuvwxyz0123456789\r\n".*))))) ++
     "\r\n";
 
 const large_value =
     "GET /large HTTP/1.1\r\n" ++
     "Host: example.com\r\n" ++
-    "X-Large: " ++ ("a" ** 16_384) ++ "\r\n\r\n";
+    "X-Large: " ++ (&@as([16_384]u8, @splat('a'))) ++ "\r\n\r\n";
 
 pub fn main() void {
     const corpora = [_]Corpus{

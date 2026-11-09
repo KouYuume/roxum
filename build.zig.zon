@@ -2,7 +2,7 @@
     .name = .roxum,
     .version = "0.0.0",
     .fingerprint = 0x1ddc0a596be7b90b,
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.1",
     .dependencies = .{},
     .paths = .{
         "LICENSE",

@@ -109,28 +109,28 @@ const typical_headers = [_]http1.Header{
     .{ .name = "X-Content-Type-Options", .value = "nosniff" },
     .{ .name = "Server", .value = "roxum" },
 };
-const many_headers = [_]http1.Header{
+const many_headers: [64]http1.Header = @splat(
     .{
         .name = "X-Benchmark-Header",
         .value = "abcdefghijklmnopqrstuvwxyz0123456789",
     },
-} ** 64;
-const maximum_headers = [_]http1.Header{
+);
+const maximum_headers: [128]http1.Header = @splat(
     .{
         .name = "X-Maximum-Header",
         .value = "abcdefghijklmnopqrstuvwxyz0123456789",
     },
-} ** 128;
+);
 const long_value_headers = [_]http1.Header{
-    .{ .name = "X-Large", .value = "a" ** 16_384 },
+    .{ .name = "X-Large", .value = &@as([16_384]u8, @splat('a')) },
 };
-const large_body = "b" ** (64 * 1024);
+const large_body = &@as([(64 * 1024)]u8, @splat('b'));
 
 pub fn main() void {
     const corpora = [_]Corpus{
         .{ .name = "empty", .headers = &.{}, .body = "" },
         .{ .name = "small", .headers = &small_headers, .body = "hello" },
-        .{ .name = "typical", .headers = &typical_headers, .body = "b" ** 1234 },
+        .{ .name = "typical", .headers = &typical_headers, .body = &@as([1234]u8, @splat('b')) },
         .{ .name = "many_headers", .headers = &many_headers, .body = "hello" },
         .{ .name = "maximum_headers", .headers = &maximum_headers, .body = "hello" },
         .{ .name = "long_value", .headers = &long_value_headers, .body = "hello" },
@@ -363,7 +363,7 @@ fn openTcpPair() [2]c_int {
         .family = address_family_inet,
         .port = 0,
         .address = .{ .value = loopback_address_network_order },
-        .zero = .{0} ** 8,
+        .zero = @splat(0),
     };
     if (bind(listener, @ptrCast(&address), @sizeOf(SockAddrIn)) == -1) {
         @panic("TCP bind failed");
