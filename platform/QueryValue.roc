@@ -16,7 +16,7 @@ QueryValue :: { encoded : Str }.{
 
 	## Converts an interpolated string typed as `QueryValue`. The literal parts and
 	## interpolated values are joined first, then encoded as one value.
-	from_interpolation : List(Str) -> Try((List(Str) -> QueryValue), [InvalidInterpolation(Str)])
+	from_interpolation : List(Str) -> Try((Iter(Str) -> QueryValue), [InvalidInterpolation(Str)])
 	from_interpolation = |segments|
 		Str.from_interpolation(segments).map_ok(|assemble| |values| QueryValue.({ encoded: PercentEncoding.encode(assemble(values)) }))
 

@@ -171,7 +171,7 @@ pub fn observeRequest(entry: *const access_log.Entry, duration_nanoseconds: u64)
     if (!counting) return;
     const shared = region orelse return;
     const route: usize = if (entry.route.len == 0) no_route else route_indexes.get(entry.route.slice()) orelse no_route;
-    const key = seriesKey(route, methodIndex(entry.method.slice()), entry.status, @intFromEnum(entry.outcome));
+    const key = seriesKey(route, methodIndex(entry.method.slice()), entry.status, @backingInt(entry.outcome));
     if (seriesFor(shared, key)) |series| add(&series.value, 1) else add(&shared.dropped, 1);
     shared.route_duration[route].observe(duration_nanoseconds);
     add(&shared.route_body_bytes[route], entry.body_bytes);
@@ -408,8 +408,9 @@ fn methodLabel(method: u64) []const u8 {
 }
 
 fn outcomeLabel(outcome: u64) []const u8 {
-    inline for (std.meta.fields(access_log.Outcome)) |field| {
-        if (field.value == outcome) return field.name;
+    const info = @typeInfo(access_log.Outcome).@"enum";
+    inline for (info.field_names, info.field_values) |name, value| {
+        if (value == outcome) return name;
     }
     return "";
 }
@@ -454,12 +455,12 @@ test "histograms count an observation in the first bucket whose bound it does no
 }
 
 test "series keys keep every field at its limit" {
-    const key = seriesKey(no_route, no_method, 999, @intFromEnum(access_log.Outcome.client_closed));
+    const key = seriesKey(no_route, no_method, 999, @backingInt(access_log.Outcome.client_closed));
     const unpacked = unpackKey(key);
     try testing.expectEqual(no_route, unpacked.route);
     try testing.expectEqual(no_method, unpacked.method);
     try testing.expectEqual(@as(u16, 999), unpacked.status);
-    try testing.expectEqual(@as(u64, @intFromEnum(access_log.Outcome.client_closed)), unpacked.outcome);
+    try testing.expectEqual(@as(u64, @backingInt(access_log.Outcome.client_closed)), unpacked.outcome);
 }
 
 test "requests are counted by route, method, status, and outcome, and rendered once seen" {

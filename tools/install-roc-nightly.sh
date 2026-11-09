@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Installs the Roc nightly named in tools/linux/Dockerfile into <directory>
-# and checks its SHA-256 there. CI uses this rather than building Roc from
-# source: the pinned Roc needs a newer Zig to build than roxum's host uses.
+# and checks its SHA-256 there. CI uses the same prebuilt compiler.
 #   tools/install-roc-nightly.sh <directory>
 set -euo pipefail
 

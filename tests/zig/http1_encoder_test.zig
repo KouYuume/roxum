@@ -168,12 +168,9 @@ test "ResponseBuffer has the complete configured head capacity" {
 }
 
 test "header count covers below at and above maximum" {
-    const below = [_]Header{.{ .name = "X", .value = "" }} **
-        (http1.maximum_header_count - 1);
-    const boundary = [_]Header{.{ .name = "X", .value = "" }} **
-        http1.maximum_header_count;
-    const above = [_]Header{.{ .name = "X", .value = "" }} **
-        (http1.maximum_header_count + 1);
+    const below = @as([(http1.maximum_header_count - 1)]Header, @splat(.{ .name = "X", .value = "" }));
+    const boundary = @as([http1.maximum_header_count]Header, @splat(.{ .name = "X", .value = "" }));
+    const above = @as([(http1.maximum_header_count + 1)]Header, @splat(.{ .name = "X", .value = "" }));
     var response_buffer = ResponseBuffer{};
 
     _ = try Encoder.init(200, &below, "", &response_buffer);
@@ -189,12 +186,9 @@ test "combined application and host header count covers its boundary" {
         .{ .name = "Content-Length", .value = "0" },
         .{ .name = "Connection", .value = "close" },
     };
-    const below = [_]Header{.{ .name = "X", .value = "" }} **
-        (http1.maximum_header_count - host_headers.len - 1);
-    const boundary = [_]Header{.{ .name = "X", .value = "" }} **
-        (http1.maximum_header_count - host_headers.len);
-    const above = [_]Header{.{ .name = "X", .value = "" }} **
-        (http1.maximum_header_count - host_headers.len + 1);
+    const below = @as([(http1.maximum_header_count - host_headers.len - 1)]Header, @splat(.{ .name = "X", .value = "" }));
+    const boundary = @as([(http1.maximum_header_count - host_headers.len)]Header, @splat(.{ .name = "X", .value = "" }));
+    const above = @as([(http1.maximum_header_count - host_headers.len + 1)]Header, @splat(.{ .name = "X", .value = "" }));
     var response_buffer = ResponseBuffer{};
 
     const View = struct {
@@ -238,7 +232,7 @@ test "combined application and host header count covers its boundary" {
 }
 
 test "large header values are copied into the caller response buffer" {
-    var value = [_]u8{'x'} ** 4096;
+    var value = @as([4096]u8, @splat('x'));
     const headers = [_]Header{
         .{ .name = "X-Large", .value = &value },
     };
@@ -259,7 +253,7 @@ test "large header values are copied into the caller response buffer" {
 }
 
 test "body coalescing covers below at and above its boundary" {
-    const body = [_]u8{'b'} ** 65;
+    const body = @as([65]u8, @splat('b'));
     const lengths = [_]usize{ 63, 64, 65 };
 
     for (lengths) |length| {
@@ -312,7 +306,7 @@ test "response head size covers below at and above maximum" {
 }
 
 test "Encoder validates large values across SIMD boundaries" {
-    var value = [_]u8{'x'} ** 4096;
+    var value = @as([4096]u8, @splat('x'));
     const headers = [_]Header{
         .{ .name = "X-Large", .value = &value },
     };
@@ -386,7 +380,7 @@ test "Encoder resumes from every partial-write byte boundary" {
 }
 
 test "Encoder resumes within a borrowed body" {
-    const body = [_]u8{'b'} ** 65;
+    const body = @as([65]u8, @splat('b'));
     var response_buffer = ResponseBuffer{};
     var encoder = try Encoder.init(200, &.{}, &body, &response_buffer);
 

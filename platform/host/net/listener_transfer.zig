@@ -18,7 +18,7 @@ const control_length = header_space + @sizeOf(c_int);
 const control_space = header_space + alignControl(@sizeOf(c_int));
 
 const ControlBuffer = struct {
-    bytes: [control_space]u8 align(@alignOf(usize)) = [_]u8{0} ** control_space,
+    bytes: [control_space]u8 align(@alignOf(usize)) = @as([control_space]u8, @splat(0)),
 
     fn header(self: *ControlBuffer) *std.c.cmsghdr {
         return @ptrCast(&self.bytes);

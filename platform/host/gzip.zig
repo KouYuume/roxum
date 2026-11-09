@@ -98,7 +98,7 @@ pub fn decompressBounded(allocator: std.mem.Allocator, coding: Coding, compresse
 }
 
 fn readBounded(allocator: std.mem.Allocator, reader: *std.Io.Reader, limit: usize) DecompressError![]u8 {
-    return reader.allocRemaining(allocator, .limited(limit +| 1)) catch |err| switch (err) {
+    return reader.allocRemaining(allocator, .limited(limit)) catch |err| switch (err) {
         error.OutOfMemory => error.OutOfMemory,
         error.StreamTooLong => error.TooLarge,
         error.ReadFailed => error.Invalid,
@@ -154,12 +154,15 @@ test "parts flushed one by one come back as they were written" {
 
 test "a body is decompressed within its limit, and a larger one is refused" {
     const allocator = std.testing.allocator;
-    const body = "roxum " ** 2000;
+    const body = @as(*const [2000 * "roxum ".len]u8, @ptrCast(&@as([2000]["roxum ".len]u8, @splat("roxum ".*))));
     const compressed = try compressAll(allocator, body);
     defer allocator.free(compressed);
     const restored = try decompressBounded(allocator, Coding.gzip, compressed, body.len);
     defer allocator.free(restored);
     try std.testing.expectEqualStrings(body, restored);
+    const below_limit = try decompressBounded(allocator, Coding.gzip, compressed, body.len + 1);
+    defer allocator.free(below_limit);
+    try std.testing.expectEqualStrings(body, below_limit);
     try std.testing.expectError(error.TooLarge, decompressBounded(allocator, Coding.gzip, compressed, body.len - 1));
     try std.testing.expectError(error.Invalid, decompressBounded(allocator, Coding.gzip, "not gzip at all", 1024));
 }

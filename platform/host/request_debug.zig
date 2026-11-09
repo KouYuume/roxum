@@ -284,7 +284,7 @@ test "the label drops the query and neutralizes unprintable bytes" {
 }
 
 test "a long label value is cut with an ellipsis" {
-    const long_path = "/" ++ "a" ** 300;
+    const long_path = "/" ++ &@as([300]u8, @splat('a'));
     const value = Label.init("GET", long_path, null, null);
     try std.testing.expectEqual(maximum_path_bytes, value.path.len);
     try std.testing.expect(std.mem.endsWith(u8, value.path.slice(), "..."));
@@ -318,7 +318,7 @@ test "percent encoding keeps field values printable and stops at whole escapes" 
     const length = percentEncode(&output, "a b%\n\xe3");
     try std.testing.expectEqualStrings("a b%25%0A%E3", output[0..length]);
 
-    const long = "\n" ** maximum_entry_bytes;
+    const long = &@as([maximum_entry_bytes]u8, @splat('\n'));
     const cut = percentEncode(&output, long);
     try std.testing.expectEqual(@as(usize, (maximum_entry_bytes / 3) * 3), cut);
 }

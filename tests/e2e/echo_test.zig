@@ -867,7 +867,7 @@ fn runConcurrentRequests(port: u16, count: usize) !void {
 /// once per process regardless of order.
 fn expectStartupEffects(stderr: std.Io.File, process_count: usize) !void {
     var buffer: [512]u8 = undefined;
-    var seen = [_]usize{0} ** startup_effect_lines.len;
+    var seen = @as([startup_effect_lines.len]usize, @splat(0));
     var time_lines: usize = 0;
 
     for (0..process_count * (startup_effect_lines.len + 1)) |_| {

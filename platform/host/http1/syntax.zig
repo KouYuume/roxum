@@ -289,7 +289,7 @@ fn isDigit(byte: u8) bool {
 }
 
 fn buildTokenTable() [256]bool {
-    var table = [_]bool{false} ** 256;
+    var table = @as([256]bool, @splat(false));
     for ('0'..'9' + 1) |byte| table[byte] = true;
     for ('A'..'Z' + 1) |byte| table[byte] = true;
     for ('a'..'z' + 1) |byte| table[byte] = true;
@@ -298,7 +298,7 @@ fn buildTokenTable() [256]bool {
 }
 
 fn buildPcharTable() [256]bool {
-    var table = [_]bool{false} ** 256;
+    var table = @as([256]bool, @splat(false));
     for (0..table.len) |value| {
         const byte: u8 = @intCast(value);
         table[value] = isRegNameUnescapedScalar(byte) or
@@ -320,7 +320,7 @@ fn buildQueryTable() [256]bool {
 }
 
 fn buildFieldValueTable() [256]bool {
-    var table = [_]bool{false} ** 256;
+    var table = @as([256]bool, @splat(false));
     for (0..table.len) |value| table[value] = isFieldValue(@intCast(value));
     return table;
 }
@@ -332,13 +332,13 @@ fn withoutPercent(table: [256]bool) [256]bool {
 }
 
 fn buildRegNamePlainTable() [256]bool {
-    var table = [_]bool{false} ** 256;
+    var table = @as([256]bool, @splat(false));
     for (0..table.len) |value| table[value] = isRegNameUnescapedScalar(@intCast(value));
     return table;
 }
 
 fn buildUserInfoTable() [256]bool {
-    var table = [_]bool{false} ** 256;
+    var table = @as([256]bool, @splat(false));
     for (0..table.len) |value| {
         const byte: u8 = @intCast(value);
         table[value] = isRegNameUnescapedScalar(byte) or
@@ -390,7 +390,7 @@ test "field value byte classes cover their boundaries" {
 test "field value slice validates below at and above vector boundary" {
     const lengths = [_]usize{ 15, 16, 17, 63, 64, 65 };
     for (lengths) |length| {
-        var bytes = [_]u8{'a'} ** 65;
+        var bytes = @as([65]u8, @splat('a'));
         try std.testing.expect(isFieldValueSlice(bytes[0..length]));
 
         const positions = [_]usize{ 0, length - 1 };
@@ -405,7 +405,7 @@ test "field value slice validates below at and above vector boundary" {
 test "field value validation copy covers vector boundary" {
     const lengths = [_]usize{ 15, 16, 17, 63, 64, 65 };
     for (lengths) |length| {
-        var input = [_]u8{'a'} ** 65;
+        var input = @as([65]u8, @splat('a'));
         var output: [65]u8 = undefined;
 
         try std.testing.expect(validateAndCopyFieldValue(
@@ -431,7 +431,7 @@ test "vector field validation agrees with scalar classification" {
     for (0..256) |value| {
         const byte: u8 = @intCast(value);
         for (positions) |position| {
-            var input = [_]u8{'a'} ** 65;
+            var input = @as([65]u8, @splat('a'));
             var output: [65]u8 = undefined;
             input[position] = byte;
 

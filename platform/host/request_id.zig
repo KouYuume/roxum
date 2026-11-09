@@ -138,8 +138,8 @@ test "generate ignores a valid incoming ID and makes a new one each time" {
 test "an incoming ID of 1 to 128 bytes is kept; 0 and 129 are replaced" {
     try expectIgnored("");
     try expectTrusted("a");
-    try expectTrusted("a" ** 128);
-    try expectIgnored("a" ** 129);
+    try expectTrusted(&@as([128]u8, @splat('a')));
+    try expectIgnored(&@as([129]u8, @splat('a')));
 }
 
 test "an incoming ID of visible ASCII is kept; space, DEL, and non-ASCII are replaced" {
