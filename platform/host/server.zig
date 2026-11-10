@@ -145,11 +145,15 @@ pub fn run(
     handoff.waits = waits;
     handoff.work = try work_queue.Jobs.init(ready.settings.threads, poller);
     startup.publishHandoff(waits);
-    const listener = supervisor.inherited_listener orelse try net.listenAddress(
-        listen_options.address,
-        listen_port_override orelse listen_options.port,
-    );
+    var endpoint = listen_options.endpoint;
+    if (listen_port_override) |port| switch (endpoint) {
+        net.Endpoint.tcp => |*address| address.port = port,
+        net.Endpoint.unix => {},
+    };
+    const listener = supervisor.inherited_listener orelse try net.listenEndpoint(endpoint);
     defer net.closeSocket(listener.socket);
+    var transferred = supervisor.inherited_listener != null;
+    defer if (!transferred) listener.cleanup();
 
     const workers = listen_options.processes;
     request_memory.setLimit(if (application_limits.request_memory_bytes) |bytes|
@@ -158,8 +162,8 @@ pub fn run(
         memory_budget.automatic(workers, ready.settings.threads));
     access_log.start(listen_options.access_log) catch diagnostics.fatal("failed to start the access log");
     if (listen_options.metrics != null) metrics.startWorker(listen_options.routes) catch diagnostics.fatal("failed to start the metrics");
-    const admin_port: ?supervisor.Admin = if (listen_options.metrics) |given| .{ .address = given.address, .port = given.port } else null;
-    if (!try supervisor.notifyReady(listener, workers, application_limits.drain_timeout_milliseconds, admin_port)) try writePort(listener.port);
+    transferred = try supervisor.notifyReady(listener, workers, application_limits.drain_timeout_milliseconds, listen_options.metrics);
+    if (!transferred) try stdio.writeStdoutListener(listener);
     try event_loop.run(listener.socket, handoff);
 }
 
@@ -826,10 +830,6 @@ fn deinitializeModel(
     });
     defer allocator_context.clearCurrent();
     model_root.deinit();
-}
-
-fn writePort(port: u16) stdio.Error!void {
-    try stdio.writeStdoutPort(port);
 }
 
 test "application timeouts replace only the timeout limits" {

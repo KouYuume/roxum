@@ -60,8 +60,8 @@ routes = Router.new
 
 ## 制約
 
-- IPv4・IPv6のTCPに対応。HTTP/1.1のみ。受信TLS・HTTP/2・HTTP/3は[リバースプロキシ](docs/guides/reverse-proxy.md)で終端。
-- Unixドメインソケット、WebSocket、CONNECT、TRACE、拡張メソッド、HTTPトレーラーは未対応。
+- IPv4・IPv6のTCPとファイルパスを使うUnixソケットに対応。HTTP/1.1のみ。受信TLS・HTTP/2・HTTP/3は[リバースプロキシ](docs/guides/reverse-proxy.md)で終端。
+- WebSocket、CONNECT、TRACE、拡張メソッド、HTTPトレーラーは未対応。
 - CONNECT、TRACE、任意の拡張メソッドは、強い利用者要望がない限り[対応対象外](docs/design/non-goals.md)とする。
 - タイムアウトで任意のRocの計算を強制中断することはできません。
 - 実行時圧縮はgzip。事前圧縮したBrotliは配信可能、複数バイトレンジは未対応。

@@ -26,8 +26,7 @@ init! = |{}| {
 	Ok({
 		model: {},
 		listen: {
-			address: if remote { IpAddr.V4((0, 0, 0, 0)) } else { IpAddr.V4((127, 0, 0, 1)) },
-			port: if remote { 8080 } else { 0 },
+			endpoint: Server.Endpoint.Tcp({ address: if remote { IpAddr.V4((0, 0, 0, 0)) } else { IpAddr.V4((127, 0, 0, 1)) }, port: if remote { 8080 } else { 0 } }),
 			timeouts: Server.Timeouts.defaults,
 			limits: Server.Limits.defaults,
 		},

@@ -25,6 +25,7 @@ pub const RequestHost = struct {
 };
 
 pub const RemoteAddress = union(enum) {
+    unix,
     v4: struct {
         octets: [4]u8,
         port: u16,
@@ -473,16 +474,19 @@ fn requestBodyFromSlice(
 fn remoteAddressToRoc(
     remote_address: RemoteAddress,
 ) abi.HttpRemoteAddr {
-    return switch (remote_address) {
-        RemoteAddress.v4 => |address| .{
-            .ip = ipv4ToRoc(address.octets),
-            .port = address.port,
-        },
-        RemoteAddress.v6 => |address| .{
-            .ip = ipv6ToRoc(address.segments),
-            .port = address.port,
-        },
+    var result = std.mem.zeroes(abi.HttpRemoteAddr);
+    if (remote_address == RemoteAddress.unix) {
+        result.tag = abi.HttpRemoteAddrTag.Unix;
+        return result;
+    }
+    result.tag = abi.HttpRemoteAddrTag.Tcp;
+    const payload: *abi.HttpRemoteAddrTcp = @ptrCast(@alignCast(&result.payload));
+    payload.* = switch (remote_address) {
+        RemoteAddress.v4 => |address| .{ .ip = ipv4ToRoc(address.octets), .port = address.port },
+        RemoteAddress.v6 => |address| .{ .ip = ipv6ToRoc(address.segments), .port = address.port },
+        RemoteAddress.unix => unreachable,
     };
+    return result;
 }
 
 fn ipv4ToRoc(octets: [4]u8) abi.HttpIpAddr {

@@ -34,8 +34,7 @@ init! = |{}| {
 	Ok({
 		model: { public },
 		listen: {
-			address: IpAddr.V4((127, 0, 0, 1)),
-			port: 0,
+			endpoint: Server.Endpoint.Tcp({ address: IpAddr.V4((127, 0, 0, 1)), port: 0 }),
 			timeouts: { ..Server.Timeouts.defaults, request_body_milliseconds: 500 },
 			limits: Server.Limits.{ maximum_requests_in_progress: Server.Count.Fixed(3) },
 			threads: Server.Threads.Fixed(2),

@@ -21,13 +21,12 @@ init! = |{}| {
 	Ok({
 		model: { upstream: pool },
 		listen: {
-			address: IpAddr.V6((0, 0, 0, 0, 0, 0, 0, 0)),
-			port: 0,
+			endpoint: Server.Endpoint.Tcp({ address: IpAddr.V6((0, 0, 0, 0, 0, 0, 0, 0)), port: 0 }),
 			timeouts: Server.Timeouts.defaults,
 			limits: Server.Limits.defaults,
 			threads: Server.Threads.Fixed(1),
 			processes: 2,
-			metrics: Server.Metrics.Listen({ address: IpAddr.V6((0, 0, 0, 0, 0, 0, 0, 1)), port: settings.admin_port }),
+			metrics: Server.Metrics.Listen(Server.Endpoint.Tcp({ address: IpAddr.V6((0, 0, 0, 0, 0, 0, 0, 1)), port: settings.admin_port })),
 		},
 	})
 }
@@ -41,8 +40,8 @@ routes = Router.new
 				|_model, context|
 					Ok(
 						Reply.text(
-							match context.request.remote_addr.ip {
-								V6((0, 0, 0, 0, 0, 0, 0, 1)) => "ipv6"
+							match context.request.remote_addr {
+								Tcp({ ip: V6((0, 0, 0, 0, 0, 0, 0, 1)), .. }) => "ipv6"
 								_ => "unexpected peer"
 							},
 						),

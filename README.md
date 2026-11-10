@@ -60,8 +60,8 @@ Core and integrations are versioned independently. See [versioning](docs/design/
 
 ## Limitations
 
-- IPv4 and IPv6 TCP; HTTP/1.1 only; use a [reverse proxy](docs/guides/reverse-proxy.md) for inbound TLS, HTTP/2, or HTTP/3.
-- No Unix domain listeners, WebSocket, CONNECT, TRACE, extension methods, or HTTP trailers.
+- IPv4/IPv6 TCP and filesystem Unix sockets; HTTP/1.1 only; use a [reverse proxy](docs/guides/reverse-proxy.md) for inbound TLS, HTTP/2, or HTTP/3.
+- No WebSocket, CONNECT, TRACE, extension methods, or HTTP trailers.
 - CONNECT, TRACE, and arbitrary extension methods are [non-goals](docs/design/non-goals.md) unless strong user demand justifies reconsideration.
 - Timeouts cannot forcibly interrupt arbitrary Roc computation.
 - Runtime compression is gzip; precompressed Brotli is supported, multipart byte ranges are not.

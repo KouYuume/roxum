@@ -21,8 +21,7 @@ init! = |{}|
 	Ok({
 		model: { settings: base_settings },
 		listen: {
-			address: IpAddr.V4((127, 0, 0, 1)),
-			port: 0,
+			endpoint: Server.Endpoint.Tcp({ address: IpAddr.V4((127, 0, 0, 1)), port: 0 }),
 			timeouts: Server.Timeouts.defaults,
 			limits: Server.Limits.defaults,
 		},

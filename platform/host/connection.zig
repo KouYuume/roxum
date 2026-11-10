@@ -669,8 +669,9 @@ pub const Session = struct {
 
     fn remoteAddress(self: *const Session) bridge.RemoteAddress {
         return switch (self.accepted.remote_address) {
-            net.IpAddress.v4 => |octets| .{ .v4 = .{ .octets = octets, .port = self.accepted.remote_port } },
-            net.IpAddress.v6 => |segments| .{ .v6 = .{ .segments = segments, .port = self.accepted.remote_port } },
+            net.PeerAddress.unix => bridge.RemoteAddress.unix,
+            net.PeerAddress.v4 => |octets| .{ .v4 = .{ .octets = octets, .port = self.accepted.remote_port } },
+            net.PeerAddress.v6 => |segments| .{ .v6 = .{ .segments = segments, .port = self.accepted.remote_port } },
         };
     }
 
@@ -704,6 +705,8 @@ pub const Session = struct {
             // rather than end the worker.
             error.ReceiveTimeout => error_response.Kind.request_timeout,
             error.SocketFailed,
+            error.InvalidUnixPath,
+            error.SocketPathFailed,
             error.SetSocketOptionFailed,
             error.BindFailed,
             error.ListenFailed,

@@ -32,8 +32,7 @@ init! = |{}| {
 			Ok({
 				model: { per_hour: a, short: b, small: c },
 				listen: {
-					address: IpAddr.V4((127, 0, 0, 1)),
-					port: 0,
+					endpoint: Server.Endpoint.Tcp({ address: IpAddr.V4((127, 0, 0, 1)), port: 0 }),
 					timeouts: Server.Timeouts.defaults,
 					limits: Server.Limits.defaults,
 				},
@@ -60,7 +59,12 @@ routes =
 
 check_for : Model, RequestHead(Tag, {}), Tag -> Try(RateLimit.Check, [NoLimit])
 check_for = |model, head, tag| {
-	ip = RateLimit.client_ip(head.remote_addr.ip)
+	ip = (
+		match head.remote_addr {
+			Tcp({ ip: address, .. }) => RateLimit.client_ip(address)
+			Unix => "unix"
+		}
+	)
 	match tag {
 		Limit(limit) => Ok(RateLimit.Check.{ counter: model.per_hour, key: "limit:${ip}", limit, on_full: RateLimit.OnFull.Reject })
 		Other(limit) => Ok(RateLimit.Check.{ counter: model.per_hour, key: "other:${ip}", limit, on_full: RateLimit.OnFull.Reject })

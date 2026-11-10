@@ -10,8 +10,7 @@ Set roxum's keep-alive idle timeout longer than the proxy's upstream idle timeou
 init! = |{}| Ok({
 	model: {},
 	listen: {
-		address: IpAddr.V4((127, 0, 0, 1)),
-		port: 8080,
+		endpoint: Server.Endpoint.Tcp({ address: IpAddr.V4((127, 0, 0, 1)), port: 8080 }),
 		timeouts: {
 			..Server.Timeouts.defaults,
 			keep_alive_idle_milliseconds: 75_000,

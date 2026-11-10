@@ -2,6 +2,7 @@ import HostBody
 import HeaderValue
 
 Http :: [].{
+
 	## A request method. The union is closed: the host answers any other method,
 	## including `CONNECT` and `TRACE`, with 501 Not Implemented and does not
 	## call the app. Method names are case-sensitive on the wire, so `get` is
@@ -48,12 +49,9 @@ Http :: [].{
 		is_eq : _
 	}
 
-	## The address and port of the peer of the connection. Behind a proxy or
-	## load balancer this is the proxy, not the original client.
-	RemoteAddr := {
-		ip : Http.IpAddr,
-		port : U16,
-	}.{
+	## The transport peer: TCP has an IP and port; Unix has neither. Behind
+	## a proxy this is the proxy until a trusted forwarding layer resolves it.
+	RemoteAddr := [Tcp({ ip : Http.IpAddr, port : U16 }), Unix].{
 		is_eq : _
 	}
 
@@ -65,6 +63,7 @@ Http :: [].{
 	HeaderName := Str.{
 		is_eq : _
 		to_hash : _
+
 		## Returns the name as a string.
 		inner = |HeaderName.(value)| value
 	}
@@ -74,6 +73,7 @@ Http :: [].{
 	RequestHeader := {
 		## Lowercased by the host for received requests.
 		name : Http.HeaderName,
+
 		## Raw bytes of the field value.
 		value : List(U8),
 	}.{
@@ -112,6 +112,7 @@ Http :: [].{
 	## that sent `Expect: 100-continue` gets `100 Continue` at the first read that
 	## waits for it.
 	RequestStream :: U64.{
+
 		## Reads the next part of the request body as a stream: only this part
 		## is held, so a body of any size can be read in parts. Fails with
 		## `TooLarge` past `Server.Limits.maximum_streamed_body_bytes` (none
@@ -158,20 +159,25 @@ Http :: [].{
 	Request := {
 		method : Http.Method,
 		version : Http.Version,
+
 		## The request target exactly as received, including any query.
 		raw_target : List(U8),
+
 		## The path part of the target, before percent-decoding. The host
 		## answers 400 when it contains an empty segment (`//`), `.`, or `..`.
 		## For an absolute-form target it is the path after the authority, or
 		## `/` when there is none; for an asterisk-form target it is `*`.
 		path : Str,
+
 		## The bytes after the first `?` of the target, without the `?`, not
 		## parsed or decoded. Empty when the target has no query.
 		query : List(U8),
+
 		## The header fields in received order, with duplicates kept.
 		headers : List(Http.RequestHeader),
 		body : Http.RequestBody,
 		remote_addr : Http.RemoteAddr,
+
 		## The request's ID, which the host's logs use too. The host decides it
 		## as `listen.request_id` says (`Server.RequestIdSource`); the
 		## request's own `x-request-id` fields stay in `headers` as received.
@@ -251,7 +257,7 @@ expect {
 				query: [],
 				headers: [Http.RequestHeader.{ name: Http.HeaderName.("host"), value: "fallback.example".to_utf8() }],
 				body: Http.RequestBody.Empty,
-				remote_addr: Http.RemoteAddr.{ ip: Http.IpAddr.V4((127, 0, 0, 1)), port: 1 },
+				remote_addr: Http.RemoteAddr.Tcp({ ip: Http.IpAddr.V4((127, 0, 0, 1)), port: 1 }),
 				request_id: "test",
 			}
 			Http.Request.authority(request) == Ok(expected.to_utf8())
@@ -269,7 +275,7 @@ expect {
 		query: [],
 		headers: [],
 		body: Http.RequestBody.Empty,
-		remote_addr: Http.RemoteAddr.{ ip: Http.IpAddr.V4((127, 0, 0, 1)), port: 1 },
+		remote_addr: Http.RemoteAddr.Tcp({ ip: Http.IpAddr.V4((127, 0, 0, 1)), port: 1 }),
 		request_id: "test",
 	}
 	Http.Request.authority(request) == Err(MissingAuthority)

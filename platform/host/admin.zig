@@ -42,18 +42,28 @@ pub const State = struct {
 };
 
 var listener: ?net.Socket = null;
+var owned_path: ?net.OwnedUnixPath = null;
 var clients: [maximum_clients]Client = @splat(.{});
 
-/// Listens on the admin port, for the address and port worker 0 reported.
-pub fn open(address: net.IpAddress, port: u16) net.Error!void {
-    const opened = try net.listenAddress(address, port);
+/// Opens the admin endpoint reported by worker 0.
+pub fn open(endpoint: net.Endpoint) net.Error!void {
+    const opened = try net.listenEndpoint(endpoint);
+    errdefer opened.cleanup();
     errdefer net.closeSocket(opened.socket);
     try net.setListenerNonBlocking(opened.socket);
     listener = opened.socket;
+    owned_path = opened.unix_path;
 }
 
-/// Closes the admin sockets in a worker just forked from the supervisor.
+/// Removes the supervisor-owned socket path and closes admin connections.
+pub fn shutdown() void {
+    if (owned_path) |path| path.remove();
+    closeInWorker();
+}
+
+/// Closes inherited descriptors without removing the supervisor-owned path.
 pub fn closeInWorker() void {
+    owned_path = null;
     if (listener) |socket| net.closeSocket(socket);
     listener = null;
     for (&clients) |*client| {
@@ -145,7 +155,7 @@ fn writeResponse(client: *Client) void {
 
 test "the admin port answers its paths and refuses other methods" {
     const testing = std.testing;
-    try open(.{ .v4 = .{ 127, 0, 0, 1 } }, 0);
+    try open(.{ .tcp = .{ .address = .{ .v4 = .{ 127, 0, 0, 1 } }, .port = 0 } });
     defer {
         closeInWorker();
     }

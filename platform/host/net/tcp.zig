@@ -113,21 +113,33 @@ const SockAddrIn = std.c.sockaddr.in;
 pub const Deadline = deadline.Deadline;
 pub const monotonicNanoseconds = deadline.monotonicNanoseconds;
 
+pub const UnixPath = @import("unix_path.zig").Path;
+pub const OwnedUnixPath = @import("unix_path.zig").Owned;
+pub const Endpoint = union(enum) { tcp: struct { address: IpAddress, port: u16 }, unix: UnixPath };
+pub const PeerAddress = union(enum) { v4: [4]u8, v6: [8]u16, unix };
+
 pub const Listener = struct {
     socket: Socket,
     port: u16,
+    unix_path: ?OwnedUnixPath = null,
+
+    pub fn cleanup(self: *const Listener) void {
+        if (self.unix_path) |path| path.remove();
+    }
 };
 
 pub const IpAddress = union(enum) { v4: [4]u8, v6: [8]u16 };
 
 pub const AcceptedSocket = struct {
     socket: Socket,
-    remote_address: IpAddress,
+    remote_address: PeerAddress,
     remote_port: u16,
 };
 
 pub const Error = error{
     SocketFailed,
+    InvalidUnixPath,
+    SocketPathFailed,
     SetSocketOptionFailed,
     BindFailed,
     ListenFailed,
@@ -247,6 +259,25 @@ pub fn listenIpv6(segments: [8]u16, port: u16) Error!Listener {
     return .{ .socket = fd, .port = networkToHost16(address.port) };
 }
 
+pub fn listenEndpoint(endpoint: Endpoint) Error!Listener {
+    return switch (endpoint) {
+        Endpoint.tcp => |tcp| listenAddress(tcp.address, tcp.port),
+        Endpoint.unix => |path| listenUnix(path),
+    };
+}
+
+fn listenUnix(path: UnixPath) Error!Listener {
+    const fd = try openConfiguredSocket(std.c.AF.UNIX);
+    errdefer closeSocket(fd);
+    var address = std.c.sockaddr.un{ .path = @splat(0) };
+    @memcpy(address.path[0..path.slice().len], path.slice());
+    if (bind(fd, @ptrCast(&address), @sizeOf(@TypeOf(address))) == -1) return error.BindFailed;
+    const owned = try OwnedUnixPath.capture(path);
+    errdefer owned.remove();
+    if (listen(fd, listen_backlog) == -1) return error.ListenFailed;
+    return .{ .socket = fd, .port = 0, .unix_path = owned };
+}
+
 pub const PendingAccept = union(enum) {
     accepted: AcceptedSocket,
     /// No connection is waiting on the non-blocking listener.
@@ -283,17 +314,18 @@ pub fn acceptPending(listener: Socket) PendingAccept {
                     continue;
                 };
             }
-            const remote: IpAddress, const remote_port: u16 = switch (address.family) {
+            const remote: PeerAddress, const remote_port: u16 = switch (address.family) {
                 std.c.AF.INET => blk: {
                     const v4: *const SockAddrIn = @ptrCast(@alignCast(&address));
-                    break :blk .{ IpAddress{ .v4 = @bitCast(v4.addr) }, networkToHost16(v4.port) };
+                    break :blk .{ PeerAddress{ .v4 = @bitCast(v4.addr) }, networkToHost16(v4.port) };
                 },
                 std.c.AF.INET6 => blk: {
                     const v6: *const std.c.sockaddr.in6 = @ptrCast(@alignCast(&address));
                     var segments: [8]u16 = undefined;
                     for (&segments, 0..) |*segment, i| segment.* = std.mem.readInt(u16, v6.addr[i * 2 ..][0..2], std.builtin.Endian.big);
-                    break :blk .{ IpAddress{ .v6 = segments }, networkToHost16(v6.port) };
+                    break :blk .{ PeerAddress{ .v6 = segments }, networkToHost16(v6.port) };
                 },
+                std.c.AF.UNIX => .{ PeerAddress.unix, 0 },
                 else => {
                     closeSocket(client);
                     continue;
@@ -668,7 +700,7 @@ fn openConfiguredSocket(family: c_int) Error!Socket {
             std.c.SO.NOSIGPIPE,
         );
     }
-    try enableSocketOption(
+    if (family != std.c.AF.UNIX) try enableSocketOption(
         socket_fd,
         std.c.IPPROTO.TCP,
         std.c.TCP.NODELAY,
