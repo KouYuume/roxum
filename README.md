@@ -4,6 +4,8 @@ English | [日本語](README.ja.md)
 
 roxum is a web server platform that aims to fit the philosophy of [Roc](https://github.com/roc-lang/roc): concise application code, pure business logic, and explicit effects. Typed handlers express HTTP behavior, while the platform manages I/O and execution.
 
+Its focus is independently deployable HTTP APIs and backend services. See [scope and non-goals](docs/design/non-goals.md) for its boundaries, and [choosing a Roc platform](docs/design/non-goals.md#choosing-a-roc-platform-for-your-application) for browser UI and hypermedia application options such as Joy and roux.
+
 ## High-level features
 
 - **Less plumbing.** Typed extractors, automatic JSON encoding, and `Try(Reply, Reply)` keep request handling concise.
@@ -60,9 +62,12 @@ Core and integrations are versioned independently. See [versioning](docs/design/
 
 - IPv4 and HTTP/1.1 only; use a [reverse proxy](docs/guides/reverse-proxy.md) for inbound TLS, HTTP/2, or HTTP/3.
 - No Unix domain listeners, WebSocket, CONNECT, TRACE, extension methods, or HTTP trailers.
+- CONNECT, TRACE, and arbitrary extension methods are [non-goals](docs/design/non-goals.md) unless strong user demand justifies reconsideration.
 - Timeouts cannot forcibly interrupt arbitrary Roc computation.
 - Runtime compression is gzip; precompressed Brotli is supported, multipart byte ranges are not.
 - Sessions, CSRF protection, OAuth, JWT, and OpenAPI are not built into the core.
+- Sessions, CSRF protection, OAuth, and JWT belong in libraries or integrations; the core may provide general-purpose capabilities they require. See the [scope policy](docs/design/non-goals.md#sessions-csrf-oauth-and-jwt).
+- OpenAPI generation, validation, and documentation UI belong in libraries or integrations; see the [scope policy](docs/design/non-goals.md#openapi).
 - All files under a serving root, including dotfiles, are public. Keep private files outside it.
 
 ## Contributing and support

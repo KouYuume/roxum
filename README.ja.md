@@ -4,6 +4,8 @@
 
 roxumは、[Roc](https://github.com/roc-lang/roc)の思想に沿ったWebサーバープラットフォームを目指しています。アプリケーションは簡潔に記述し、業務ロジックは純粋に、副作用は明示的に。型付きハンドラーでHTTPの振る舞いを表現し、I/Oと実行管理はプラットフォームが担います。
 
+独立して配備できるHTTP API・バックエンドサービスに注力します。[対応範囲と対象外の方針](docs/design/non-goals.md)と、ブラウザーUIやハイパーメディアアプリ向けにJoy・rouxなどを紹介する[用途に応じたRocプラットフォームの選び方](docs/design/non-goals.md#choosing-a-roc-platform-for-your-application)を参照してください。
+
 ## 主な特徴
 
 - **定型コードを減らす。** 型付きextractor、JSONの自動エンコード、`Try(Reply, Reply)` でリクエスト処理を簡潔に記述。
@@ -60,9 +62,12 @@ routes = Router.new
 
 - IPv4・HTTP/1.1のみ。受信TLS・HTTP/2・HTTP/3は[リバースプロキシ](docs/guides/reverse-proxy.md)で終端。
 - Unixドメインソケット、WebSocket、CONNECT、TRACE、拡張メソッド、HTTPトレーラーは未対応。
+- CONNECT、TRACE、任意の拡張メソッドは、強い利用者要望がない限り[対応対象外](docs/design/non-goals.md)とする。
 - タイムアウトで任意のRocの計算を強制中断することはできません。
 - 実行時圧縮はgzip。事前圧縮したBrotliは配信可能、複数バイトレンジは未対応。
 - セッション、CSRF対策、OAuth、JWT、OpenAPIはコアに含みません。
+- セッション、CSRF対策、OAuth、JWTはライブラリまたはintegrationが担い、コアでは必要な汎用能力の提供を検討します。[対応範囲の方針](docs/design/non-goals.md#sessions-csrf-oauth-and-jwt)を参照してください。
+- OpenAPIの生成・検証・ドキュメントUIはライブラリまたはintegrationが担います。[対応範囲の方針](docs/design/non-goals.md#openapi)を参照してください。
 - 配信ルート配下はドットファイルも公開対象です。非公開ファイルは外に置いてください。
 
 ## 貢献・問い合わせ
