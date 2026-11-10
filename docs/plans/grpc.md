@@ -1,6 +1,8 @@
 # gRPC server implementation plan
 
-Status: planned, not implemented. The responsibility split is agreed; API names,
+Status: milestone 0 experiment completed; production support is not implemented.
+See the [transport decision and evidence](http2-transport.md). The responsibility
+split is agreed; API names,
 dependencies, and the detailed implementation below remain proposals until their
 milestone's design checks pass. This document does not describe current support.
 
@@ -93,6 +95,9 @@ do not combine the entire plan into a single implementation PR. Publish current
 design contracts only when their implementation is accepted.
 
 ### 0. Prove the transport and lifetime design
+
+Completed by the [isolated spike and transport decision](http2-transport.md).
+The requirements below define its gate; production integration remains milestone 1.
 
 Compare maintained HTTP/2 implementations usable from Zig against a custom
 implementation. Assess license, dependency size, supported targets, incremental

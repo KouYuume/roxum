@@ -25,6 +25,7 @@ These documents describe the current implementation, its invariants, and the pro
 These documents describe planned work, not capabilities currently available.
 
 - [gRPC server support](plans/grpc.md): host/integration boundaries, Unary RPC first, and staged streaming support
+- [HTTP/2 transport decision](plans/http2-transport.md): milestone 0 evidence, engine choice, and proposed ownership/API contracts
 
 ## Performance
 
