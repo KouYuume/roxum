@@ -40,6 +40,11 @@ engine. A close notification invalidates the stream identity for that engine.
 Destroying the engine releases all its resources without notifying observers;
 the eventual connection owner must separately cancel its request lifetimes.
 
+`headers_complete` optionally notifies the owner after validated initial metadata,
+before request EOF. It is not emitted for trailers or rejected initial headers.
+The notification runs inside the engine callback batch: it may record an admission
+or deadline anchor, but must not execute application code.
+
 `receive` consumes arbitrary input fragments. `output` returns an engine-owned
 serialized buffer. The caller acknowledges only bytes actually written using
 `consumeOutput`; repeated `output` calls preserve the unsent suffix. No socket,
