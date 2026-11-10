@@ -839,3 +839,85 @@ test "request byte values share one allocation that the last value releases" {
         try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
     }
 }
+
+test "metadata entry owns input and rolls back every failed allocation" {
+    const Version = @TypeOf(@as(bridge.RequestMetadata, undefined).version);
+    var reached_success = false;
+    for (0..16) |fail_index| {
+        var environment = TestEnvironment{ .allocator = std.testing.allocator, .fail_index = fail_index };
+        var roc_host = environment.rocHost();
+        var target = "/owned?query=bytes".*;
+        var value = "borrowed header value".*;
+        const request = bridge.requestFromMetadata(.{
+            .method = bridge.HttpMethod.get,
+            .version = Version.http11,
+            .target = &target,
+            .headers = &.{.{ .name = "X-Value", .value = &value }},
+        }, "body", bridge.RemoteAddress.unix, "id", TestEnvironment.requestHost(&roc_host)) catch |err| {
+            try std.testing.expectEqual(error.OutOfMemory, err);
+            try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
+            continue;
+        };
+        var released = false;
+        errdefer if (!released) request.decref(&roc_host);
+        @memset(&target, 'x');
+        @memset(&value, 'x');
+        try std.testing.expectEqualStrings("/owned?query=bytes", request.raw_target.items());
+        try std.testing.expectEqualStrings("/owned", request.path.asSlice());
+        try std.testing.expectEqualStrings("query=bytes", request.query.items());
+        try std.testing.expectEqualStrings("x-value", request.headers.items()[0].name.asSlice());
+        try std.testing.expectEqualStrings("borrowed header value", request.headers.items()[0].value.items());
+        request.decref(&roc_host);
+        released = true;
+        try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
+        reached_success = true;
+        break;
+    }
+    try std.testing.expect(reached_success);
+}
+
+test "metadata entry rejects unsupported target forms and noncanonical paths before allocation" {
+    const Version = @TypeOf(@as(bridge.RequestMetadata, undefined).version);
+    for ([_][]const u8{ "", "relative", "http://example.com/", "/a//b", "/a/../b", "/./" }) |target| {
+        var environment = TestEnvironment{ .allocator = std.testing.allocator };
+        var roc_host = environment.rocHost();
+        try std.testing.expectError(error.InvalidTarget, bridge.requestFromMetadata(.{ .method = bridge.HttpMethod.get, .version = Version.http11, .target = target, .headers = &.{} }, "", bridge.RemoteAddress.unix, "", TestEnvironment.requestHost(&roc_host)));
+        try std.testing.expectEqual(@as(usize, 0), environment.allocation_attempts);
+    }
+}
+
+test "metadata entry preserves root and asterisk requests including empty values" {
+    const Version = @TypeOf(@as(bridge.RequestMetadata, undefined).version);
+    const Case = struct { target: []const u8, method: bridge.HttpMethod, version: Version, body: []const u8, id: []const u8 };
+    for ([_]Case{
+        .{ .target = "/", .method = bridge.HttpMethod.get, .version = Version.http11, .body = "payload", .id = "request-id" },
+        .{ .target = "*", .method = bridge.HttpMethod.options, .version = Version.http10, .body = "", .id = "" },
+    }) |case| {
+        var environment = TestEnvironment{ .allocator = std.testing.allocator };
+        var roc_host = environment.rocHost();
+        {
+            const request = try bridge.requestFromMetadata(.{
+                .method = case.method,
+                .version = case.version,
+                .target = case.target,
+                .headers = &.{},
+            }, case.body, .{ .v4 = .{ .octets = .{ 127, 0, 0, 1 }, .port = 4321 } }, case.id, TestEnvironment.requestHost(&roc_host));
+            defer request.decref(&roc_host);
+            try std.testing.expectEqual(case.method, request.method);
+            try std.testing.expectEqual(case.version, request.version);
+            try std.testing.expectEqualStrings(case.target, request.raw_target.items());
+            try std.testing.expectEqualStrings(case.target, request.path.asSlice());
+            try std.testing.expectEqual(@as(usize, 0), request.query.items().len);
+            try std.testing.expectEqual(@as(usize, 0), request.headers.items().len);
+            try std.testing.expectEqualStrings(case.id, request.request_id.asSlice());
+            try std.testing.expectEqual(@as(u16, 4321), request.remote_addr.payload_tcp().port);
+            if (case.body.len == 0) {
+                try std.testing.expectEqual(bridge.HttpRequestBodyTag.Empty, request.body.tag);
+            } else {
+                try std.testing.expectEqual(bridge.HttpRequestBodyTag.Bytes, request.body.tag);
+                try std.testing.expectEqualStrings(case.body, request.body.payload_bytes().items());
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
+    }
+}
