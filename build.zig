@@ -804,6 +804,7 @@ const unit_tests = [_]ZigTest{
     .{ .root = "platform/host/net/kqueue.zig", .link_libc = true, .os = std.Target.Os.Tag.macos },
     .{ .root = "platform/host/net/epoll.zig", .link_libc = true, .os = std.Target.Os.Tag.linux },
     .{ .root = "platform/host/net/listener_transfer.zig", .link_libc = true },
+    .{ .root = "platform/host/bridge.zig", .link_libc = true },
     .{ .root = "platform/host/sync.zig", .link_libc = true },
     .{ .root = "platform/host/event_loop.zig", .link_libc = true },
     .{ .root = "platform/host/http1/date.zig" },

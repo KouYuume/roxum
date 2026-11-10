@@ -1,4 +1,8 @@
 const model = @import("bridge/model.zig");
+
+test {
+    @import("std").testing.refAllDecls(model);
+}
 const request = @import("bridge/request.zig");
 const response = @import("bridge/response.zig");
 

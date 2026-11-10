@@ -9,6 +9,7 @@ import pf.Redirect
 import pf.Reply
 import pf.ResponseWriter
 import pf.Router
+import pf.IpAddr
 import pf.Server
 
 ## M24 phase 5: helpers for replies, and links built from a route's pattern.
@@ -20,7 +21,7 @@ Item := { name : Str, count : U64 }.{
 
 program = { init!, routes: Router.build(routes, {}) }
 
-init! = |{}| Ok({ model: {}, listen: { address: Server.Ipv4Address.(127, 0, 0, 1), port: 0, timeouts: Server.Timeouts.defaults, limits: Server.Limits.defaults } })
+init! = |{}| Ok({ model: {}, listen: { address: IpAddr.V4((127, 0, 0, 1)), port: 0, timeouts: Server.Timeouts.defaults, limits: Server.Limits.defaults } })
 
 article = Path.new("/articles/{id}")
 

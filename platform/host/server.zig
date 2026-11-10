@@ -145,7 +145,7 @@ pub fn run(
     handoff.waits = waits;
     handoff.work = try work_queue.Jobs.init(ready.settings.threads, poller);
     startup.publishHandoff(waits);
-    const listener = supervisor.inherited_listener orelse try net.listenIpv4(
+    const listener = supervisor.inherited_listener orelse try net.listenAddress(
         listen_options.address,
         listen_port_override orelse listen_options.port,
     );

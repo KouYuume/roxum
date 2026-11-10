@@ -5,6 +5,7 @@ import pf.Reply
 import pf.Response
 import pf.ResponseBody
 import pf.Router
+import pf.IpAddr
 import pf.Server
 
 Model := {}
@@ -14,4 +15,4 @@ routes = Router.new
 	.fallback(|_reason, _model, _head| Ok(Reply.empty))
 	.fallback(|_reason, _model, _head| Ok(Reply.empty))
 program = { init!, routes: Router.build(routes, {}) }
-init! = |{}| Ok({ model: {}, listen: { address: Server.Ipv4Address.(127, 0, 0, 1), port: 0, timeouts: Server.Timeouts.defaults, limits: Server.Limits.defaults } })
+init! = |{}| Ok({ model: {}, listen: { address: IpAddr.V4((127, 0, 0, 1)), port: 0, timeouts: Server.Timeouts.defaults, limits: Server.Limits.defaults } })

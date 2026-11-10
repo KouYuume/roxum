@@ -18,6 +18,7 @@ import pf.Method
 import pf.MethodRouter
 import pf.RouteContext
 import pf.Router
+import pf.IpAddr
 import pf.Server
 import pf.Time
 import pf.BodyLimit
@@ -57,7 +58,7 @@ init! = |{}| {
 	Ok({
 		model: {},
 		listen: {
-			address: Server.Ipv4Address.(127, 0, 0, 1),
+			address: IpAddr.V4((127, 0, 0, 1)),
 			port: 0,
 			timeouts: Server.Timeouts.defaults,
 			limits: Server.Limits.defaults,

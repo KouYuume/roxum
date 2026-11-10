@@ -13,7 +13,7 @@ Where the ID comes from is set in `listen`:
 
 ```roc
 listen: {
-    address: Server.Ipv4Address.(0, 0, 0, 0),
+    address: IpAddr.V4((0, 0, 0, 0)),
     port: 8080,
     timeouts: Server.Timeouts.defaults,
     limits: Server.Limits.defaults,
@@ -109,7 +109,7 @@ Turn the admin port on in `listen`, with an address and port apart from the app'
 ```roc
 listen: {
     ...
-    metrics: Server.Metrics.Listen({ address: Server.Ipv4Address.(127, 0, 0, 1), port: 9090 }),   # leave out for Off
+    metrics: Server.Metrics.Listen({ address: IpAddr.V4((127, 0, 0, 1)), port: 9090 }),   # leave out for Off
 }
 ```
 

@@ -6,6 +6,7 @@ import pf.Handler
 import pf.MethodRouter
 import pf.Reply
 import pf.Router
+import pf.IpAddr
 import pf.Server
 
 ## The base is next to this file; the test prepares `config/local.toml` in
@@ -33,7 +34,7 @@ init! = |{}| {
 	Ok({
 		model: { settings },
 		listen: {
-			address: Server.Ipv4Address.(127, 0, 0, 1),
+			address: IpAddr.V4((127, 0, 0, 1)),
 			port: settings.listen.port,
 			timeouts: Server.Timeouts.defaults,
 			limits: Server.Limits.defaults,

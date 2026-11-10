@@ -3,6 +3,7 @@ app [program] { pf: platform "../../../platform/main.roc" }
 import "config/base.toml" as base_text : Str
 import pf.Config
 import pf.Router
+import pf.IpAddr
 import pf.Server
 
 Settings : { database : { host : Str, port : U16 } }
@@ -20,7 +21,7 @@ init! = |{}|
 	Ok({
 		model: { settings: base_settings },
 		listen: {
-			address: Server.Ipv4Address.(127, 0, 0, 1),
+			address: IpAddr.V4((127, 0, 0, 1)),
 			port: 0,
 			timeouts: Server.Timeouts.defaults,
 			limits: Server.Limits.defaults,

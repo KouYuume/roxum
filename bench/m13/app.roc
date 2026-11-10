@@ -7,6 +7,7 @@ import pf.MethodRouter
 import pf.Reply
 import pf.RouteContext
 import pf.Router
+import pf.IpAddr
 import pf.Server
 
 ## The comparison server. axum/ and go/ implement the same routes.
@@ -25,7 +26,7 @@ init! = |{}| {
 	Ok({
 		model: {},
 		listen: {
-			address: if remote { Server.Ipv4Address.(0, 0, 0, 0) } else { Server.Ipv4Address.(127, 0, 0, 1) },
+			address: if remote { IpAddr.V4((0, 0, 0, 0)) } else { IpAddr.V4((127, 0, 0, 1)) },
 			port: if remote { 8080 } else { 0 },
 			timeouts: Server.Timeouts.defaults,
 			limits: Server.Limits.defaults,

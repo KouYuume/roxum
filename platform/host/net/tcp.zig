@@ -118,9 +118,11 @@ pub const Listener = struct {
     port: u16,
 };
 
+pub const IpAddress = union(enum) { v4: [4]u8, v6: [8]u16 };
+
 pub const AcceptedSocket = struct {
     socket: Socket,
-    remote_octets: [4]u8,
+    remote_address: IpAddress,
     remote_port: u16,
 };
 
@@ -192,7 +194,7 @@ pub fn isQuiet(socket_fd: Socket) bool {
 }
 
 pub fn listenIpv4(address_octets: [4]u8, port: u16) Error!Listener {
-    const socket_fd = try openConfiguredSocket();
+    const socket_fd = try openConfiguredSocket(std.c.AF.INET);
     errdefer closeSocket(socket_fd);
 
     var address = SockAddrIn{
@@ -224,6 +226,27 @@ pub fn listenIpv4(address_octets: [4]u8, port: u16) Error!Listener {
     };
 }
 
+pub fn listenAddress(address: IpAddress, port: u16) Error!Listener {
+    return switch (address) {
+        IpAddress.v4 => |octets| listenIpv4(octets, port),
+        IpAddress.v6 => |segments| listenIpv6(segments, port),
+    };
+}
+
+pub fn listenIpv6(segments: [8]u16, port: u16) Error!Listener {
+    const fd = try openConfiguredSocket(std.c.AF.INET6);
+    errdefer closeSocket(fd);
+    // A V6 listener never admits mapped IPv4 peers, regardless of OS defaults.
+    try enableSocketOption(fd, std.c.IPPROTO.IPV6, std.c.IPV6.V6ONLY);
+    var address = std.c.sockaddr.in6{ .port = hostToNetwork16(port), .flowinfo = 0, .addr = undefined, .scope_id = 0 };
+    for (segments, 0..) |segment, i| std.mem.writeInt(u16, address.addr[i * 2 ..][0..2], segment, std.builtin.Endian.big);
+    if (bind(fd, @ptrCast(&address), @sizeOf(@TypeOf(address))) == -1) return error.BindFailed;
+    if (listen(fd, listen_backlog) == -1) return error.ListenFailed;
+    var length: SockLen = @sizeOf(@TypeOf(address));
+    if (getsockname(fd, @ptrCast(&address), &length) == -1) return error.GetSocketNameFailed;
+    return .{ .socket = fd, .port = networkToHost16(address.port) };
+}
+
 pub const PendingAccept = union(enum) {
     accepted: AcceptedSocket,
     /// No connection is waiting on the non-blocking listener.
@@ -248,8 +271,8 @@ pub fn setListenerNonBlocking(listener: Socket) Error!void {
 /// is reported as `failed` for the caller to retry later.
 pub fn acceptPending(listener: Socket) PendingAccept {
     while (true) {
-        var address: SockAddrIn = undefined;
-        var address_length: SockLen = @sizeOf(SockAddrIn);
+        var address: std.c.sockaddr.storage = undefined;
+        var address_length: SockLen = @sizeOf(@TypeOf(address));
         const client = acceptNonBlocking(listener, &address, &address_length);
         if (client != -1) {
             // The connection is useless without non-blocking I/O, but the
@@ -260,11 +283,26 @@ pub fn acceptPending(listener: Socket) PendingAccept {
                     continue;
                 };
             }
-            const octets: [4]u8 = @bitCast(address.addr);
+            const remote: IpAddress, const remote_port: u16 = switch (address.family) {
+                std.c.AF.INET => blk: {
+                    const v4: *const SockAddrIn = @ptrCast(@alignCast(&address));
+                    break :blk .{ IpAddress{ .v4 = @bitCast(v4.addr) }, networkToHost16(v4.port) };
+                },
+                std.c.AF.INET6 => blk: {
+                    const v6: *const std.c.sockaddr.in6 = @ptrCast(@alignCast(&address));
+                    var segments: [8]u16 = undefined;
+                    for (&segments, 0..) |*segment, i| segment.* = std.mem.readInt(u16, v6.addr[i * 2 ..][0..2], std.builtin.Endian.big);
+                    break :blk .{ IpAddress{ .v6 = segments }, networkToHost16(v6.port) };
+                },
+                else => {
+                    closeSocket(client);
+                    continue;
+                },
+            };
             return .{ .accepted = .{
                 .socket = client,
-                .remote_octets = octets,
-                .remote_port = networkToHost16(address.port),
+                .remote_address = remote,
+                .remote_port = remote_port,
             } };
         }
         switch (classifyAccept(errno.lastError())) {
@@ -280,7 +318,7 @@ pub fn acceptPending(listener: Socket) PendingAccept {
 /// other systems need two `fcntl` calls after it.
 const accept_sets_flags = builtin.os.tag == std.Target.Os.Tag.linux;
 
-fn acceptNonBlocking(listener: Socket, address: *SockAddrIn, address_length: *SockLen) c_int {
+fn acceptNonBlocking(listener: Socket, address: *std.c.sockaddr.storage, address_length: *SockLen) c_int {
     if (accept_sets_flags) {
         const flags: c_uint = std.c.SOCK.NONBLOCK | std.c.SOCK.CLOEXEC;
         return std.c.accept4(listener, @ptrCast(address), address_length, flags);
@@ -606,9 +644,9 @@ fn enableSocketOption(
     ) == -1) return error.SetSocketOptionFailed;
 }
 
-fn openConfiguredSocket() Error!Socket {
+fn openConfiguredSocket(family: c_int) Error!Socket {
     const socket_fd = socket(
-        std.c.AF.INET,
+        family,
         std.c.SOCK.STREAM,
         0,
     );

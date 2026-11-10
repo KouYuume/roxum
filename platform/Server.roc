@@ -1,8 +1,6 @@
-Server :: [].{
-	## An IPv4 address, such as `(127, 0, 0, 1)` or `(0, 0, 0, 0)` for all
-	## interfaces.
-	Ipv4Address := (U8, U8, U8, U8)
+import Http
 
+Server :: [].{
 	## Connection time limits in milliseconds. Every value must be at least 1;
 	## the host refuses to start otherwise. Behind a load balancer, set
 	## `keep_alive_idle_milliseconds` longer than the balancer's idle timeout
@@ -145,7 +143,7 @@ Server :: [].{
 	## 200 while at least one process is up and the server is not draining,
 	## and 503 otherwise. Neither checks the app's own dependencies; write a
 	## route for that.
-	Metrics := [Off, Listen({ address : Server.Ipv4Address, port : U16 })]
+	Metrics := [Off, Listen({ address : Http.IpAddr, port : U16 })]
 
 	## Where the server listens, its connection timeouts, its limits, and how
 	## many threads and processes serve it. Returned by the app's `init!`;
@@ -155,7 +153,9 @@ Server :: [].{
 	## pools, and limits. One process with a thread per CPU shares them all;
 	## more processes keep a host failure in one from stopping the others.
 	ListenOptions := {
-		address : Server.Ipv4Address,
+		## V6 listeners accept IPv6 only; groups are host-order U16 values.
+		## Scoped addresses requiring an interface identifier are not supported.
+		address : Http.IpAddr,
 		port : U16,
 		timeouts : Server.Timeouts,
 		limits : Server.Limits,

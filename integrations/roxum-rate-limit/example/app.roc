@@ -11,6 +11,7 @@ import pf.Reply
 import pf.RequestHead
 import pf.RouteContext
 import pf.Router
+import pf.IpAddr
 import pf.Server
 import rate_limit.RateLimit
 
@@ -31,7 +32,7 @@ init! = |{}| {
 			Ok({
 				model: { per_hour: a, short: b, small: c },
 				listen: {
-					address: Server.Ipv4Address.(127, 0, 0, 1),
+					address: IpAddr.V4((127, 0, 0, 1)),
 					port: 0,
 					timeouts: Server.Timeouts.defaults,
 					limits: Server.Limits.defaults,
