@@ -1,7 +1,10 @@
 //! Independent-client fixture for the engine, not a production listener.
 const std = @import("std");
-const http2 = @import("http2_engine");
-const net = @import("net");
+const http2 = @import("http2_engine").engine;
+const transport = @import("http2_engine").owner;
+const readiness = @import("http2_engine").poller;
+const net = @import("http2_engine").net;
+extern "c" fn setsockopt(c_int, c_int, c_int, *const anyopaque, u32) c_int;
 
 const Request = struct {
     id: ?http2.StreamId = null,
@@ -50,53 +53,129 @@ const State = struct {
     }
 };
 
+const Connection = struct {
+    state: State = .{},
+    owner: ?transport.Owner = null,
+    deadline: net.Deadline = undefined,
+    blocked_reported: bool = false,
+
+    fn close(self: *Connection) void {
+        const owner = &self.owner.?;
+        std.debug.print("closed={d} peak={d} admitted={d} active={d} peak_streams={d}\n", .{ self.state.closed, owner.engine.memory.peak, self.state.admitted, self.state.active, self.state.peak_streams });
+        owner.deinit();
+        self.owner = null;
+    }
+
+    fn run(self: *Connection) !bool {
+        const owner = &self.owner.?;
+        // Bound each turn even when a peer continuously sends or reads.
+        for (0..32) |_| {
+            for (&self.state.requests) |*r| {
+                if (!r.ended or r.sent) continue;
+                var length_buffer: [20]u8 = undefined;
+                const length = try std.fmt.bufPrint(&length_buffer, "{d}", .{r.length});
+                try owner.respond(r.id.?, 200, &.{
+                    .{ .name = "content-type", .value = "application/octet-stream" },
+                    .{ .name = "content-length", .value = length },
+                }, r.body[0..r.length]);
+                @memset(r.body[0..r.length], 0xa5);
+                r.sent = true;
+            }
+            const progress = owner.step() catch |err| switch (err) {
+                error.SendFailed, error.ReceiveFailed, error.Protocol => return false,
+                else => return err,
+            };
+            if (owner.watching_writable and !self.blocked_reported) {
+                var buffer: [40]u8 = undefined;
+                const line = try std.fmt.bufPrint(&buffer, "blocked={d}\n", .{owner.token});
+                if (std.c.write(1, line.ptr, line.len) != line.len) return error.StdoutFailed;
+                self.blocked_reported = true;
+            }
+            switch (progress) {
+                transport.Progress.closed => return false,
+                transport.Progress.waiting => return true,
+                transport.Progress.runnable => self.deadline = try net.Deadline.afterMilliseconds(5000),
+            }
+        }
+        return true;
+    }
+};
+
 pub fn main() !void {
     const ignore = std.posix.Sigaction{ .handler = .{ .handler = std.posix.SIG.IGN }, .mask = std.posix.sigemptyset(), .flags = 0 };
     std.posix.sigaction(std.posix.SIG.PIPE, &ignore, null);
     const listener = try net.listenIpv4(.{ 127, 0, 0, 1 }, 0);
     defer net.closeSocket(listener.socket);
+    try net.setListenerNonBlocking(listener.socket);
+    var poller = try readiness.Poller.init();
+    defer poller.deinit();
+    const listener_token = std.math.maxInt(u64);
+    try poller.watchReadable(listener.socket, listener_token);
     var port_buffer: [16]u8 = undefined;
     const line = try std.fmt.bufPrint(&port_buffer, "{d}\n", .{listener.port});
     if (std.c.write(1, line.ptr, line.len) != line.len) return error.StdoutFailed;
-    const accepted = switch (net.acceptPending(listener.socket)) {
-        net.PendingAccept.accepted => |value| value,
-        else => return error.AcceptFailed,
-    };
-    defer net.closeSocket(accepted.socket);
-    var state = State{};
-    const engine = try http2.Engine.create(std.heap.smp_allocator, .{ .body_bytes = 4096, .header_bytes = 1024 }, .{
-        .context = &state,
-        .header = State.header,
-        .data = State.data,
-        .end = State.end,
-        .closed = State.close,
-    });
-    defer engine.destroy();
-    var input: [8192]u8 = undefined;
+    var connections: [2]Connection = @splat(.{});
+    defer for (&connections) |*connection| if (connection.owner != null) connection.close();
+    var next_token: u64 = 1;
+    var accepted_any = false;
+    var raw: [8]readiness.RawEvent = undefined;
+    var events: [8 * readiness.events_per_raw]readiness.Event = undefined;
     while (true) {
-        for (&state.requests) |*r| {
-            if (!r.ended or r.sent) continue;
-            var length_buffer: [20]u8 = undefined;
-            const length = try std.fmt.bufPrint(&length_buffer, "{d}", .{r.length});
-            try engine.respond(r.id.?, 200, &.{
-                .{ .name = "content-type", .value = "application/octet-stream" },
-                .{ .name = "content-length", .value = length },
-            }, r.body[0..r.length]);
-            // The engine has its own copy; catch accidental borrowing on the wire.
-            @memset(r.body[0..r.length], 0xa5);
-            r.sent = true;
+        var active: usize = 0;
+        var runnable = false;
+        for (&connections) |*connection| {
+            if (connection.owner == null) continue;
+            if (!try connection.run()) {
+                connection.close();
+                continue;
+            }
+            if (try net.monotonicNanoseconds() >= connection.deadline.expires_at_nanoseconds) return error.FixtureTimeout;
+            active += 1;
+            runnable = runnable or connection.owner.?.runnable;
         }
-        const output = try engine.output();
-        if (output.len > 0) {
-            // Exercise the retained output cursor across very short writes.
-            const count = @min(output.len, 7);
-            try net.sendAllUntil(accepted.socket, output[0..count], try net.Deadline.afterMilliseconds(5000));
-            try engine.consumeOutput(count);
-            continue;
+        if (accepted_any and active == 0) break;
+        for (try poller.wait(&raw, &events, if (runnable) 0 else 100)) |event| {
+            if (event.token != listener_token) {
+                for (&connections) |*connection| if (connection.owner) |*owner| {
+                    _ = owner.ready(event);
+                };
+                continue;
+            }
+            // At most two accepted connections in this fixture. Keep accepting
+            // to EAGAIN so the listener's edge is never lost.
+            while (true) {
+                const accepted = switch (net.acceptPending(listener.socket)) {
+                    net.PendingAccept.accepted => |value| value,
+                    net.PendingAccept.none => break,
+                    else => return error.AcceptFailed,
+                };
+                var available: ?*Connection = null;
+                for (&connections) |*connection| if (connection.owner == null) {
+                    available = connection;
+                    break;
+                };
+                const connection = available orelse {
+                    net.closeSocket(accepted.socket);
+                    continue;
+                };
+                errdefer net.closeSocket(accepted.socket);
+                connection.* = .{};
+                // A small send buffer makes real socket backpressure reachable
+                // without an unbounded response or platform-specific defaults.
+                const send_buffer: c_int = 4096;
+                if (setsockopt(accepted.socket, std.c.SOL.SOCKET, std.c.SO.SNDBUF, &send_buffer, @sizeOf(c_int)) != 0) return error.SocketOptionFailed;
+                connection.deadline = try net.Deadline.afterMilliseconds(5000);
+                connection.owner = try transport.Owner.init(std.heap.smp_allocator, accepted.socket, &poller, next_token, .{ .body_bytes = 4096, .header_bytes = 1024 }, .{
+                    .context = &connection.state,
+                    .header = State.header,
+                    .data = State.data,
+                    .end = State.end,
+                    .closed = State.close,
+                });
+                connection.owner.?.write_bytes = 7;
+                next_token += 1;
+                accepted_any = true;
+            }
         }
-        const count = try net.receiveUntil(accepted.socket, &input, try net.Deadline.afterMilliseconds(5000));
-        if (count == 0) break;
-        try engine.receive(input[0..count]);
     }
-    std.debug.print("closed={d} peak={d} admitted={d} active={d} peak_streams={d}\n", .{ state.closed, engine.memory.peak, state.admitted, state.active, state.peak_streams });
 }

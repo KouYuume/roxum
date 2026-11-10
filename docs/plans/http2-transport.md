@@ -141,8 +141,9 @@ Before milestone 1 is complete:
   Linux execution matrices. Exercise TCP and Unix listeners and retain HTTP/1
   regressions. The isolated spike does not replace these checks.
 
-The engine build and finite-response adapter now have a separate implementation
-and independent-client fixture. The next implementation slice should connect
-them to the production connection owner and scheduler. Trailer/deadline APIs and their
+The engine build, finite-response adapter, and nonblocking connection owner now
+have an independent-client fixture using the host's readiness backend. The next
+implementation slice should connect the owner to the production worker connection
+table and Roc request scheduler. Trailer/deadline APIs and their
 Roc integration can follow in focused changes within milestone 1; do not claim
 native gRPC support until the later integration gates pass.

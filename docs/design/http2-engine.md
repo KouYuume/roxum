@@ -1,7 +1,8 @@
 # Internal HTTP/2 engine
 
 The host build includes the nghttp2 1.71.0 protocol library. The internal adapter
-in `platform/host/http2/engine.zig` is exercised by a separate socket fixture.
+in `platform/host/http2/engine.zig` and the connection owner in
+`platform/host/http2/owner.zig` are exercised by a separate socket fixture.
 It is not yet connected to the production listener or Roc request scheduler;
 applications still use HTTP/1. The [gRPC plan](../plans/grpc.md) records the remaining
 milestone 1 work.
@@ -54,6 +55,43 @@ necessarily supplied to this adapter.
 The DATA provider marks EOF on its last nonempty read, so completion does not
 require an extra byte of flow-control credit. Reset/closure releases the copied
 body; destroy also releases responses retained by slow readers.
+
+## Nonblocking connection owner
+
+`Owner` owns one nonblocking accepted socket and its engine. Initialization takes
+socket ownership only on success; its caller closes the socket on failure.
+The poller is borrowed and must outlive the owner. Destruction closes the socket
+and releases the engine, including retained responses. Before destruction, the
+scheduler must cancel application lifetimes and invalidate queued work.
+
+A single serialized scheduler drives `step`, response submission, cancellation,
+and readiness delivery. Each step performs at most one write (up to 16 KiB by
+default) and one read (up to 16 KiB). No socket operation waits for readiness.
+Successful I/O leaves the owner runnable; it must be queued again even when a
+scheduling turn ends before EAGAIN. Otherwise edge-triggered epoll/kqueue could
+leave unread input or pending output without a new event. The fixture grants
+32 steps per connection per turn, and polls without waiting while work remains.
+Observers only queue work, which the fixture executes between engine calls.
+
+A full socket send buffer enables writable readiness without disabling reads.
+When output empties, writable interest is removed. HTTP/2 flow-control stalls
+wait for incoming frames rather than polling writable sockets continuously.
+A TCP read EOF preserves output that can still be serialized; after that output
+is exhausted, the connection closes. Responses that need further peer credit
+cannot finish after EOF. Socket/protocol errors terminate only that owner; the
+scheduler removes it and releases its resources.
+
+Each readiness token must be unique across connection reuse, including queued
+stale events. `ready` ignores mismatched tokens and terminal owners. The fixture
+assigns monotonically increasing tokens and checks connection-slot reuse. This
+is a transport contract, not yet generation-safe Roc request/effect scheduling.
+
+The fixture uses the same kqueue/epoll backend as the production host and admits
+two connections for independent-client tests. It checks real socket backpressure,
+writable resumption, aborted writes, invalid-preface isolation, and TCP half-close.
+The production worker connection table, request scheduler, drain coordination,
+listener protocol selection, and public Roc APIs are still separate integration
+work. Fixture timeouts are test bounds, not production deadline support.
 
 ## Bounds and failures
 
