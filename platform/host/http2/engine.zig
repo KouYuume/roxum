@@ -16,6 +16,8 @@ pub const Limits = struct {
 };
 pub const Observer = struct {
     context: *anyopaque,
+    /// Initial metadata is complete, before body EOF; never emitted for trailers.
+    headers_complete: ?*const fn (*anyopaque, StreamId) void = null,
     header: *const fn (*anyopaque, StreamId, Header) void,
     data: *const fn (*anyopaque, StreamId, []const u8) void,
     end: *const fn (*anyopaque, StreamId) void,
@@ -254,6 +256,13 @@ fn dataReceived(_: ?*c.nghttp2_session, _: u8, id: i32, data: [*c]const u8, leng
 }
 fn frameReceived(_: ?*c.nghttp2_session, frame: [*c]const c.nghttp2_frame, user: ?*anyopaque) callconv(std.builtin.CallingConvention.c) c_int {
     const self = engine(user);
+    if (frame.*.hd.type == c.NGHTTP2_HEADERS and frame.*.headers.cat == c.NGHTTP2_HCAT_REQUEST) {
+        if (self.find(frame.*.hd.stream_id)) |slot| {
+            if (!slot.rejected) {
+                if (self.observer.headers_complete) |notify| notify(self.observer.context, @fromBackingInt(@intCast(slot.id)));
+            }
+        }
+    }
     if ((frame.*.hd.type == c.NGHTTP2_HEADERS or frame.*.hd.type == c.NGHTTP2_DATA) and frame.*.hd.flags & c.NGHTTP2_FLAG_END_STREAM != 0) {
         if (self.find(frame.*.hd.stream_id)) |slot| {
             if (!slot.rejected) self.observer.end(self.observer.context, @fromBackingInt(@intCast(slot.id)));
@@ -531,5 +540,93 @@ test "representation content length accepts u64 boundary and rejects overflow" {
         } else {
             try std.testing.expectError(error.InvalidHeaders, self.respond(id, 304, &headers, ""));
         }
+    }
+}
+
+test "initial metadata notification precedes EOF and excludes trailers and rejected headers" {
+    const Context = struct {
+        heads: usize = 0,
+        ends: usize = 0,
+        fn head(ctx: *anyopaque, _: StreamId) void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            self.heads += 1;
+        }
+        fn end(ctx: *anyopaque, _: StreamId) void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            std.debug.assert(self.heads == 1);
+            self.ends += 1;
+        }
+    };
+    for ([_]bool{ false, true }) |rejected| {
+        var context = Context{};
+        var observer = TestObserver.observer(&context);
+        observer.headers_complete = Context.head;
+        observer.end = Context.end;
+        const self = try Engine.create(std.testing.allocator, .{ .header_bytes = if (rejected) 0 else 1024 }, observer);
+        defer self.destroy();
+        const request = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" ++
+            "\x00\x00\x00\x04\x00\x00\x00\x00\x00" ++
+            "\x00\x00\x0e\x01\x04\x00\x00\x00\x01\x83\x86\x84\x01\x09localhost";
+        for (request[0 .. request.len - 1]) |byte| try self.receive(&.{byte});
+        try std.testing.expectEqual(@as(usize, 0), context.heads);
+        try self.receive(request[request.len - 1 ..]);
+        try std.testing.expectEqual(@as(usize, if (rejected) 0 else 1), context.heads);
+        try std.testing.expectEqual(@as(usize, 0), context.ends);
+        if (!rejected) {
+            // An empty trailing HEADERS block ends input without repeating initial metadata.
+            try self.receive("\x00\x00\x00\x01\x05\x00\x00\x00\x01");
+            try std.testing.expectEqual(@as(usize, 1), context.heads);
+            try std.testing.expectEqual(@as(usize, 1), context.ends);
+        }
+    }
+}
+
+test "initial metadata handles END_STREAM continuation validation and reentry" {
+    const Context = struct {
+        engine: ?*Engine = null,
+        heads: usize = 0,
+        ends: usize = 0,
+        ordered: bool = false,
+        reentry_rejected: bool = false,
+        fn head(ctx: *anyopaque, _: StreamId) void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            self.heads += 1;
+            _ = self.engine.?.output() catch |err| {
+                self.reentry_rejected = err == error.ReentrantCall;
+                return;
+            };
+        }
+        fn end(ctx: *anyopaque, _: StreamId) void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            self.ordered = self.heads == 1;
+            self.ends += 1;
+        }
+    };
+    const Case = enum { header_only, continuation, missing_path };
+    for ([_]Case{ Case.header_only, Case.continuation, Case.missing_path }) |case| {
+        var context = Context{};
+        var observer = TestObserver.observer(&context);
+        observer.headers_complete = Context.head;
+        observer.end = Context.end;
+        const self = try Engine.create(std.testing.allocator, .{}, observer);
+        defer self.destroy();
+        context.engine = self;
+        try self.receive("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" ++ "\x00\x00\x00\x04\x00\x00\x00\x00\x00");
+        switch (case) {
+            Case.header_only => try self.receive("\x00\x00\x0e\x01\x05\x00\x00\x00\x01\x83\x86\x84\x01\x09localhost"),
+            Case.continuation => {
+                // END_STREAM belongs to HEADERS, while metadata completes only at END_HEADERS.
+                try self.receive("\x00\x00\x03\x01\x01\x00\x00\x00\x01\x83\x86\x84");
+                try std.testing.expectEqual(@as(usize, 0), context.heads);
+                try std.testing.expectEqual(@as(usize, 0), context.ends);
+                try self.receive("\x00\x00\x0b\x09\x04\x00\x00\x00\x01\x01\x09localhost");
+            },
+            Case.missing_path => try self.receive("\x00\x00\x0d\x01\x05\x00\x00\x00\x01\x83\x86\x01\x09localhost"),
+        }
+        const valid = case != Case.missing_path;
+        try std.testing.expectEqual(@as(usize, if (valid) 1 else 0), context.heads);
+        try std.testing.expectEqual(@as(usize, if (valid) 1 else 0), context.ends);
+        try std.testing.expectEqual(valid, context.ordered);
+        try std.testing.expectEqual(valid, context.reentry_rejected);
     }
 }
