@@ -132,3 +132,23 @@ those proposed contracts, not capabilities of this adapter.
 unit tests with an independent client. They do not substitute for the later Roc
 backend/allocator, scheduler-cancellation, malformed-frame fuzzing, Unix listener,
 or production shutdown acceptance gates.
+
+## Request leases
+
+The internal `requests.zig` registry separates protocol closure from execution
+completion. It has sixteen fixed slots and is serialized by its connection owner;
+it is not safe for independent worker threads to mutate directly. Tickets include
+a unique connection token, a checked monotonic sequence, and a slot index. Initial
+header completion records the monotonic timestamp once. A queued ticket can be
+claimed once; duplicate, closed, and recycled tickets cannot start execution.
+
+Protocol closure immediately releases unclaimed or finished slots. A claimed slot
+remains reserved until execution calls `finish`, even after reset or disconnect.
+The executor must cancel its effects and release request-owned resources before
+finishing that lease. The registry owns no fibers, buffers, or Roc allocations.
+Sequence exhaustion rejects new leases instead of wrapping. The owner must supply
+a different connection token when replacing the registry.
+
+The independent-client fixture uses these leases around its finite echo execution.
+Production worker dispatch, cross-thread completion messages, and cancellation of
+Roc effects are still pending; lease bookkeeping alone does not implement them.

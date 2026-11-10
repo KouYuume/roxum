@@ -148,6 +148,9 @@ table and Roc request scheduler. The production HTTP/1 dispatch path now carries
 generation-safe request identities through queueing, claiming, expiry, and
 completion; this prerequisite does not yet dispatch HTTP/2 streams. The engine
 also exposes initial-header completion independently of request EOF, so the
-owner can record admission and deadline metadata before body waits. Trailer/deadline APIs and their
+owner can record admission and deadline metadata before body waits. A bounded
+request-lease registry now separates protocol closure from execution completion
+and is exercised by the independent-client fixture; production worker dispatch
+and effect cancellation remain pending. Trailer/deadline APIs and their
 Roc integration can follow in focused changes within milestone 1; do not claim
 native gRPC support until the later integration gates pass.
