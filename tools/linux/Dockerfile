@@ -17,7 +17,7 @@ ARG ROC_SHA256_MACOS_ARM64=0e12e15c1c1d0af817c1f27b0f103a6502c2b3aea587f1de7d7df
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        bash ca-certificates curl git openssl postgresql procps python3 xz-utils \
+        bash ca-certificates curl git openssl postgresql procps python3 python3-venv xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # Downloads are checked against pinned digests before they are unpacked.

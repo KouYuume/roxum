@@ -174,6 +174,7 @@ TESTS = [
 ]
 
 COMMANDS = [
+    Command("test-http2-wire", ["zig", "build", "test-http2-wire"], "zig"),
     Command("test-abi", ["zig", "build", "test-abi"], "zig"),
     Command("test", ["zig", "build", "test"], "cache"),
     Command("test-m9p2", ["bash", "tests/platform-package/identity/run.sh"], "pool"),

@@ -7,17 +7,21 @@ isolated from the production build. The parent [gRPC plan](grpc.md) defines scop
 
 ## Engine choice
 
-Use **nghttp2 1.71.0** as the starting engine for core HTTP/2. Pin the official
+Use **nghttp2 1.71.0** as the starting engine for core HTTP/2. The spike pins the official
 [release](https://github.com/nghttp2/nghttp2/releases/tag/v1.71.0) archive to SHA-256
 `c0f55121d88650e4b9227aec28cebaf664d2417ca60fe70be0f8d38829f52116`.
-The spike introduces this dependency only into its own build. Production package
-and license integration belongs to milestone 1.
+The host build pins the same version's Git source with a Zig content hash in
+[`build.zig.zon`](../../build.zig.zon).
+The spike establishes the initial transport evidence. The first milestone 1
+slice adds [host build integration and an internal engine adapter](../design/http2-engine.md);
+production listener and Roc scheduler integration remain pending.
 
 | Candidate | Fit and cost | Decision |
 |---|---|---|
 | [nghttp2 1.x](https://github.com/nghttp2/nghttp2/tree/v1.71.0) | MIT; C ABI; library-only build needs no external event loop or TLS stack. Incremental byte I/O, custom session allocation, deferred DATA, trailers, and stream reset fit a host-owned scheduler. | Selected and tested on the supported target set below. Maintain the pin, monitor upstream security fixes, and retest upgrades. |
 | [nghttp2 v2](https://github.com/nghttp2/nghttp2-v2) | MIT; a complete C rewrite. Its latest release at this assessment is [0.2.0](https://github.com/nghttp2/nghttp2-v2/releases/tag/v0.2.0). | Keep under observation. A new API and less deployment history add adoption risk; no target or lifetime proof was performed here. |
-| [Rust h2](https://github.com/hyperium/h2) | MIT; a maintained asynchronous implementation built around Tokio I/O traits. Its [manifest](https://github.com/hyperium/h2/blob/master/Cargo.toml) includes Tokio, bytes, HTTP, and other Rust dependencies. | Viable protocol engine, but would require a Rust build, C ABI adapter, and polling/ownership bridge. Allocator integration and target builds were not proven; no binary-size comparison is claimed. |
+| [Rust h2](https://github.com/hyperium/h2) | MIT; a maintained asynchronous implementation built around Tokio I/O traits. Its [manifest](https://github.com/hyperium/h2/blob/master/Cargo.toml) includes Tokio, bytes, HTTP, and other Rust dependencies. | Not selected: the host should not acquire a Rust toolchain/runtime integration. No binary-size comparison is claimed. |
+| [http2.zig](https://github.com/hendriknielaender/http2.zig) | A Zig implementation under active development. | Reassess when the required streaming contracts, interoperability, maintenance, and supported targets are proven; a stable release alone does not trigger replacement. |
 | Custom Zig engine | No third-party runtime dependency; direct allocator/scheduler control. | Reject for this scope: roxum would own framing, HPACK, flow control, protocol validation, fuzzing, and security maintenance. Avoid that cost without a demonstrated need. |
 
 The nghttp2 [programmer's guide](https://nghttp2.org/documentation/programmers-guide.html)
@@ -137,7 +141,8 @@ Before milestone 1 is complete:
   Linux execution matrices. Exercise TCP and Unix listeners and retain HTTP/1
   regressions. The isolated spike does not replace these checks.
 
-The next implementation slice should introduce the engine build and connection
-owner with ordinary bounded HTTP/2 exchanges. Trailer/deadline APIs and their
+The engine build and finite-response adapter now have a separate implementation
+and independent-client fixture. The next implementation slice should connect
+them to the production connection owner and scheduler. Trailer/deadline APIs and their
 Roc integration can follow in focused changes within milestone 1; do not claim
 native gRPC support until the later integration gates pass.
