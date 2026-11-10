@@ -11,6 +11,7 @@ import pf.ResponseHeader
 import pf.RouteContext
 import pf.Router
 import pf.Routes
+import pf.IpAddr
 import pf.Server
 
 ## M24 phase 3: route tags read by a layer, and values a layer provides.
@@ -30,7 +31,7 @@ init! = |{}|
 	Ok({
 		model: {},
 		listen: {
-			address: Server.Ipv4Address.(127, 0, 0, 1),
+			address: IpAddr.V4((127, 0, 0, 1)),
 			port: 0,
 			timeouts: Server.Timeouts.defaults,
 			limits: Server.Limits.defaults,

@@ -1,6 +1,6 @@
 # Deployment
 
-roxum serves plain HTTP/1.1 over IPv4 TCP; it does not listen on a Unix domain socket. Run it behind a reverse proxy or
+roxum serves plain HTTP/1.1 over IPv4 or IPv6 TCP; it does not listen on a Unix domain socket. Run it behind a reverse proxy or
 load balancer that terminates TLS (and HTTP/2 or HTTP/3 for clients), such as nginx, Caddy, or AWS Application Load
 Balancer.
 
@@ -117,7 +117,7 @@ others, at the cost of what they cannot share: each holds its own database conne
 
 ```roc
 listen: {
-	address: Server.Ipv4Address.(0, 0, 0, 0),
+	address: IpAddr.V4((0, 0, 0, 0)),
 	port: 8080,
 	timeouts: Server.Timeouts.defaults,
 	limits: Server.Limits.defaults,
@@ -188,7 +188,7 @@ proxy's idle timeout.**
 init! = |{}| Ok({
 	model: {},
 	listen: {
-		address: Server.Ipv4Address.(0, 0, 0, 0),
+		address: IpAddr.V4((0, 0, 0, 0)),
 		port: 8080,
 		timeouts: {
 			..Server.Timeouts.defaults,
@@ -373,3 +373,11 @@ The values a handler passes to `dbg` are then attached to the response as `X-Rox
 most 16, and only as many as fit in the response head; `X-Roxum-Dbg-Truncated` counts the rest). A streaming response carries only the values from before
 its head was sent. **Never use `--debug` in production**: it shows internal values to clients. roxum prints a warning
 at start when it is on. Any other argument makes the executable exit with status 2.
+
+## IP listener addresses
+
+Import `pf.IpAddr` and set `Server.ListenOptions.address` to `IpAddr.V4((127, 0, 0, 1))` for IPv4 loopback or `IpAddr.V6((0, 0, 0, 0, 0, 0, 0, 1))` for IPv6 loopback. IPv6 groups are host-order `U16` values. Eight zero groups select all IPv6 interfaces. `Server.Metrics.Listen.address` uses the same type.
+
+IPv6 listeners explicitly enable `IPV6_V6ONLY`: they do not accept IPv4-mapped connections. IPv4 listeners retain their existing behavior. One application listener selects one family; exposing both families requires a proxy or separate server instances. Scoped IPv6 listener addresses requiring an interface identifier are not supported by this API.
+
+To migrate from the IPv4-only API, replace `Server.Ipv4Address.(a, b, c, d)` with `IpAddr.V4((a, b, c, d))` and import `pf.IpAddr`. Peer addresses preserve their family in `RemoteAddr.ip`, including for proxy trust checks. Outbound TCP already resolves both address families and tries addresses in resolver order under the connection deadline; this is not a parallel Happy Eyeballs implementation.

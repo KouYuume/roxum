@@ -139,6 +139,7 @@ TESTS = [
          env=CONTRACT_ENV, timing=True),
     Test("test-observability", {"app": "tests/observability/app.roc"}, contract_verify("tests/observability/verify.py", "app"),
          env=CONTRACT_ENV, timing=True),
+    Test("test-ipv6", {"app": "tests/ipv6/app.roc"}, contract_verify("tests/ipv6/verify.py", "app"), env=CONTRACT_ENV),
     Test("test-tcp", {"app": "tests/tcp/app.roc"}, ["bash", "tests/tcp/variant.sh", "{exe:app}", "{out}"],
          env=CONTRACT_ENV, timing=True),
     Test("test-http-client", {"app": "tests/http-client/app.roc"},

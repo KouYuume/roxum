@@ -40,13 +40,14 @@ const Report = extern struct {
     port: u16,
     workers: u16,
     drain_timeout_milliseconds: u64,
-    admin_address: [4]u8,
+    admin_address: [8]u16,
+    admin_ipv6: u8,
     admin_port: u16,
 };
 
 /// The admin port's address and port.
 pub const Admin = struct {
-    address: [4]u8,
+    address: net.IpAddress,
     port: u16,
 };
 
@@ -62,7 +63,11 @@ pub fn send(channel: c_int, listener: net.Listener, workers: u16, drain_timeout_
         .port = listener.port,
         .workers = workers,
         .drain_timeout_milliseconds = drain_timeout_milliseconds,
-        .admin_address = if (admin) |given| given.address else .{ 0, 0, 0, 0 },
+        .admin_address = if (admin) |given| switch (given.address) {
+            net.IpAddress.v4 => |v| .{ v[0], v[1], v[2], v[3], 0, 0, 0, 0 },
+            net.IpAddress.v6 => |v| v,
+        } else @splat(0),
+        .admin_ipv6 = if (admin) |given| @intFromBool(given.address == net.IpAddress.v6) else 0,
         .admin_port = if (admin) |given| given.port else 0,
     };
     const iov = std.posix.iovec_const{ .base = std.mem.asBytes(&report).ptr, .len = @sizeOf(Report) };
@@ -126,7 +131,18 @@ pub fn receive(channel: c_int) !?Ready {
         .listener = .{ .socket = descriptor, .port = report.port },
         .workers = report.workers,
         .drain_timeout_milliseconds = report.drain_timeout_milliseconds,
-        .admin = if (report.admin_port == 0) null else .{ .address = report.admin_address, .port = report.admin_port },
+        .admin = if (report.admin_port == 0) null else .{
+            .address = if (report.admin_ipv6 == 1)
+                net.IpAddress{ .v6 = report.admin_address }
+            else
+                net.IpAddress{ .v4 = .{
+                    @intCast(report.admin_address[0]),
+                    @intCast(report.admin_address[1]),
+                    @intCast(report.admin_address[2]),
+                    @intCast(report.admin_address[3]),
+                } },
+            .port = report.admin_port,
+        },
     };
 }
 
@@ -140,15 +156,23 @@ test "a listener descriptor crosses a socket pair" {
 
     const listener = try net.listenIpv4(.{ 127, 0, 0, 1 }, 0);
     defer net.closeSocket(listener.socket);
-    try send(channels[1], listener, 3, 20_000, .{ .address = .{ 127, 0, 0, 1 }, .port = 9090 });
+    try send(channels[1], listener, 3, 20_000, .{ .address = .{ .v4 = .{ 127, 0, 0, 1 } }, .port = 9090 });
 
     const received = (try receive(channels[0])).?;
     defer net.closeSocket(received.listener.socket);
     try std.testing.expectEqual(listener.port, received.listener.port);
     try std.testing.expectEqual(@as(u16, 3), received.workers);
     try std.testing.expectEqual(@as(u64, 20_000), received.drain_timeout_milliseconds);
-    try std.testing.expectEqual([4]u8{ 127, 0, 0, 1 }, received.admin.?.address);
+    try std.testing.expectEqual([4]u8{ 127, 0, 0, 1 }, received.admin.?.address.v4);
     try std.testing.expectEqual(@as(u16, 9090), received.admin.?.port);
+
+    // Distinct groups expose reordering; byte and U16 boundaries expose truncation.
+    const segments = [8]u16{ 0, 1, 255, 256, 257, 0x1234, 65534, 65535 };
+    try send(channels[1], listener, 1, 20_000, .{ .address = .{ .v6 = segments }, .port = 9090 });
+    const ipv6_admin = (try receive(channels[0])).?;
+    defer net.closeSocket(ipv6_admin.listener.socket);
+    try std.testing.expectEqual(segments, ipv6_admin.admin.?.address.v6);
+    try std.testing.expectEqual(@as(u16, 9090), ipv6_admin.admin.?.port);
 
     try send(channels[1], listener, 1, 20_000, null);
     const without_admin = (try receive(channels[0])).?;

@@ -19,7 +19,7 @@ The host also provides request-scoped memory reuse and cleanup. Streaming, SSE, 
 
 ## Comparison with axum and Go
 
-Like axum, roxum takes handlers' inputs as types and has Rust's kind of type-level checks that Go lacks (errors, null, data races, exhaustive matching). Beyond axum, the compiler keeps domain code pure, and routes are checked at build time. In exchange, roxum has no inbound TLS, HTTP/2, WebSocket, or IPv6 (put a reverse proxy in front for TLS and HTTP/2), reuses only its own integrations, and is young. Its runtime performance does not reach axum's yet: on fixed-response workloads with two cores, its throughput was 73–96% of axum's. Optimized builds take about 3 seconds even when nothing changed.
+Like axum, roxum takes handlers' inputs as types and has Rust's kind of type-level checks that Go lacks (errors, null, data races, exhaustive matching). Beyond axum, the compiler keeps domain code pure, and routes are checked at build time. In exchange, roxum has no inbound TLS, HTTP/2, or WebSocket (put a reverse proxy in front for TLS and HTTP/2), reuses only its own integrations, and is young. Its runtime performance does not reach axum's yet: on fixed-response workloads with two cores, its throughput was 73–96% of axum's. Optimized builds take about 3 seconds even when nothing changed.
 
 See the [comparison](docs/comparison.md) for each criterion and its sources, and [performance status](docs/performance.md) for the measurements.
 
@@ -60,7 +60,7 @@ Core and integrations are versioned independently. See [versioning](docs/design/
 
 ## Limitations
 
-- IPv4 and HTTP/1.1 only; use a [reverse proxy](docs/guides/reverse-proxy.md) for inbound TLS, HTTP/2, or HTTP/3.
+- IPv4 and IPv6 TCP; HTTP/1.1 only; use a [reverse proxy](docs/guides/reverse-proxy.md) for inbound TLS, HTTP/2, or HTTP/3.
 - No Unix domain listeners, WebSocket, CONNECT, TRACE, extension methods, or HTTP trailers.
 - CONNECT, TRACE, and arbitrary extension methods are [non-goals](docs/design/non-goals.md) unless strong user demand justifies reconsideration.
 - Timeouts cannot forcibly interrupt arbitrary Roc computation.

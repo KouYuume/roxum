@@ -1,6 +1,7 @@
 import AppConfig
 import AppState
 import ../infrastructure/database/Pool
+import pf.IpAddr
 import pf.Server
 
 Main := [].{
@@ -13,7 +14,7 @@ Main := [].{
 		Ok({
 			model: AppState.new(db),
 			listen: {
-				address: Server.Ipv4Address.(127, 0, 0, 1),
+				address: IpAddr.V4((127, 0, 0, 1)),
 				port: 0,
 				timeouts: Server.Timeouts.defaults,
 				limits: Server.Limits.defaults,

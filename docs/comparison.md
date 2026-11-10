@@ -32,7 +32,7 @@ Ratings describe each criterion, not overall quality; additional libraries can c
 | Inbound TLS | △ [Reverse proxy](guides/reverse-proxy.md) | ○ rustls / axum-server | ◎ `ListenAndServeTLS` |
 | HTTP/2 | △ Reverse proxy | ○ `http2` feature / transport setup | ◎ Automatic with HTTPS |
 | WebSocket | △ Not supported | ◎ `ws` feature / `extract::ws` | ○ `golang.org/x/net/websocket` or third-party packages |
-| IPv6 and Unix domain listeners | △ IPv4 TCP only | ◎ | ◎ |
+| IPv6 and Unix domain listeners | △ IPv4/IPv6 TCP; no Unix domain listeners | ◎ | ◎ |
 | HTTP tests without a server | △ No test harness; `Router.dispatch!` runs a request through the routes inside an app | ○ `tower::ServiceExt::oneshot` | ◎ `net/http/httptest` |
 | Profiling and debugging | ○ Access log, metrics, `roxum-trace` ([observability](guides/observability.md)) | ◎ `tracing` ecosystem, native debuggers | ◎ `net/http/pprof`, runtime trace, Delve |
 | Supported systems | △ Apple silicon macOS; arm64 and x86_64 Linux with musl | ◎ | ◎ |

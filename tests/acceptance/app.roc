@@ -11,6 +11,7 @@ import pf.Middleware
 import pf.Reply
 import pf.RouteContext
 import pf.Router
+import pf.IpAddr
 import pf.Server
 import pf.Sleep
 
@@ -33,7 +34,7 @@ init! = |{}| {
 	Ok({
 		model: { public },
 		listen: {
-			address: Server.Ipv4Address.(127, 0, 0, 1),
+			address: IpAddr.V4((127, 0, 0, 1)),
 			port: 0,
 			timeouts: { ..Server.Timeouts.defaults, request_body_milliseconds: 500 },
 			limits: Server.Limits.{ maximum_requests_in_progress: Server.Count.Fixed(3) },

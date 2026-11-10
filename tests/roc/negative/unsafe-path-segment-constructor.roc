@@ -7,6 +7,7 @@ import pf.Reply
 import pf.Response
 import pf.ResponseBody
 import pf.Router
+import pf.IpAddr
 import pf.Server
 
 Model := {}
@@ -17,5 +18,5 @@ routes = Router.route(Router.new, "/", MethodRouter.get(handler))
 program = { init!, routes: Router.build(routes, {}) }
 init! = |{}| {
 	_ = PathSegment.inner(bad_segment)
-	Ok({ model: {}, listen: { address: Server.Ipv4Address.(127, 0, 0, 1), port: 0, timeouts: Server.Timeouts.defaults, limits: Server.Limits.defaults } })
+	Ok({ model: {}, listen: { address: IpAddr.V4((127, 0, 0, 1)), port: 0, timeouts: Server.Timeouts.defaults, limits: Server.Limits.defaults } })
 }

@@ -4,6 +4,14 @@ Changes to the roxum platform and its integrations, newest first. The platform a
 
 ## Unreleased
 
+### Breaking changes
+
+- Application and metrics listener addresses now use `IpAddr.V4` / `IpAddr.V6` instead of `Server.Ipv4Address`. Import `pf.IpAddr` and replace `Server.Ipv4Address.(a, b, c, d)` with `IpAddr.V4((a, b, c, d))`.
+
+### Added
+
+- IPv6-only application and metrics listeners, preserving IPv6 peer addresses through request handling. IPv4 listener behavior is unchanged.
+
 ## 0.1.0
 
 ### Added

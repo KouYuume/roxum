@@ -1615,7 +1615,7 @@ test "idle read exhaustion preserves notifications pipeline fragments and EOF" {
         handoff.poller = &poller;
         var loop = Loop.init(&handoff);
         loop.readClock();
-        loop.open(.{ .socket = pair[0], .remote_octets = .{ 127, 0, 0, 1 }, .remote_port = 1 });
+        loop.open(.{ .socket = pair[0], .remote_address = .{ .v4 = .{ 127, 0, 0, 1 } }, .remote_port = 1 });
         const item = &handoff.connections[0];
         defer if (item.open.load(std.builtin.AtomicOrder.acquire)) loop.close(0);
         item.state = Connection.State.dispatched;
@@ -2147,7 +2147,7 @@ test "a body buffer grows to hold the bytes already received, within its limit" 
         var loop = Loop.init(&handoff);
         var item = Connection{};
         defer item.release();
-        item.accepted = .{ .socket = pair[0], .remote_octets = .{ 127, 0, 0, 1 }, .remote_port = 1 };
+        item.accepted = .{ .socket = pair[0], .remote_address = .{ .v4 = .{ 127, 0, 0, 1 } }, .remote_port = 1 };
         item.buffer = try raw_bytes.alloc(initial_buffer_bytes);
         item.length = item.buffer.len;
 

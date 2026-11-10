@@ -20,6 +20,7 @@ import pf.Handler
 import pf.MethodRouter
 import pf.Router
 import pf.Secret
+import pf.IpAddr
 import pf.Server
 import hc.HttpClient
 import pg.Postgres
@@ -57,7 +58,7 @@ init! = |{}| {
 		Err(Missing) => Server.Threads.Auto
 	}
 	metrics = match settings.listen.metrics_port {
-		Ok(port) => Server.Metrics.Listen({ address: Server.Ipv4Address.(127, 0, 0, 1), port })
+		Ok(port) => Server.Metrics.Listen({ address: IpAddr.V4((127, 0, 0, 1)), port })
 		Err(Missing) => Server.Metrics.Off
 	}
 	# The password comes from a file the deployment mounts; the host keeps it.
@@ -83,7 +84,7 @@ init! = |{}| {
 			event_bus: ExternalEventBus.sample,
 		},
 		listen: {
-			address: Server.Ipv4Address.(127, 0, 0, 1),
+			address: IpAddr.V4((127, 0, 0, 1)),
 			port: settings.listen.port,
 			timeouts: Server.Timeouts.defaults,
 			limits: Server.Limits.defaults,

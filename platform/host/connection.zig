@@ -668,10 +668,10 @@ pub const Session = struct {
     }
 
     fn remoteAddress(self: *const Session) bridge.RemoteAddress {
-        return .{ .v4 = .{
-            .octets = self.accepted.remote_octets,
-            .port = self.accepted.remote_port,
-        } };
+        return switch (self.accepted.remote_address) {
+            net.IpAddress.v4 => |octets| .{ .v4 = .{ .octets = octets, .port = self.accepted.remote_port } },
+            net.IpAddress.v6 => |segments| .{ .v6 = .{ .segments = segments, .port = self.accepted.remote_port } },
+        };
     }
 
     fn handleReadError(

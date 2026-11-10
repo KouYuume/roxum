@@ -9,6 +9,7 @@ import pf.Reply
 import pf.ResponseHeader
 import pf.RouteContext
 import pf.Router
+import pf.IpAddr
 import pf.Server
 import pf.Time
 
@@ -24,7 +25,7 @@ init! = |{}|
 	Ok({
 		model: { marker: "stateful" },
 		listen: {
-			address: Server.Ipv4Address.(127, 0, 0, 1),
+			address: IpAddr.V4((127, 0, 0, 1)),
 			port: 0,
 			timeouts: Server.Timeouts.defaults,
 			limits: Server.Limits.defaults,
