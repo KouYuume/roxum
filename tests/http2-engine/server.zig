@@ -1,6 +1,7 @@
 //! Independent-client fixture for the engine, not a production listener.
 const std = @import("std");
 const http2 = @import("http2_engine").engine;
+const leases = @import("http2_engine").requests;
 const transport = @import("http2_engine").owner;
 const readiness = @import("http2_engine").poller;
 const net = @import("http2_engine").net;
@@ -14,6 +15,7 @@ const Request = struct {
     sent: bool = false,
 };
 const State = struct {
+    leases: leases.Requests = .{ .connection = 0 },
     requests: [16]Request = @splat(.{}),
     closed: usize = 0,
     admitted: usize = 0,
@@ -26,6 +28,7 @@ const State = struct {
         for (&self.requests) |*r| if (r.id == id) return r;
         for (&self.requests) |*r| {
             if (r.id != null) continue;
+            _ = self.leases.open(id) catch @panic("fixture lease capacity exceeded");
             r.* = .{ .id = id };
             self.admitted += 1;
             self.active += 1;
@@ -37,6 +40,11 @@ const State = struct {
     fn header(ctx: *anyopaque, id: http2.StreamId, _: http2.Header) void {
         _ = from(ctx).request(id);
     }
+    fn headersComplete(ctx: *anyopaque, id: http2.StreamId) void {
+        const self = from(ctx);
+        const ticket = self.leases.find(id) orelse unreachable;
+        std.debug.assert(self.leases.ready(ticket, net.monotonicNanoseconds() catch unreachable));
+    }
     fn data(ctx: *anyopaque, id: http2.StreamId, bytes: []const u8) void {
         const r = from(ctx).request(id);
         @memcpy(r.body[r.length..][0..bytes.len], bytes);
@@ -47,9 +55,14 @@ const State = struct {
     }
     fn close(ctx: *anyopaque, id: http2.StreamId) void {
         const self = from(ctx);
-        self.request(id).* = .{};
+        self.leases.close(id);
         self.closed += 1;
-        self.active -= 1;
+        for (&self.requests) |*entry| {
+            if (entry.id != id) continue;
+            entry.* = .{};
+            self.active -= 1;
+            return;
+        }
     }
 };
 
@@ -62,6 +75,7 @@ const Connection = struct {
     fn close(self: *Connection) void {
         const owner = &self.owner.?;
         std.debug.print("closed={d} peak={d} admitted={d} active={d} peak_streams={d}\n", .{ self.state.closed, owner.engine.memory.peak, self.state.admitted, self.state.active, self.state.peak_streams });
+        self.state.leases.disconnect();
         owner.deinit();
         self.owner = null;
     }
@@ -72,6 +86,9 @@ const Connection = struct {
         for (0..32) |_| {
             for (&self.state.requests) |*r| {
                 if (!r.ended or r.sent) continue;
+                const ticket = self.state.leases.find(r.id.?) orelse unreachable;
+                _ = self.state.leases.claim(ticket) orelse unreachable;
+                defer std.debug.assert(self.state.leases.finish(ticket));
                 var length_buffer: [20]u8 = undefined;
                 const length = try std.fmt.bufPrint(&length_buffer, "{d}", .{r.length});
                 try owner.respond(r.id.?, 200, &.{
@@ -160,6 +177,7 @@ pub fn main() !void {
                 };
                 errdefer net.closeSocket(accepted.socket);
                 connection.* = .{};
+                connection.state.leases.connection = next_token;
                 // A small send buffer makes real socket backpressure reachable
                 // without an unbounded response or platform-specific defaults.
                 const send_buffer: c_int = 4096;
@@ -168,6 +186,7 @@ pub fn main() !void {
                 connection.owner = try transport.Owner.init(std.heap.smp_allocator, accepted.socket, &poller, next_token, .{ .body_bytes = 4096, .header_bytes = 1024 }, .{
                     .context = &connection.state,
                     .header = State.header,
+                    .headers_complete = State.headersComplete,
                     .data = State.data,
                     .end = State.end,
                     .closed = State.close,

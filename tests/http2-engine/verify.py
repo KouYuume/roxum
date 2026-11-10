@@ -124,9 +124,17 @@ def verify(executable):
         request(61, b'head representation', method='HEAD')
         completed(61, b'')
 
+        # Reject before the first observer header, more times than lease capacity.
+        # Closure must not create a request lease for an unobserved stream.
+        for stream in range(63, 97, 2):
+            request(stream, method='A' * 1100)
+            until(lambda: stream in reset)
+        request(97, b'after reject')
+        completed(97, b'after reject')
+
         # Disconnect with engine-owned response bytes still flow controlled.
-        request(63, b'x' * 4096)
-        until(lambda: len(body[63]) == 16)
+        request(99, b'x' * 4096)
+        until(lambda: len(body[99]) == 16)
         sock.close()
         sock = None
         _, stderr = process.communicate(timeout=10)
