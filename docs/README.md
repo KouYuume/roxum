@@ -20,6 +20,12 @@ These documents describe the current implementation, its invariants, and the pro
 - [Versioning](design/versioning.md) and [integration releases](design/integration-releases.md)
 - [Contributing](contributing.md): local checks before pushing, and what CI runs
 
+## Implementation plans
+
+These documents describe planned work, not capabilities currently available.
+
+- [gRPC server support](plans/grpc.md): host/integration boundaries, Unary RPC first, and staged streaming support
+
 ## Performance
 
 - [Comparison with axum and Go](comparison.md): each criterion, its sources, and the measurements
