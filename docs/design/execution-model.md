@@ -26,7 +26,22 @@ A suspended fiber can resume on another thread. Do not cache a thread-local addr
 
 A supervisor retains the listening socket and restarts workers; accepted connections belong to workers. TCP and filesystem Unix listeners use the same descriptor handoff. A worker that creates a Unix listener transfers its path and filesystem identity with the descriptor; subsequent workers reuse it. The supervisor removes the owned pathname after shutdown, only if its identity still matches. Existing paths are never removed to make binding succeed. The operator controls the parent directory and handles stale paths after an interrupted ownership transfer or a killed supervisor. A worker shares a poller, connection table, wait registry, and work queues across its threads. The acceptance thread handles admission, deadlines, and shutdown without invoking Roc. Roc threads process requests and ready fibers.
 
-Connection locks protect event processing and completion. While a request is dispatched, its handler does not hold the connection lock. A request starts with the shared request heap; its first suspension detaches live allocations into its own heap so the shared heap can serve another request.
+Connection locks protect event processing and completion. Queued requests carry
+an immutable connection slot, connection generation, per-slot dispatch sequence,
+and queue timestamp. A Roc thread validates and claims that identity under the
+connection lock before admission or request execution; duplicate and stale jobs
+are discarded. Completion and failure paths validate the identity under the same
+lock before changing connection state. The sequence advances for each request,
+including keep-alive requests, survives connection-slot reuse, and never wraps:
+exhaustion closes the connection instead of issuing an older identity.
+
+Queue expiry reads the job's immutable timestamp, without looking up mutable
+connection state while holding a queue lock. After removal, it validates the
+identity and unclaimed state under the connection lock before rejecting a request.
+This avoids queue-to-connection lock ordering against dispatch's
+connection-to-queue order. HTTP/1 keeps a claimed connection slot pinned until
+completion; this does not yet provide independent HTTP/2 stream lifetimes.
+While a request is dispatched, its handler does not hold the connection lock. A request starts with the shared request heap; its first suspension detaches live allocations into its own heap so the shared heap can serve another request.
 
 Initialize Roc on one thread before creating the remaining Roc threads. The compiler runtime's lazy process-wide initialization must not race. Fiber switching uses host register-save routines. Socket waits use one-shot poller registration; timeout and readiness compete to resume a wait exactly once. DNS resolution runs on dedicated threads, with the request fiber waiting on a pipe under a deadline.
 

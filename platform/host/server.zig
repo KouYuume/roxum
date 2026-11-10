@@ -298,24 +298,24 @@ fn serveJobs(comptime Request: type, thread: *Request.Thread, shared: *Request.S
 /// a fiber of its own.
 fn runJob(comptime Request: type, thread: *Request.Thread, shared: *Request.Shared, job: work_queue.Job) !void {
     switch (job) {
-        work_queue.Job.request => |slot| try runNewRequest(Request, thread, shared, slot),
+        work_queue.Job.request => |request| try runNewRequest(Request, thread, shared, request),
         work_queue.Job.resumed => |target| try runRequest(Request, thread, target),
     }
 }
 
-fn runNewRequest(comptime Request: type, thread: *Request.Thread, shared: *Request.Shared, slot: u32) !void {
+fn runNewRequest(comptime Request: type, thread: *Request.Thread, shared: *Request.Shared, dispatch: work_queue.Request) !void {
     const handoff = shared.handoff;
+    if (!handoff.claimRequest(dispatch)) return;
     const application_limits = shared.limits;
-    const item = &handoff.connections[slot];
     // Admission: a request that waited too long in the queue, or that
     // would start past the limit of requests in progress, is answered 503
     // without running.
-    if (admit(handoff, item, application_limits)) |outcome| {
+    if (admit(handoff, dispatch.queued_at, application_limits)) |outcome| {
         const deadline = net.Deadline.afterMilliseconds(application_limits.response_write_timeout_milliseconds) catch net.Deadline{ .expires_at_nanoseconds = 0 };
-        thread.io.rejectTaken(slot, deadline, outcome, application_limits.request_id_source);
+        thread.io.rejectTaken(dispatch, deadline, outcome, application_limits.request_id_source);
         return;
     }
-    const request = try thread.pool.acquire(shared, thread, slot);
+    const request = try thread.pool.acquire(shared, thread, dispatch);
     const target = try thread.fibers.acquire(Request.start, request);
     try runRequest(Request, thread, target);
 }
@@ -323,13 +323,13 @@ fn runNewRequest(comptime Request: type, thread: *Request.Thread, shared: *Reque
 /// Counts the request in progress, or says why it is answered 503 without
 /// running. The place is taken before the check, so threads that admit at
 /// once stay within the limit.
-fn admit(handoff: *event_loop.Handoff, item: *const event_loop.Connection, limits: connection.Limits) ?access_log.Outcome {
+fn admit(handoff: *event_loop.Handoff, queued_at: u64, limits: connection.Limits) ?access_log.Outcome {
     if (handoff.in_progress.fetchAdd(1, std.builtin.AtomicOrder.acq_rel) >= limits.maximum_requests_in_progress) {
         _ = handoff.in_progress.fetchSub(1, std.builtin.AtomicOrder.release);
         return access_log.Outcome.in_progress_full;
     }
     const now = net.monotonicNanoseconds() catch return null;
-    if (now -| item.dispatched_at >= limits.queue_timeout_milliseconds * std.time.ns_per_ms) {
+    if (now -| queued_at >= limits.queue_timeout_milliseconds * std.time.ns_per_ms) {
         _ = handoff.in_progress.fetchSub(1, std.builtin.AtomicOrder.release);
         return access_log.Outcome.queue_timeout;
     }
@@ -470,11 +470,11 @@ fn RequestFiber(comptime Environment: type) type {
 
             const maximum_idle = 64;
 
-            pub fn acquire(self: *Pool, shared: *Shared, thread: *Thread, slot: u32) !*Self {
+            pub fn acquire(self: *Pool, shared: *Shared, thread: *Thread, dispatch: work_queue.Request) !*Self {
                 const request = self.idle.pop() orelse try Self.create(shared.limits);
                 request.shared = shared;
                 request.thread = thread;
-                request.slot = slot;
+                request.dispatch = dispatch;
                 request.heap = null;
                 request.failure = null;
                 request.generation = thread.environment.generation;
@@ -495,7 +495,7 @@ fn RequestFiber(comptime Environment: type) type {
         /// The Roc thread running the request now. It changes only when the
         /// request resumes after a wait, once its values are in `heap`.
         thread: *Thread = undefined,
-        slot: u32 = 0,
+        dispatch: work_queue.Request = undefined,
         session: *connection.Session,
         generation: usize = 0,
         host_allocator: HostAllocator = undefined,
@@ -554,18 +554,18 @@ fn RequestFiber(comptime Environment: type) type {
                     fiber.Stop.client_gone => access_log.Outcome.client_closed,
                     fiber.Stop.drained => access_log.Outcome.drained,
                 };
-                return self.thread.io.failWritten(self.slot, &written_entry, outcome);
+                return self.thread.io.failWritten(self.dispatch, &written_entry, outcome);
             }
             const deadline = net.Deadline.afterMilliseconds(shared.limits.response_write_timeout_milliseconds) catch net.Deadline{ .expires_at_nanoseconds = 0 };
             const entry = self.accessEntry();
-            self.thread.io.fail(self.slot, deadline, &entry);
+            self.thread.io.fail(self.dispatch, deadline, &entry);
         }
 
         /// The request's access log entry, as its session filled it in, with
         /// when it started and how long it waited in the queue.
         fn accessEntry(self: *const Self) access_log.Entry {
             var entry = self.session.access;
-            const dispatched_at = self.shared.handoff.connections[self.slot].dispatched_at;
+            const dispatched_at = self.dispatch.queued_at;
             entry.started_at = dispatched_at;
             entry.queue_nanoseconds = self.started_at -| dispatched_at;
             return entry;
@@ -581,7 +581,7 @@ fn RequestFiber(comptime Environment: type) type {
         fn serve(self: *Self) !void {
             const shared = self.shared;
             const handoff = shared.handoff;
-            const slot = self.slot;
+            const slot = self.dispatch.slot;
             const item = &handoff.connections[slot];
             const session = self.session;
             const locals = fiber.currentLocals() orelse unreachable;
@@ -652,7 +652,7 @@ fn RequestFiber(comptime Environment: type) type {
                 event_loop.Completion.Action.reuse
             else
                 event_loop.Completion.Action.close;
-            self.thread.io.complete(.{ .slot = slot, .action = action });
+            self.thread.io.complete(.{ .request = self.dispatch, .action = action });
         }
     };
 }

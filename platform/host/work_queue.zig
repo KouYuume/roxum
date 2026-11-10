@@ -7,9 +7,19 @@ const fiber = @import("fiber.zig");
 const poller_backend = @import("net/poller.zig");
 const sync = @import("sync.zig");
 
+/// Immutable identity and queue-time metadata for one dispatched request.
+/// Connection generation rejects slot reuse; sequence rejects an older request
+/// on the same keep-alive connection. Neither is an application request ID.
+pub const Request = struct {
+    slot: u32,
+    generation: u32,
+    sequence: u64,
+    queued_at: u64,
+};
+
 pub const Job = union(enum) {
     /// A request the loop read, to run on a new fiber.
-    request: u32,
+    request: Request,
     /// A request fiber whose wait ended, seen by the acceptor while every
     /// Roc thread was busy.
     resumed: *fiber.Fiber,
@@ -99,13 +109,13 @@ pub const JobQueue = struct {
     }
 
     /// Takes out the requests `expired` says waited too long, keeping the
-    /// order of the rest, and appends their slots to `into`. Returns how
+    /// order of the rest, and appends their identities to `into`. Returns how
     /// many it took.
     pub fn takeExpired(
         self: *JobQueue,
         context: anytype,
-        comptime expired: fn (@TypeOf(context), u32) bool,
-        into: *std.ArrayList(u32),
+        comptime expired: fn (@TypeOf(context), Request) bool,
+        into: *std.ArrayList(Request),
     ) error{OutOfMemory}!usize {
         self.mutex.lock();
         defer self.mutex.unlock();
@@ -113,8 +123,8 @@ pub const JobQueue = struct {
         var kept = self.head;
         for (self.items.items[self.head..]) |job| {
             switch (job) {
-                Job.request => |slot| if (expired(context, slot)) {
-                    try into.append(std.heap.smp_allocator, slot);
+                Job.request => |request| if (expired(context, request)) {
+                    try into.append(std.heap.smp_allocator, request);
                     continue;
                 },
                 Job.resumed => {},
@@ -277,12 +287,12 @@ pub const Jobs = struct {
     }
 
     /// Takes out the requests that waited too long in every queue, appending
-    /// their slots to `into`.
+    /// their identities to `into`.
     pub fn takeExpired(
         self: *Jobs,
         context: anytype,
-        comptime expired: fn (@TypeOf(context), u32) bool,
-        into: *std.ArrayList(u32),
+        comptime expired: fn (@TypeOf(context), Request) bool,
+        into: *std.ArrayList(Request),
     ) error{OutOfMemory}!void {
         var taken = try self.injector.takeExpired(context, expired, into);
         for (self.queues) |*queue| taken += try queue.takeExpired(context, expired, into);
@@ -294,17 +304,21 @@ pub const Jobs = struct {
     }
 };
 
+fn testRequest(slot: u32) Request {
+    return .{ .slot = slot, .generation = 7, .sequence = 11, .queued_at = 13 };
+}
+
 test "a queue is first in, first out, and a thief takes the older half" {
     var queue = JobQueue{};
     defer queue.deinit();
     var thief = JobQueue{};
     defer thief.deinit();
-    for (0..5) |slot| try queue.push(.{ .request = @intCast(slot) });
-    try std.testing.expectEqual(@as(u32, 0), queue.pop().?.request);
+    for (0..5) |slot| try queue.push(.{ .request = testRequest(@intCast(slot)) });
+    try std.testing.expectEqual(@as(u32, 0), queue.pop().?.request.slot);
     try std.testing.expectEqual(@as(usize, 2), try queue.stealHalf(&thief));
-    try std.testing.expectEqual(@as(u32, 1), thief.pop().?.request);
-    try std.testing.expectEqual(@as(u32, 2), thief.pop().?.request);
-    try std.testing.expectEqual(@as(u32, 3), queue.pop().?.request);
+    try std.testing.expectEqual(@as(u32, 1), thief.pop().?.request.slot);
+    try std.testing.expectEqual(@as(u32, 2), thief.pop().?.request.slot);
+    try std.testing.expectEqual(@as(u32, 3), queue.pop().?.request.slot);
     try std.testing.expectEqual(@as(usize, 1), try queue.stealHalf(&thief));
     try std.testing.expectEqual(@as(usize, 0), queue.len());
     try std.testing.expectEqual(@as(usize, 0), try queue.stealHalf(&thief));
@@ -315,19 +329,19 @@ test "expired requests leave the queue, the rest keep their order" {
     defer queue.deinit();
     // A fiber's job never expires.
     var resumed: fiber.Fiber = undefined;
-    for ([_]u32{ 1, 2, 3, 4 }) |slot| try queue.push(.{ .request = slot });
+    for ([_]u32{ 1, 2, 3, 4 }) |slot| try queue.push(.{ .request = testRequest(slot) });
     try queue.push(.{ .resumed = &resumed });
     _ = queue.pop();
     const Even = struct {
-        fn expired(_: void, slot: u32) bool {
-            return slot % 2 == 0;
+        fn expired(_: void, request: Request) bool {
+            return request.slot % 2 == 0;
         }
     };
-    var slots: std.ArrayList(u32) = .empty;
+    var slots: std.ArrayList(Request) = .empty;
     defer slots.deinit(std.heap.smp_allocator);
     try std.testing.expectEqual(@as(usize, 2), try queue.takeExpired({}, Even.expired, &slots));
-    try std.testing.expectEqualSlices(u32, &.{ 2, 4 }, slots.items);
-    try std.testing.expectEqual(@as(u32, 3), queue.pop().?.request);
+    try std.testing.expectEqualSlices(Request, &.{ testRequest(2), testRequest(4) }, slots.items);
+    try std.testing.expectEqual(@as(u32, 3), queue.pop().?.request.slot);
     try std.testing.expectEqual(&resumed, queue.pop().?.resumed);
     try std.testing.expectEqual(@as(?Job, null), queue.pop());
 }
@@ -343,14 +357,14 @@ test "a thread takes the injector's jobs, then its own, then another thread's" {
         std.heap.smp_allocator.free(jobs.queues);
     }
     var resumed: fiber.Fiber = undefined;
-    try jobs.push(.{ .request = 1 });
+    try jobs.push(.{ .request = testRequest(1) });
     try jobs.pushOwn(0, .{ .resumed = &resumed });
-    try jobs.pushOwn(1, .{ .request = 3 });
+    try jobs.pushOwn(1, .{ .request = testRequest(3) });
     try std.testing.expectEqual(@as(usize, 2), jobs.queuedRequests());
-    try std.testing.expectEqual(@as(u32, 1), jobs.next(0).?.request);
+    try std.testing.expectEqual(@as(u32, 1), jobs.next(0).?.request.slot);
     try std.testing.expectEqual(&resumed, jobs.next(0).?.resumed);
     // Thread 1's job, stolen by thread 0.
-    try std.testing.expectEqual(@as(u32, 3), jobs.next(0).?.request);
+    try std.testing.expectEqual(@as(u32, 3), jobs.next(0).?.request.slot);
     try std.testing.expectEqual(@as(?Job, null), jobs.next(1));
     try std.testing.expectEqual(@as(usize, 0), jobs.queuedRequests());
 }
@@ -368,12 +382,12 @@ test "a job pushed while a thread is idle wakes its poller" {
     var raw: [4]poller_backend.RawEvent = undefined;
     var events: [4 * poller_backend.events_per_raw]poller_backend.Event = undefined;
     // Nobody idle: no wake.
-    try jobs.push(.{ .request = 1 });
+    try jobs.push(.{ .request = testRequest(1) });
     try std.testing.expectEqual(@as(usize, 0), (try poller.wait(&raw, &events, 0)).len);
     _ = jobs.next(0);
     jobs.beginIdle();
     defer jobs.endIdle();
-    try jobs.push(.{ .request = 2 });
+    try jobs.push(.{ .request = testRequest(2) });
     const woken = try poller.wait(&raw, &events, 1000);
     try std.testing.expectEqual(@as(usize, 1), woken.len);
     try std.testing.expectEqual(poller_backend.Event.Kind.wake, woken[0].kind);
@@ -390,11 +404,11 @@ test "a thread runs the jobs it queued in order, and an idle one may steal them"
         std.heap.smp_allocator.free(jobs.queues);
     }
     // A request read later does not go before one read earlier.
-    for ([_]u32{ 1, 2, 3 }) |slot| try jobs.pushOwn(0, .{ .request = slot });
-    try std.testing.expectEqual(@as(u32, 1), jobs.next(0).?.request);
+    for ([_]u32{ 1, 2, 3 }) |slot| try jobs.pushOwn(0, .{ .request = testRequest(slot) });
+    try std.testing.expectEqual(@as(u32, 1), jobs.next(0).?.request.slot);
     // Thread 1 steals the older half of what is left.
-    try std.testing.expectEqual(@as(u32, 2), jobs.next(1).?.request);
-    try std.testing.expectEqual(@as(u32, 3), jobs.next(0).?.request);
+    try std.testing.expectEqual(@as(u32, 2), jobs.next(1).?.request.slot);
+    try std.testing.expectEqual(@as(u32, 3), jobs.next(0).?.request.slot);
     try std.testing.expectEqual(@as(?Job, null), jobs.next(0));
     try std.testing.expectEqual(@as(usize, 0), jobs.queuedRequests());
 }
@@ -429,9 +443,9 @@ test "a parked thread wakes for a job, and one thread at a time takes the poller
         if (parked == 1) break;
         std.Thread.yield() catch {};
     }
-    try jobs.push(.{ .request = 7 });
+    try jobs.push(.{ .request = testRequest(7) });
     thread.join();
-    try std.testing.expectEqual(@as(u32, 7), taken.?.request);
+    try std.testing.expectEqual(@as(u32, 7), taken.?.request.slot);
     jobs.releasePoller();
     try std.testing.expect(jobs.takePoller());
 }
@@ -442,27 +456,52 @@ test "failed stealing preserves ownership and order in both queues" {
     var destination = JobQueue{};
     defer destination.deinit();
     // Empty destination needs its first allocation; failure must leave both jobs.
-    try source.push(Job{ .request = 10 });
-    try source.push(Job{ .request = 11 });
+    try source.push(Job{ .request = testRequest(10) });
+    try source.push(Job{ .request = testRequest(11) });
     var failing = std.testing.FailingAllocator.init(std.heap.smp_allocator, .{ .fail_index = 0 });
     try std.testing.expectError(error.OutOfMemory, source.stealHalfWithAllocator(&destination, failing.allocator()));
     try std.testing.expectEqual(@as(usize, 2), source.len());
     try std.testing.expectEqual(@as(usize, 0), destination.len());
     try std.testing.expectEqual(@as(usize, 1), try source.stealHalf(&destination));
-    try std.testing.expectEqual(@as(u32, 10), destination.pop().?.request);
-    try std.testing.expectEqual(@as(u32, 11), source.pop().?.request);
+    try std.testing.expectEqual(@as(u32, 10), destination.pop().?.request.slot);
+    try std.testing.expectEqual(@as(u32, 11), source.pop().?.request.slot);
 }
 
 test "a continuously nonempty queue retains storage bounded by its live depth" {
     var queue = JobQueue{};
     defer queue.deinit();
-    try queue.push(Job{ .request = 0 });
-    try queue.push(Job{ .request = 1 });
+    try queue.push(Job{ .request = testRequest(0) });
+    try queue.push(Job{ .request = testRequest(1) });
     const capacity = queue.items.capacity;
     for (0..10000) |index| {
-        try std.testing.expectEqual(@as(u32, @intCast(index)), queue.pop().?.request);
-        try queue.push(Job{ .request = @intCast(index + 2) });
+        try std.testing.expectEqual(@as(u32, @intCast(index)), queue.pop().?.request.slot);
+        try queue.push(Job{ .request = testRequest(@intCast(index + 2)) });
     }
     try std.testing.expectEqual(@as(usize, 2), queue.len());
     try std.testing.expectEqual(capacity, queue.items.capacity);
+}
+
+test "stealing and expiry preserve complete request identities and timestamp boundaries" {
+    var queue = JobQueue{};
+    defer queue.deinit();
+    var thief = JobQueue{};
+    defer thief.deinit();
+    const requests = [_]Request{
+        .{ .slot = 1, .generation = 2, .sequence = 3, .queued_at = 9 },
+        .{ .slot = 1, .generation = 2, .sequence = 4, .queued_at = 10 },
+        .{ .slot = 1, .generation = 3, .sequence = 5, .queued_at = 11 },
+    };
+    for (requests) |request| try queue.push(.{ .request = request });
+    try std.testing.expectEqual(@as(usize, 2), try queue.stealHalf(&thief));
+    const Before = struct {
+        fn expired(before: u64, request: Request) bool {
+            return request.queued_at < before;
+        }
+    };
+    var expired: std.ArrayList(Request) = .empty;
+    defer expired.deinit(std.heap.smp_allocator);
+    try std.testing.expectEqual(@as(usize, 1), try thief.takeExpired(@as(u64, 10), Before.expired, &expired));
+    try std.testing.expectEqualDeep(requests[0], expired.items[0]);
+    try std.testing.expectEqualDeep(requests[1], thief.pop().?.request);
+    try std.testing.expectEqualDeep(requests[2], queue.pop().?.request);
 }

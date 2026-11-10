@@ -167,12 +167,33 @@ pub const Connection = struct {
     /// When the loop queued the request for the Roc thread, for the queue
     /// timeout.
     dispatched_at: u64 = 0,
+    /// Never reset on connection reuse. Exhaustion closes instead of wrapping.
+    dispatch_sequence: u64 = 0,
+    dispatch_claimed: bool = false,
+
     /// The access log entry of a response the loop finishes writing,
     /// an `std.heap.smp_allocator` allocation. Only set while the access log
     /// is on and output is left to write: the loop records it once the
     /// output is written, or as `client_closed` when the connection closes
     /// first.
     access: ?*access_log.Entry = null,
+
+    fn dispatchRequest(self: *Connection, slot: u32, now: u64) ?work_queue.Request {
+        const sequence = std.math.add(u64, self.dispatch_sequence, 1) catch return null;
+        self.dispatch_sequence = sequence;
+        self.dispatch_claimed = false;
+        self.dispatched_at = now;
+        self.state = State.dispatched;
+        return self.requestIdentity(slot);
+    }
+
+    fn requestIdentity(self: *const Connection, slot: u32) work_queue.Request {
+        return .{ .slot = slot, .generation = self.generation, .sequence = self.dispatch_sequence, .queued_at = self.dispatched_at };
+    }
+
+    fn matchesRequest(self: *const Connection, request: work_queue.Request) bool {
+        return self.state == State.dispatched and self.generation == request.generation and self.dispatch_sequence == request.sequence;
+    }
 
     pub fn bytes(self: *const Connection) []const u8 {
         return self.buffer[0..self.length];
@@ -428,7 +449,7 @@ pub const Completion = struct {
         close,
     };
 
-    slot: u32,
+    request: work_queue.Request,
     action: Action,
 };
 
@@ -485,21 +506,32 @@ pub const Handoff = struct {
     }
 
     fn dispatch(self: *Handoff, slot: u32) void {
-        self.work.push(.{ .request = slot }) catch diagnostics.fatal("out of memory queueing a request");
+        const request = self.connections[slot].dispatchRequest(slot, self.connections[slot].dispatched_at) orelse unreachable;
+        self.work.push(.{ .request = request }) catch diagnostics.fatal("out of memory queueing a request");
     }
 
     /// Takes back the requests that have waited for a Roc thread since
-    /// before `dispatched_before`, from every queue, appending their slots
+    /// before `dispatched_before`, from every queue, appending their identities
     /// to `into`.
-    fn takeExpired(self: *Handoff, dispatched_before: u64, into: *std.ArrayList(u32)) error{OutOfMemory}!void {
+    fn takeExpired(self: *Handoff, dispatched_before: u64, into: *std.ArrayList(work_queue.Request)) error{OutOfMemory}!void {
         const Expiry = struct {
-            connections: []Connection,
-            before: u64,
-            fn expired(expiry: @This(), slot: u32) bool {
-                return expiry.connections[slot].dispatched_at < expiry.before;
+            fn expired(before: u64, request: work_queue.Request) bool {
+                return request.queued_at < before;
             }
         };
-        try self.work.takeExpired(Expiry{ .connections = self.connections, .before = dispatched_before }, Expiry.expired, into);
+        try self.work.takeExpired(dispatched_before, Expiry.expired, into);
+    }
+
+    /// Claim under the connection lock before admission or touching request
+    /// buffers. The current HTTP/1 lifetime pins this slot until completion.
+    pub fn claimRequest(self: *Handoff, request: work_queue.Request) bool {
+        if (request.slot >= self.connections.len) return false;
+        const item = &self.connections[request.slot];
+        item.lock.lock();
+        defer item.lock.unlock();
+        if (!item.matchesRequest(request) or item.dispatch_claimed) return false;
+        item.dispatch_claimed = true;
+        return true;
     }
 
     /// Requests queued for a Roc thread and not taken yet.
@@ -780,7 +812,7 @@ pub const Loop = struct {
     /// Where lingering connections' discarded bytes go.
     scratch: [16 * 1024]u8 = undefined,
     /// Requests the tick takes back from the queues for waiting too long.
-    expired: std.ArrayList(u32) = .empty,
+    expired: std.ArrayList(work_queue.Request) = .empty,
     /// The acceptor's: the drain began. Accept has stopped, idle
     /// connections are closed, every response closes its connection, and
     /// the process exits once no connection is left or `drain_deadline`
@@ -860,51 +892,68 @@ pub const Loop = struct {
     /// finished, writing what it left and reading on, lingering, or queuing
     /// the stream's next step.
     pub fn complete(self: *Loop, completion: Completion) void {
-        const item = &self.handoff.connections[completion.slot];
+        if (completion.request.slot >= self.handoff.connections.len) return;
+        const item = &self.handoff.connections[completion.request.slot];
         item.lock.lock();
         defer item.lock.unlock();
+        if (!item.matchesRequest(completion.request)) return;
         self.readClock();
         self.resumeConnection(completion);
     }
 
     /// Answers a request a Roc thread took 503 without running it, and
     /// closes after.
-    pub fn rejectTaken(self: *Loop, slot: u32, write_deadline: net.Deadline, outcome: access_log.Outcome, source: request_id.Source) void {
-        const item = &self.handoff.connections[slot];
-        item.setErrorResponse(error_response.Kind.service_unavailable) catch return self.complete(.{ .slot = slot, .action = Completion.Action.close });
+    pub fn rejectTaken(self: *Loop, request: work_queue.Request, write_deadline: net.Deadline, outcome: access_log.Outcome, source: request_id.Source) void {
+        if (request.slot >= self.handoff.connections.len) return;
+        const item = &self.handoff.connections[request.slot];
+        item.lock.lock();
+        defer item.lock.unlock();
+        if (!item.matchesRequest(request)) return;
+        self.readClock();
+        item.setErrorResponse(error_response.Kind.service_unavailable) catch return self.resumeConnection(.{ .request = request, .action = Completion.Action.close });
         item.timeout = write_deadline;
         if (access_log.enabled()) {
             const entry = item.accessFromHead(outcome, item.dispatched_at, source);
             item.finishAccess(&entry);
         }
-        self.complete(.{ .slot = slot, .action = Completion.Action.close });
+        self.resumeConnection(.{ .request = request, .action = Completion.Action.close });
     }
 
     /// Answers 500 and closes, for a request whose Roc code crashed
     ///. What it had written is dropped; the connection may be
     /// mid-request, so it does not stay open. `entry` is the request's
     /// access log entry as far as it got.
-    pub fn fail(self: *Loop, slot: u32, write_deadline: net.Deadline, entry: *const access_log.Entry) void {
-        const item = &self.handoff.connections[slot];
-        item.setErrorResponse(error_response.Kind.internal_server_error) catch return self.complete(.{ .slot = slot, .action = Completion.Action.close });
+    pub fn fail(self: *Loop, request: work_queue.Request, write_deadline: net.Deadline, entry: *const access_log.Entry) void {
+        if (request.slot >= self.handoff.connections.len) return;
+        const item = &self.handoff.connections[request.slot];
+        item.lock.lock();
+        defer item.lock.unlock();
+        if (!item.matchesRequest(request)) return;
+        self.readClock();
+        item.setErrorResponse(error_response.Kind.internal_server_error) catch return self.resumeConnection(.{ .request = request, .action = Completion.Action.close });
         item.timeout = write_deadline;
         var crashed = entry.*;
         crashed.status = 500;
         crashed.outcome = access_log.Outcome.crashed;
         crashed.body_bytes = 0;
         item.finishAccess(&crashed);
-        self.complete(.{ .slot = slot, .action = Completion.Action.close });
+        self.resumeConnection(.{ .request = request, .action = Completion.Action.close });
     }
 
     /// Closes the connection of a request that stopped after the head of
     /// its written body went out: its Roc code crashed, or its client
     /// went. Only the body stops.
-    pub fn failWritten(self: *Loop, slot: u32, entry: *const access_log.Entry, outcome: access_log.Outcome) void {
-        const item = &self.handoff.connections[slot];
+    pub fn failWritten(self: *Loop, request: work_queue.Request, entry: *const access_log.Entry, outcome: access_log.Outcome) void {
+        if (request.slot >= self.handoff.connections.len) return;
+        const item = &self.handoff.connections[request.slot];
+        item.lock.lock();
+        defer item.lock.unlock();
+        if (!item.matchesRequest(request)) return;
+        self.readClock();
         var stopped = entry.*;
         stopped.outcome = outcome;
         item.finishAccess(&stopped);
-        self.complete(.{ .slot = slot, .action = Completion.Action.close });
+        self.resumeConnection(.{ .request = request, .action = Completion.Action.close });
     }
 
     /// Accepts until the listener has nothing queued. Pauses when no slot is
@@ -1374,11 +1423,14 @@ pub const Loop = struct {
         if (self.now <= timeout) return;
         self.expired.clearRetainingCapacity();
         self.handoff.takeExpired(self.now - timeout, &self.expired) catch diagnostics.fatal("out of memory rejecting expired requests");
-        for (self.expired.items) |slot| {
+        for (self.expired.items) |request| {
+            const slot = request.slot;
+            if (slot >= self.handoff.connections.len) continue;
             const item = &self.handoff.connections[slot];
             item.lock.lock();
             defer item.lock.unlock();
-            self.reject(slot, access_log.Outcome.queue_timeout, item.dispatched_at);
+            if (!item.matchesRequest(request) or item.dispatch_claimed) continue;
+            self.reject(slot, access_log.Outcome.queue_timeout, request.queued_at);
         }
     }
 
@@ -1448,9 +1500,8 @@ pub const Loop = struct {
         // for its timeout.
         if (self.handoff.queuedJobs() >= self.limits.maximum_queued_requests) return self.reject(slot, access_log.Outcome.queue_full, self.now);
         item.resetHead();
-        item.state = Connection.State.dispatched;
-        item.dispatched_at = self.now;
-        self.queue(.{ .request = slot });
+        const request = item.dispatchRequest(slot, self.now) orelse return self.close(slot);
+        self.queue(.{ .request = request });
     }
 
     /// Queues a job: on a Roc thread, at the end of its own queue; on the
@@ -1480,7 +1531,7 @@ pub const Loop = struct {
     }
 
     fn resumeConnection(self: *Loop, completion: Completion) void {
-        const slot = completion.slot;
+        const slot = completion.request.slot;
         const item = &self.handoff.connections[slot];
         std.debug.assert(item.state == Connection.State.dispatched);
         // A fiber waiting on this socket replaces the loop's registration
@@ -1637,7 +1688,7 @@ test "idle read exhaustion preserves notifications pipeline fragments and EOF" {
             try std.testing.expectEqual(@as(c_int, 0), std.c.shutdown(pair[1], std.c.SHUT.WR));
             loop.onEvent(event);
         }
-        loop.complete(.{ .slot = 0, .action = Completion.Action.reuse });
+        loop.complete(.{ .request = handoff.connections[0].requestIdentity(0), .action = Completion.Action.reuse });
         if (arrival == Arrival.after_completion or arrival == Arrival.fragmented) {
             try std.testing.expectEqual(Connection.State.reading, item.state);
             try std.testing.expect(handoff.work.injector.pop() == null);
@@ -1655,7 +1706,7 @@ test "idle read exhaustion preserves notifications pipeline fragments and EOF" {
             try std.testing.expectEqual(Connection.State.free, item.state);
         } else {
             try std.testing.expectEqual(Connection.State.dispatched, item.state);
-            try std.testing.expectEqual(@as(u32, 0), handoff.work.injector.pop().?.request);
+            try std.testing.expectEqual(@as(u32, 0), handoff.work.injector.pop().?.request.slot);
             try std.testing.expectEqualStrings(head, item.bytes());
         }
     }
@@ -1784,7 +1835,7 @@ test "a request expecting 100 Continue goes to the Roc thread before its body" {
     try std.testing.expectEqual(connection.BodyPrefetch.not_read, item.prefetch.body);
     // A later body read can consume a readiness event; probe again on reuse.
     try std.testing.expect(!item.read_exhausted);
-    try std.testing.expectEqual(@as(u32, 0), handoff.work.injector.pop().?.request);
+    try std.testing.expectEqual(@as(u32, 0), handoff.work.injector.pop().?.request.slot);
     var nothing: [1]u8 = undefined;
     try std.testing.expectEqual(@as(isize, -1), std.c.recv(client, &nothing, nothing.len, std.c.MSG.DONTWAIT));
     item.state = Connection.State.reading;
@@ -2013,15 +2064,15 @@ test "requests past the queue timeout leave every queue" {
         handoff.connections[slot].dispatched_at = at;
         handoff.dispatch(slot);
     }
-    var expired: std.ArrayList(u32) = .empty;
+    var expired: std.ArrayList(work_queue.Request) = .empty;
     defer expired.deinit(std.heap.smp_allocator);
     try handoff.takeExpired(10, &expired);
     try std.testing.expectEqual(@as(usize, 0), expired.items.len);
     try handoff.takeExpired(21, &expired);
-    try std.testing.expectEqualSlices(u32, &.{ 4, 2 }, expired.items);
+    try std.testing.expectEqualSlices(work_queue.Request, &.{ handoff.connections[4].requestIdentity(4), handoff.connections[2].requestIdentity(2) }, expired.items);
     try std.testing.expectEqual(@as(usize, 1), handoff.queuedJobs());
     try handoff.takeExpired(std.math.maxInt(u64), &expired);
-    try std.testing.expectEqualSlices(u32, &.{ 4, 2, 7 }, expired.items);
+    try std.testing.expectEqualSlices(work_queue.Request, &.{ handoff.connections[4].requestIdentity(4), handoff.connections[2].requestIdentity(2), handoff.connections[7].requestIdentity(7) }, expired.items);
     try std.testing.expectEqual(@as(usize, 0), handoff.queuedJobs());
 }
 
@@ -2069,7 +2120,7 @@ test "TCP keep-alive consumes kernel readiness before and after completion" {
         // Reuse a connection repeatedly; no fabricated readability or exhaustion state.
         for (0..32) |_| {
             try std.testing.expectEqual(Connection.State.dispatched, item.state);
-            try std.testing.expectEqual(@as(u32, 0), handoff.work.injector.pop().?.request);
+            try std.testing.expectEqual(@as(u32, 0), handoff.work.injector.pop().?.request.slot);
             try std.testing.expectEqualStrings(head, item.bytes());
             try std.testing.expect(item.read_exhausted);
             item.dropParsedHead();
@@ -2083,7 +2134,7 @@ test "TCP keep-alive consumes kernel readiness before and after completion" {
             if (arrival == Arrival.while_writing) {
                 loop.flush(0);
             } else {
-                loop.complete(.{ .slot = 0, .action = Completion.Action.reuse });
+                loop.complete(.{ .request = handoff.connections[0].requestIdentity(0), .action = Completion.Action.reuse });
             }
             if (arrival == Arrival.after_completion or arrival == Arrival.fragmented) {
                 try std.testing.expectEqual(Connection.State.reading, item.state);
@@ -2098,10 +2149,10 @@ test "TCP keep-alive consumes kernel readiness before and after completion" {
                 }
             }
         }
-        try std.testing.expectEqual(@as(u32, 0), handoff.work.injector.pop().?.request);
+        try std.testing.expectEqual(@as(u32, 0), handoff.work.injector.pop().?.request.slot);
         item.dropParsedHead();
         item.length = 0;
-        loop.complete(.{ .slot = 0, .action = Completion.Action.reuse });
+        loop.complete(.{ .request = handoff.connections[0].requestIdentity(0), .action = Completion.Action.reuse });
         try std.testing.expectEqual(@as(c_int, 0), std.c.shutdown(client, std.c.SHUT.WR));
         try Receive.events(&loop);
         try std.testing.expectEqual(Connection.State.free, item.state);
@@ -2155,4 +2206,95 @@ test "a body buffer grows to hold the bytes already received, within its limit" 
         try std.testing.expectEqual(case.expected, item.buffer.len);
         loop.releasePrebuffer(&item);
     }
+}
+
+test "dispatch identities reject old requests and reused connection slots" {
+    var handoff = try Handoff.init(1);
+    defer std.heap.page_allocator.free(handoff.connections);
+    defer std.heap.page_allocator.free(handoff.free_slots);
+    const item = &handoff.connections[0];
+    item.generation = 1;
+    const first = item.dispatchRequest(0, 10).?;
+    try std.testing.expect(handoff.claimRequest(first));
+    try std.testing.expect(!handoff.claimRequest(first));
+    const next = item.dispatchRequest(0, 11).?;
+    try std.testing.expect(!handoff.claimRequest(first));
+    var wrong_connection = next;
+    wrong_connection.generation = 0;
+    try std.testing.expect(!handoff.claimRequest(wrong_connection));
+    var out_of_range = next;
+    out_of_range.slot = 1;
+    try std.testing.expect(!handoff.claimRequest(out_of_range));
+    try std.testing.expect(handoff.claimRequest(next));
+    item.state = Connection.State.free;
+    try std.testing.expect(!handoff.claimRequest(next));
+    item.generation = 2;
+    const reused = item.dispatchRequest(0, 12).?;
+    try std.testing.expect(!handoff.claimRequest(next));
+    try std.testing.expect(handoff.claimRequest(reused));
+}
+
+test "concurrent consumers claim a dispatched request exactly once" {
+    var handoff = try Handoff.init(1);
+    defer std.heap.page_allocator.free(handoff.connections);
+    defer std.heap.page_allocator.free(handoff.free_slots);
+    const request = handoff.connections[0].dispatchRequest(0, 0).?;
+    var claimed = std.atomic.Value(u32).init(0);
+    const Consumer = struct {
+        fn run(shared: *Handoff, job: work_queue.Request, count: *std.atomic.Value(u32)) void {
+            if (shared.claimRequest(job)) _ = count.fetchAdd(1, std.builtin.AtomicOrder.monotonic);
+        }
+    };
+    var threads: [4]std.Thread = undefined;
+    var started: usize = 0;
+    errdefer for (threads[0..started]) |thread| thread.join();
+    for (&threads) |*thread| {
+        thread.* = try std.Thread.spawn(.{}, Consumer.run, .{ &handoff, request, &claimed });
+        started += 1;
+    }
+    for (threads) |thread| thread.join();
+    started = 0;
+    try std.testing.expectEqual(@as(u32, 1), claimed.load(std.builtin.AtomicOrder.monotonic));
+}
+
+test "stale completion failure and queue expiry cannot change a newer request" {
+    var handoff = try Handoff.init(1);
+    defer std.heap.page_allocator.free(handoff.connections);
+    defer std.heap.page_allocator.free(handoff.free_slots);
+    defer handoff.work.injector.deinit();
+    var poller = try poller_backend.Poller.init();
+    defer poller.deinit();
+    handoff.poller = &poller;
+    var loop = Loop.init(&handoff);
+    defer loop.expired.deinit(std.heap.smp_allocator);
+    const item = &handoff.connections[0];
+    const stale = item.dispatchRequest(0, 0).?;
+    try handoff.work.push(.{ .request = stale });
+    const current = item.dispatchRequest(0, 1).?;
+    item.timeout = .{ .expires_at_nanoseconds = 123 };
+    const deadline = net.Deadline{ .expires_at_nanoseconds = 456 };
+    var entry = access_log.Entry{};
+    loop.complete(.{ .request = stale, .action = Completion.Action.reuse });
+    loop.complete(.{ .request = stale, .action = Completion.Action.close });
+    loop.rejectTaken(stale, deadline, access_log.Outcome.queue_timeout, request_id.Source.generate);
+    loop.fail(stale, deadline, &entry);
+    loop.failWritten(stale, &entry, access_log.Outcome.crashed);
+    loop.now = (loop.limits.queue_timeout_milliseconds + 1) * std.time.ns_per_ms;
+    loop.rejectExpiredQueue();
+    try std.testing.expectEqual(@as(usize, 0), handoff.queuedJobs());
+    try std.testing.expect(item.matchesRequest(current));
+    try std.testing.expectEqual(@as(u64, 123), item.timeout.expires_at_nanoseconds);
+    try std.testing.expectEqual(@as(usize, 0), item.output.len);
+    try std.testing.expect(!item.dispatch_claimed);
+}
+
+test "dispatch sequence exhaustion never wraps into an older identity" {
+    var item = Connection{ .dispatch_sequence = std.math.maxInt(u64) - 2 };
+    const below = item.dispatchRequest(0, 0).?;
+    const boundary = item.dispatchRequest(0, 1).?;
+    try std.testing.expectEqual(std.math.maxInt(u64) - 1, below.sequence);
+    try std.testing.expectEqual(std.math.maxInt(u64), boundary.sequence);
+    try std.testing.expect(item.dispatchRequest(0, 2) == null);
+    try std.testing.expect(item.matchesRequest(boundary));
+    try std.testing.expect(!item.matchesRequest(below));
 }
