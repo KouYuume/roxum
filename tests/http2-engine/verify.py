@@ -5,6 +5,7 @@ from collections import defaultdict
 import select
 import socket
 import subprocess
+import struct
 import time
 
 from h2.config import H2Configuration
@@ -235,6 +236,124 @@ def verify_admission(executable, count):
         process.wait()
 
 
+def verify_connections(executable, disconnect=False):
+    """A socket-blocked connection yields to another owner, then resumes."""
+    process = subprocess.Popen([executable], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    sockets = []
+    try:
+        assert select.select([process.stdout], [], [], 5)[0], 'startup timeout'
+        port = int(process.stdout.readline())
+        slow = socket.socket()
+        sockets.append(slow)
+        slow.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024)
+        slow.settimeout(5)
+        slow.connect(('127.0.0.1', port))
+        conn = H2Connection(config=H2Configuration(client_side=True, header_encoding='utf-8'))
+        conn.initiate_connection()
+        conn.increment_flow_control_window(1024 * 1024)
+        headers = [(':method', 'POST'), (':scheme', 'http'),
+                   (':authority', 'localhost'), (':path', '/')]
+        payload = b'x' * 4096
+        # Below connection input credit: force socket backpressure, not HTTP/2
+        # credit exhaustion. Each response fits its stream's default window.
+        for stream in range(1, 30, 2):
+            conn.send_headers(stream, headers)
+            conn.send_data(stream, payload, end_stream=True)
+        slow.sendall(conn.data_to_send())
+        assert select.select([process.stdout], [], [], 5)[0], 'server never blocked on socket output'
+        assert process.stdout.readline().strip() == 'blocked=1'
+
+        fast = socket.create_connection(('127.0.0.1', port), timeout=5)
+        sockets.append(fast)
+        fast_conn = H2Connection(config=H2Configuration(client_side=True, header_encoding='utf-8'))
+        fast_conn.initiate_connection()
+
+        def exchange(sock, client, stream, expected, half_close=False):
+            client.send_headers(stream, headers)
+            client.send_data(stream, expected, end_stream=True)
+            sock.sendall(client.data_to_send())
+            if half_close:
+                sock.shutdown(socket.SHUT_WR)
+            received = b''
+            status = None
+            while True:
+                data = sock.recv(65536)
+                assert data, 'other connection unexpectedly closed'
+                for event in client.receive_data(data):
+                    assert not isinstance(event, (StreamReset, ConnectionTerminated)), event
+                    if isinstance(event, ResponseReceived) and event.stream_id == stream:
+                        status = dict(event.headers)[':status']
+                    elif isinstance(event, DataReceived) and event.stream_id == stream:
+                        received += event.data
+                    elif isinstance(event, StreamEnded) and event.stream_id == stream:
+                        assert status == '200' and received == expected
+                        return
+                if not half_close:
+                    sock.sendall(client.data_to_send())
+
+        exchange(fast, fast_conn, 1, b'while other socket is blocked')
+        if disconnect:
+            # Abort while output is retained, without draining the socket.
+            slow.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
+        else:
+            # Reading again must wake the writer through the kernel writable watch.
+            ended, bodies, statuses = set(), defaultdict(bytes), {}
+            deadline = time.monotonic() + 10
+            while len(ended) != 15:
+                slow.settimeout(max(.001, deadline - time.monotonic()))
+                data = slow.recv(65536)
+                assert data
+                for event in conn.receive_data(data):
+                    assert not isinstance(event, (StreamReset, ConnectionTerminated)), event
+                    if isinstance(event, ResponseReceived):
+                        statuses[event.stream_id] = dict(event.headers)[':status']
+                    elif isinstance(event, DataReceived):
+                        bodies[event.stream_id] += event.data
+                    elif isinstance(event, StreamEnded):
+                        ended.add(event.stream_id)
+                slow.sendall(conn.data_to_send())
+            assert ended == set(range(1, 30, 2))
+            assert all(bodies[stream] == payload and statuses[stream] == '200' for stream in ended)
+        slow.close()
+        sockets.remove(slow)
+        exchange(fast, fast_conn, 3, b'after other connection closes')
+        # A protocol failure also stays local to its connection.
+        malformed = socket.create_connection(('127.0.0.1', port), timeout=5)
+        sockets.append(malformed)
+        malformed.sendall(b'GET / HTTP/1.1\r\nHost: localhost\r\n\r\n')
+        # Initial server SETTINGS may precede detection of the invalid preface.
+        while malformed.recv(65536):
+            pass
+        malformed.close()
+        sockets.remove(malformed)
+        exchange(fast, fast_conn, 5, b'after invalid peer preface')
+        # Reuse the freed fixture slot with a new readiness identity.
+        replacement = socket.create_connection(('127.0.0.1', port), timeout=5)
+        sockets.append(replacement)
+        new_conn = H2Connection(config=H2Configuration(client_side=True, header_encoding='utf-8'))
+        new_conn.initiate_connection()
+        exchange(replacement, new_conn, 1, b'replacement connection', half_close=True)
+        for sock in sockets:
+            sock.close()
+        sockets.clear()
+        _, stderr = process.communicate(timeout=10)
+        assert process.returncode == 0, stderr
+        metrics = [dict(part.split('=') for part in line.split()) for line in stderr.strip().splitlines()]
+        assert len(metrics) == 4, metrics
+        assert sorted(int(m['admitted']) for m in metrics) == [0, 1, 3, 15], metrics
+        completed_metrics = [m for m in metrics if m['admitted'] != '15'] if disconnect else metrics
+        assert all(m['active'] == '0' and m['admitted'] == m['closed'] for m in completed_metrics), metrics
+        print('PASS socket backpressure, independent connection progress, ' +
+              ('blocked disconnect cleanup' if disconnect else 'writable resumption') +
+              ', slot reuse and TCP half-close')
+    finally:
+        for sock in sockets:
+            sock.close()
+        if process.poll() is None:
+            process.kill()
+        process.wait()
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('server')
@@ -242,3 +361,5 @@ if __name__ == '__main__':
     verify(executable)
     for count in (15, 16, 17):
         verify_admission(executable, count)
+    verify_connections(executable)
+    verify_connections(executable, disconnect=True)

@@ -3,7 +3,7 @@ const nghttp2_build = @import("tools/nghttp2-build.zig");
 
 pub fn build(b: *std.Build) void {
     const http2_module = b.createModule(.{
-        .root_source_file = b.path("platform/host/http2/engine.zig"),
+        .root_source_file = b.path("platform/host/http2.zig"),
         .target = b.graph.host,
         .optimize = std.builtin.OptimizeMode.ReleaseSafe,
     });
@@ -39,11 +39,10 @@ pub fn build(b: *std.Build) void {
         @panic("-Droc-target must be one of: arm64mac, arm64musl, x64musl");
     }
     const http2_target = b.resolveTargetQuery(std.Target.Query.parse(.{ .arch_os_abi = zigTargetOf(roc_target).? }) catch @panic("invalid target"));
-    const http2_fixture_engine = b.createModule(.{ .root_source_file = b.path("platform/host/http2/engine.zig"), .target = http2_target, .optimize = std.builtin.OptimizeMode.ReleaseSafe });
+    const http2_fixture_engine = b.createModule(.{ .root_source_file = b.path("platform/host/http2.zig"), .target = http2_target, .optimize = std.builtin.OptimizeMode.ReleaseSafe });
     nghttp2_build.attach(b, http2_fixture_engine, http2_target, std.builtin.OptimizeMode.ReleaseSafe);
     const http2_fixture_module = b.createModule(.{ .root_source_file = b.path("tests/http2-engine/server.zig"), .target = http2_target, .optimize = std.builtin.OptimizeMode.ReleaseSafe, .link_libc = true });
     http2_fixture_module.addImport("http2_engine", http2_fixture_engine);
-    http2_fixture_module.addImport("net", b.createModule(.{ .root_source_file = b.path("platform/host/net.zig"), .target = http2_target, .optimize = std.builtin.OptimizeMode.ReleaseSafe }));
     const http2_fixture = b.addExecutable(.{ .name = "http2-engine-server", .root_module = http2_fixture_module });
     const install_http2_fixture = b.addInstallArtifact(http2_fixture, .{});
     const http2_fixture_step = b.step("http2-engine-fixture", "Build the independent-client HTTP/2 fixture for roc-target");
