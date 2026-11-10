@@ -10,6 +10,7 @@ import pf.ResponseHeader
 import rate_limit.RateLimit
 
 Layers := [].{
+
 	## BeforeBody: on a route tagged `MembersOnly` or `AdminOnly`, finds the
 	## user from `Authorization: Bearer <token>` and leaves it in `provided`, or
 	## answers 401 or 403 before the body is received. Other routes pass as
@@ -40,7 +41,14 @@ Layers := [].{
 			Tag.Limit(limit) => {
 				key = match head.provided.user {
 					Ok(user) => "posts:${user.name}"
-					Err(Unset) => "posts:${RateLimit.client_ip(head.remote_addr.ip)}"
+					Err(Unset) => "posts:${
+						(
+							match head.remote_addr {
+								Tcp({ ip, .. }) => RateLimit.client_ip(ip)
+								Unix => "unix"
+							}
+						)
+					}"
 				}
 				Ok(RateLimit.Check.{ counter: model.posts_per_minute, key, limit, on_full: RateLimit.OnFull.Reject })
 			}

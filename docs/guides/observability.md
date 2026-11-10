@@ -13,8 +13,7 @@ Where the ID comes from is set in `listen`:
 
 ```roc
 listen: {
-    address: IpAddr.V4((0, 0, 0, 0)),
-    port: 8080,
+    endpoint: Server.Endpoint.Tcp({ address: IpAddr.V4((0, 0, 0, 0)), port: 8080 }),
     timeouts: Server.Timeouts.defaults,
     limits: Server.Limits.defaults,
     request_id: Server.RequestIdSource.TrustIncoming,   # leave out for Generate
@@ -104,12 +103,12 @@ cannot see the host's own answers.
 
 ## Metrics and health checks
 
-Turn the admin port on in `listen`, with an address and port apart from the app's:
+Enable metrics in `listen` with a TCP endpoint or a separate filesystem Unix socket (see [listener endpoints](deployment.md#listener-endpoints)):
 
 ```roc
 listen: {
     ...
-    metrics: Server.Metrics.Listen({ address: IpAddr.V4((127, 0, 0, 1)), port: 9090 }),   # leave out for Off
+    metrics: Server.Metrics.Listen(Server.Endpoint.Tcp({ address: IpAddr.V4((127, 0, 0, 1)), port: 9090 })),   # leave out for Off
 }
 ```
 

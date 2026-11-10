@@ -26,3 +26,9 @@ pub const sendAvailable = backend.sendAvailable;
 
 pub const IpAddress = backend.IpAddress;
 pub const listenAddress = backend.listenAddress;
+
+pub const Endpoint = backend.Endpoint;
+pub const UnixPath = backend.UnixPath;
+pub const OwnedUnixPath = backend.OwnedUnixPath;
+pub const PeerAddress = backend.PeerAddress;
+pub const listenEndpoint = backend.listenEndpoint;

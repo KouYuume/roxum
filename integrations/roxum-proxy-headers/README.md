@@ -40,3 +40,11 @@ peers but not parsed, and the PROXY protocol is not supported.
 Trust only the addresses your proxies actually connect from. A range that includes clients lets them set their own
 address. Proxies must append to `X-Forwarded-For` rather than pass a client's value through unchanged; nginx's
 `$proxy_add_x_forwarded_for` and AWS ALB both do.
+
+## Unix socket proxies
+
+`ProxyHeaders.trust` and `try_trust` do not trust Unix peers; their forwarding fields are removed. A Unix peer has no IP address to match against CIDR ranges.
+
+For a socket accessible only to trusted proxies, explicitly use `ProxyHeaders.trust_unix([])` (or `try_trust_unix`). This trusts every Unix peer that can connect. The list contains earlier TCP proxies to skip in the forwarded chain; it also retains the usual trust policy for direct TCP peers. Restrict the socket directory's access accordingly.
+
+A resolved client becomes `RemoteAddr.Tcp({ ip, port: 0 })`. Without a forwarded address the peer remains `RemoteAddr.Unix`. Match on the transport before reading client IP or port.

@@ -216,7 +216,7 @@ test "request bridge constructs normalized owned request" {
         "abc",
         request.body.payload_bytes().items(),
     );
-    try std.testing.expectEqual(@as(u16, 54321), request.remote_addr.port);
+    try std.testing.expectEqual(@as(u16, 54321), request.remote_addr.payload_tcp().port);
     try std.testing.expectEqualStrings("9f86d081884c7d659a2feaa0c55ad015", request.request_id.asSlice());
 }
 
@@ -658,7 +658,7 @@ test "request bridge preserves all eight IPv6 segments" {
     );
     defer request.decref(&roc_host);
 
-    const actual = request.remote_addr.ip.payload_v6();
+    const actual = request.remote_addr.payload_tcp().ip.payload_v6();
     try std.testing.expectEqual(segments[0], actual._0);
     try std.testing.expectEqual(segments[1], actual._1);
     try std.testing.expectEqual(segments[2], actual._2);
@@ -669,7 +669,7 @@ test "request bridge preserves all eight IPv6 segments" {
     try std.testing.expectEqual(segments[7], actual._7);
     try std.testing.expectEqual(
         std.math.maxInt(u16),
-        request.remote_addr.port,
+        request.remote_addr.payload_tcp().port,
     );
 }
 

@@ -24,7 +24,7 @@ A suspended fiber can resume on another thread. Do not cache a thread-local addr
 
 ## Scheduling and connection ownership
 
-A supervisor retains the listening socket and restarts workers; accepted connections belong to workers. A worker shares a poller, connection table, wait registry, and work queues across its threads. The acceptance thread handles admission, deadlines, and shutdown without invoking Roc. Roc threads process requests and ready fibers.
+A supervisor retains the listening socket and restarts workers; accepted connections belong to workers. TCP and filesystem Unix listeners use the same descriptor handoff. A worker that creates a Unix listener transfers its path and filesystem identity with the descriptor; subsequent workers reuse it. The supervisor removes the owned pathname after shutdown, only if its identity still matches. Existing paths are never removed to make binding succeed. The operator controls the parent directory and handles stale paths after an interrupted ownership transfer or a killed supervisor. A worker shares a poller, connection table, wait registry, and work queues across its threads. The acceptance thread handles admission, deadlines, and shutdown without invoking Roc. Roc threads process requests and ready fibers.
 
 Connection locks protect event processing and completion. While a request is dispatched, its handler does not hold the connection lock. A request starts with the shared request heap; its first suspension detaches live allocations into its own heap so the shared heap can serve another request.
 

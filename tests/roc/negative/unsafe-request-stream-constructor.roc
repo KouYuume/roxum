@@ -18,5 +18,5 @@ routes = Router.route(Router.new, "/", MethodRouter.get(handler))
 program = { init!, routes: Router.build(routes, {}) }
 init! = |{}| {
 	_ = bad_segment.read!(1)
-	Ok({ model: {}, listen: { address: IpAddr.V4((127, 0, 0, 1)), port: 0, timeouts: Server.Timeouts.defaults, limits: Server.Limits.defaults } })
+	Ok({ model: {}, listen: { endpoint: Server.Endpoint.Tcp({ address: IpAddr.V4((127, 0, 0, 1)), port: 0 }), timeouts: Server.Timeouts.defaults, limits: Server.Limits.defaults } })
 }

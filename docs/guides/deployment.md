@@ -1,6 +1,6 @@
 # Deployment
 
-roxum serves plain HTTP/1.1 over IPv4 or IPv6 TCP; it does not listen on a Unix domain socket. Run it behind a reverse proxy or
+roxum serves plain HTTP/1.1 over IPv4 or IPv6 TCP, or a filesystem Unix domain socket. Run it behind a reverse proxy or
 load balancer that terminates TLS (and HTTP/2 or HTTP/3 for clients), such as nginx, Caddy, or AWS Application Load
 Balancer.
 
@@ -117,8 +117,7 @@ others, at the cost of what they cannot share: each holds its own database conne
 
 ```roc
 listen: {
-	address: IpAddr.V4((0, 0, 0, 0)),
-	port: 8080,
+	endpoint: Server.Endpoint.Tcp({ address: IpAddr.V4((0, 0, 0, 0)), port: 8080 }),
 	timeouts: Server.Timeouts.defaults,
 	limits: Server.Limits.defaults,
 	threads: Server.Threads.Fixed(4),
@@ -188,8 +187,7 @@ proxy's idle timeout.**
 init! = |{}| Ok({
 	model: {},
 	listen: {
-		address: IpAddr.V4((0, 0, 0, 0)),
-		port: 8080,
+		endpoint: Server.Endpoint.Tcp({ address: IpAddr.V4((0, 0, 0, 0)), port: 8080 }),
 		timeouts: {
 			..Server.Timeouts.defaults,
 			keep_alive_idle_milliseconds: 75_000,
@@ -374,10 +372,32 @@ most 16, and only as many as fit in the response head; `X-Roxum-Dbg-Truncated` c
 its head was sent. **Never use `--debug` in production**: it shows internal values to clients. roxum prints a warning
 at start when it is on. Any other argument makes the executable exit with status 2.
 
-## IP listener addresses
+## Listener endpoints
 
-Import `pf.IpAddr` and set `Server.ListenOptions.address` to `IpAddr.V4((127, 0, 0, 1))` for IPv4 loopback or `IpAddr.V6((0, 0, 0, 0, 0, 0, 0, 1))` for IPv6 loopback. IPv6 groups are host-order `U16` values. Eight zero groups select all IPv6 interfaces. `Server.Metrics.Listen.address` uses the same type.
+`Server.ListenOptions.endpoint` selects the transport. Import `pf.Server` and `pf.IpAddr` for TCP:
 
-IPv6 listeners explicitly enable `IPV6_V6ONLY`: they do not accept IPv4-mapped connections. IPv4 listeners retain their existing behavior. One application listener selects one family; exposing both families requires a proxy or separate server instances. Scoped IPv6 listener addresses requiring an interface identifier are not supported by this API.
+```roc
+endpoint: Server.Endpoint.Tcp({ address: IpAddr.V4((127, 0, 0, 1)), port: 8080 })
+```
 
-To migrate from the IPv4-only API, replace `Server.Ipv4Address.(a, b, c, d)` with `IpAddr.V4((a, b, c, d))` and import `pf.IpAddr`. Peer addresses preserve their family in `RemoteAddr.ip`, including for proxy trust checks. Outbound TCP already resolves both address families and tries addresses in resolver order under the connection deadline; this is not a parallel Happy Eyeballs implementation.
+IPv6 loopback is `IpAddr.V6((0, 0, 0, 0, 0, 0, 0, 1))`. Groups are host-order `U16` values; eight zero groups select all IPv6 interfaces. IPv6 listeners explicitly enable `IPV6_V6ONLY`, so exposing both IP families requires a proxy or separate server instances. Scoped IPv6 addresses requiring an interface identifier are unsupported. Outbound TCP resolves both families and tries addresses in resolver order under the connection deadline.
+
+For a proxy on the same machine, use a Unix socket:
+
+```roc
+endpoint: Server.Endpoint.Unix({ path: "/run/my-app/http.sock" })
+```
+
+Paths must be absolute, at most 103 UTF-8 bytes, and contain no NUL, CR, or LF. The parent directory must already exist. Only filesystem stream sockets are supported; Linux abstract sockets and outbound Unix connections are not part of this API. Peer paths and process credentials are not exposed.
+
+The operator controls the socket directory and its access permissions. Socket creation follows the process umask; roxum does not change the directory, owner, group, or permissions. Use a directory writable only by the service owner, with access granted to the intended proxy. Socket-file permissions alone are not a portable access-control mechanism across operating systems; see [unix(7)](https://man7.org/linux/man-pages/man7/unix.7.html).
+
+roxum refuses an existing path, including a regular file, symlink, active socket, or stale socket. It never removes an existing path to make binding succeed. On normal shutdown or an owned startup failure it removes its socket if the filesystem identity still matches; a replacement is left alone. A killed supervisor, machine crash, or failure before ownership transfer can leave a stale socket. Confirm that the old service is stopped before removing it. Workers share the listener, so a worker restart neither rebinds nor unlinks it.
+
+Once all workers are ready, TCP startup writes the bound port and a newline to stdout. Unix startup writes `unix:/absolute/path` and a newline. With TCP, port `0` still requests an available port.
+
+`Server.Metrics.Listen` accepts the same endpoint type. Use a different path for Unix metrics, for example `Server.Metrics.Listen(Server.Endpoint.Unix({ path: "/run/my-app/metrics.sock" }))`. Keep metrics accessible only to trusted monitoring clients.
+
+Request metadata uses `RemoteAddr.Tcp({ ip, port })` or `RemoteAddr.Unix`; Unix connections are not represented by a fabricated loopback address. Match on the transport before using an IP-based policy. All Unix peers share the same transport marker, so it is not an individual client identity.
+
+To migrate, replace separate `address` and `port` fields with `endpoint: Server.Endpoint.Tcp({ address, port })`, wrap the metrics address record in `Server.Endpoint.Tcp`, and match on `RemoteAddr.Tcp` before accessing `ip` or `port`. From the older IPv4-only API, also replace `Server.Ipv4Address.(a, b, c, d)` with `IpAddr.V4((a, b, c, d))` and import `pf.IpAddr`.

@@ -14,4 +14,4 @@ handler = Handler.static(|{}| Reply.status(200))
 routes : Router(Model, [], {})
 routes = Router.route(Router.new, "/{id}/{id}", MethodRouter.get(handler))
 program = { init!, routes: Router.build(routes, {}) }
-init! = |{}| Ok({ model: {}, listen: { address: IpAddr.V4((127, 0, 0, 1)), port: 0, timeouts: Server.Timeouts.defaults, limits: Server.Limits.defaults } })
+init! = |{}| Ok({ model: {}, listen: { endpoint: Server.Endpoint.Tcp({ address: IpAddr.V4((127, 0, 0, 1)), port: 0 }), timeouts: Server.Timeouts.defaults, limits: Server.Limits.defaults } })

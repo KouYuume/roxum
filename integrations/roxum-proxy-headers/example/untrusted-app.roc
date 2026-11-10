@@ -21,8 +21,7 @@ init! : {} => Try({ model : Model, listen : Server.ListenOptions }, [StartupErr(
 init! = |{}| Ok({
 	model: {},
 	listen: {
-		address: IpAddr.V4((127, 0, 0, 1)),
-		port: 0,
+		endpoint: Server.Endpoint.Tcp({ address: IpAddr.V4((127, 0, 0, 1)), port: 0 }),
 		timeouts: Server.Timeouts.defaults,
 		limits: Server.Limits.defaults,
 	},
@@ -51,7 +50,11 @@ describe = |context| {
 			Str.starts_with(name, "x-forwarded-") or name == "x-real-ip" or name == "forwarded"
 		},
 	)
-	Ok(Reply.bytes("${format_ip(request.remote_addr.ip)} ${request.remote_addr.port.to_str()} ${scheme} ${forwarded.to_str()}".to_utf8(), "application/octet-stream"))
+	peer = match request.remote_addr {
+		Tcp({ ip, port }) => "${format_ip(ip)} ${port.to_str()}"
+		Unix => "unix 0"
+	}
+	Ok(Reply.bytes("${peer} ${scheme} ${forwarded.to_str()}".to_utf8(), "application/octet-stream"))
 }
 
 format_ip : IpAddr -> Str

@@ -24,6 +24,15 @@ pub fn writeStdoutPort(port: u16) Error!void {
     try writeStdout(formatPort(port, &buffer));
 }
 
+pub fn writeStdoutListener(listener: @import("net.zig").Listener) Error!void {
+    if (listener.unix_path) |path| {
+        var buffer: [110]u8 = undefined;
+        const line = std.fmt.bufPrint(&buffer, "unix:{s}\n", .{path.path.slice()}) catch unreachable;
+        return writeStdout(line);
+    }
+    return writeStdoutPort(listener.port);
+}
+
 /// The port line the supervisor publishes: the decimal port and a newline.
 fn formatPort(port: u16, buffer: *[6]u8) []const u8 {
     return std.fmt.bufPrint(buffer, "{d}\n", .{port}) catch unreachable;

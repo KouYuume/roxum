@@ -29,8 +29,7 @@ init! = |{}| {
 	Ok({
 		model: { from_env, from_file },
 		listen: {
-			address: IpAddr.V4((127, 0, 0, 1)),
-			port: 0,
+			endpoint: Server.Endpoint.Tcp({ address: IpAddr.V4((127, 0, 0, 1)), port: 0 }),
 			timeouts: Server.Timeouts.defaults,
 			limits: Server.Limits.defaults,
 		},

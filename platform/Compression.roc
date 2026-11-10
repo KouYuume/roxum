@@ -225,7 +225,7 @@ expect {
 				query: [],
 				headers: [Http.RequestHeader.{ name: Http.HeaderName.("accept-encoding"), value: accepted.to_utf8() }],
 				body: Http.RequestBody.Empty,
-				remote_addr: Http.RemoteAddr.{ ip: Http.IpAddr.V4((127, 0, 0, 1)), port: 1 },
+				remote_addr: Http.RemoteAddr.Tcp({ ip: Http.IpAddr.V4((127, 0, 0, 1)), port: 1 }),
 				request_id: "test",
 			}
 			List.all(

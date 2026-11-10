@@ -172,7 +172,10 @@ routes =
 			match tag {
 				Limit(limit) => Ok(RateLimit.Check.{
 					counter: model.per_minute,
-					key: "search:${RateLimit.client_ip(head.remote_addr.ip)}",
+					key: match head.remote_addr {
+						Tcp({ ip, .. }) => "search:${RateLimit.client_ip(ip)}"
+						Unix => "search:unix"
+					},
 					limit,
 					on_full: RateLimit.OnFull.Allow,
 				})
@@ -238,3 +241,5 @@ Common pieces are separate packages, so an app only depends on what it uses:
 
 Each package declares the platform versions it works with, and the digest of the platform it was checked on; see
 [`integrations/compatibility.json`](../../integrations/compatibility.json).
+
+Unix peers have no IP address. The `unix` key above shares one limit across them; use an authenticated application identity when per-client limits are needed.
