@@ -10,9 +10,10 @@
 
 ## Design and contracts
 
-These documents describe the current implementation and its invariants.
+These documents describe the current implementation, its invariants, and the project's scope policies.
 
 - [Architecture](design/architecture.md) and [platform boundary](design/platform-boundary.md)
+- [Scope and non-goals](design/non-goals.md): backend focus, platform suggestions by use case, and responsibilities delegated to libraries and integrations
 - [Public API layout](design/public-api-layout.md) and [request representation](design/request-repr.md)
 - [Execution and ownership](design/execution-model.md) and [I/O scheduling](design/io-execution.md)
 - [Streaming lifecycle](design/streaming.md) and [HTTP field lists](design/http-field-lists.md)
