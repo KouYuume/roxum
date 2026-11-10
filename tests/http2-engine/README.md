@@ -15,6 +15,12 @@ The client checks exact response bytes, completion, rejection, and subsequent
 connection reuse. It covers output credit 15/16/17, input body limits
 4095/4096/4097, header-list accounting 1023/1024/1025, sixteen admitted streams,
 reset isolation, and disconnect with a flow-controlled response still retained.
+Separate connections hold 15/16/17 requests open, synchronize with PING ACK, and
+verify admission counts. Valid counts exercise reset/completion cleanup and slot
+reuse. A raw seventeenth HEADERS bypasses the client's admission check; after
+SETTINGS acknowledgment, nghttp2 rejects it with PROTOCOL_ERROR GOAWAY and the
+last accepted stream ID. Fixture counters verify that it never reaches the
+observer, and engine destruction checks that session allocations are released.
 This is a host-engine contract test, not a supported Roc HTTP/2 listener.
 
 For another supported target, build `zig build http2-engine-fixture

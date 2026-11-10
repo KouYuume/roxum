@@ -13,6 +13,9 @@ const Request = struct {
 const State = struct {
     requests: [16]Request = @splat(.{}),
     closed: usize = 0,
+    admitted: usize = 0,
+    active: usize = 0,
+    peak_streams: usize = 0,
     fn from(ctx: *anyopaque) *State {
         return @ptrCast(@alignCast(ctx));
     }
@@ -21,6 +24,9 @@ const State = struct {
         for (&self.requests) |*r| {
             if (r.id != null) continue;
             r.* = .{ .id = id };
+            self.admitted += 1;
+            self.active += 1;
+            self.peak_streams = @max(self.peak_streams, self.active);
             return r;
         }
         @panic("fixture stream capacity exceeded");
@@ -40,6 +46,7 @@ const State = struct {
         const self = from(ctx);
         self.request(id).* = .{};
         self.closed += 1;
+        self.active -= 1;
     }
 };
 
@@ -91,5 +98,5 @@ pub fn main() !void {
         if (count == 0) break;
         try engine.receive(input[0..count]);
     }
-    std.debug.print("closed={d} peak={d}\n", .{ state.closed, engine.memory.peak });
+    std.debug.print("closed={d} peak={d} admitted={d} active={d} peak_streams={d}\n", .{ state.closed, engine.memory.peak, state.admitted, state.active, state.peak_streams });
 }
