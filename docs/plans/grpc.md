@@ -120,6 +120,9 @@ execution model cannot express the required lifetimes safely.
 
 ### 1. Build core HTTP/2 capabilities
 
+In progress: [host dependency and internal engine](../design/http2-engine.md).
+The independent fixture does not expose an HTTP/2 listener to Roc applications.
+
 Implement explicit opt-in HTTP/2 listeners and bounded stream execution, generic
 response trailers, deadlines, and cancellation. Keep gRPC schemas and status
 codes out of core. Preserve the existing HTTP/1.1 behavior and endpoint API.

@@ -1,6 +1,17 @@
 const std = @import("std");
+const nghttp2_build = @import("tools/nghttp2-build.zig");
 
 pub fn build(b: *std.Build) void {
+    const http2_module = b.createModule(.{
+        .root_source_file = b.path("platform/host/http2/engine.zig"),
+        .target = b.graph.host,
+        .optimize = std.builtin.OptimizeMode.ReleaseSafe,
+    });
+    nghttp2_build.attach(b, http2_module, b.graph.host, std.builtin.OptimizeMode.ReleaseSafe);
+    const http2_tests = b.addTest(.{ .root_module = http2_module, .use_llvm = true });
+    const http2_test_step = b.step("test-http2-engine", "Test the internal HTTP/2 engine and its allocation bounds");
+    http2_test_step.dependOn(&b.addRunArtifact(http2_tests).step);
+
     const contract_alloc = b.option(
         bool,
         "contract-alloc",
@@ -27,6 +38,21 @@ pub fn build(b: *std.Build) void {
     if (zigTargetOf(roc_target) == null) {
         @panic("-Droc-target must be one of: arm64mac, arm64musl, x64musl");
     }
+    const http2_target = b.resolveTargetQuery(std.Target.Query.parse(.{ .arch_os_abi = zigTargetOf(roc_target).? }) catch @panic("invalid target"));
+    const http2_fixture_engine = b.createModule(.{ .root_source_file = b.path("platform/host/http2/engine.zig"), .target = http2_target, .optimize = std.builtin.OptimizeMode.ReleaseSafe });
+    nghttp2_build.attach(b, http2_fixture_engine, http2_target, std.builtin.OptimizeMode.ReleaseSafe);
+    const http2_fixture_module = b.createModule(.{ .root_source_file = b.path("tests/http2-engine/server.zig"), .target = http2_target, .optimize = std.builtin.OptimizeMode.ReleaseSafe, .link_libc = true });
+    http2_fixture_module.addImport("http2_engine", http2_fixture_engine);
+    http2_fixture_module.addImport("net", b.createModule(.{ .root_source_file = b.path("platform/host/net.zig"), .target = http2_target, .optimize = std.builtin.OptimizeMode.ReleaseSafe }));
+    const http2_fixture = b.addExecutable(.{ .name = "http2-engine-server", .root_module = http2_fixture_module });
+    const install_http2_fixture = b.addInstallArtifact(http2_fixture, .{});
+    const http2_fixture_step = b.step("http2-engine-fixture", "Build the independent-client HTTP/2 fixture for roc-target");
+    http2_fixture_step.dependOn(&install_http2_fixture.step);
+    const http2_wire = b.addSystemCommand(&.{ "bash", "tests/http2-engine/run.sh" });
+    http2_wire.addArtifactArg(http2_fixture);
+    const http2_wire_step = b.step("test-http2-wire", "Verify finite HTTP/2 exchanges with the pinned independent client");
+    http2_wire_step.dependOn(&http2_wire.step);
+
     const host_archive = b.fmt("platform/targets/{s}/libhost.a", .{roc_target});
     // Diagnostic only: measures what the safety checks cost. Release bundles
     // always use ReleaseSafe.
@@ -118,6 +144,7 @@ pub fn build(b: *std.Build) void {
     examples.dependOn(&build_middleware_example.step);
 
     const test_step = b.step("test", "Run Zig unit tests, Roc module tests and negative fixtures, and the parser fuzz tests");
+    test_step.dependOn(http2_test_step);
     const run_platform_tests = b.addSystemCommand(&.{
         "bash",
         "tests/roc/run-platform-tests.sh",
@@ -993,6 +1020,20 @@ fn addHostBuild(b: *std.Build, roc_target: []const u8, contract_alloc: bool, opt
         module.addImport("tracking_allocator", host_module(b, "tests/support/allocator/tracking_allocator.zig", resolved_target, options, roc_target, musl));
         break :blk module;
     } else host_module(b, "platform/host/main.zig", resolved_target, options, roc_target, musl);
+    // Preserve the Zig object's exported Roc ABI symbols: compile the C engine
+    // separately and archive both objects, rather than partial-linking them.
+    const engine_module = b.createModule(.{
+        .root_source_file = b.addWriteFiles().add("nghttp2-root.zig", ""),
+        .target = resolved_target,
+        .optimize = options.optimize,
+        .strip = options.strip,
+        .pic = if (musl) true else null,
+    });
+    nghttp2_build.attach(b, engine_module, resolved_target, options.optimize);
+    const engine_object = b.addObject(.{ .name = "nghttp2", .root_module = engine_module });
+    const engine_bindings = engine_module.import_table.get("nghttp2_c").?;
+    root_module.addImport("nghttp2_c", engine_bindings);
+    if (root_module.import_table.get("host")) |host_namespace| host_namespace.addImport("nghttp2_c", engine_bindings);
     const compile_host = b.addObject(.{ .name = "host", .root_module = root_module });
     // musl's libc.a carries no compiler-rt, so the host brings its own.
     if (musl) compile_host.bundle_compiler_rt = true;
@@ -1006,6 +1047,7 @@ fn addHostBuild(b: *std.Build, roc_target: []const u8, contract_alloc: bool, opt
         b.fmt("{s}/libhost.a", .{target_dir}),
         host_object,
     });
+    archive_host.addFileArg(engine_object.getEmittedBin());
     archive_host.step.dependOn(&place_host_object.step);
     const write_musl_runtime = b.addSystemCommand(&.{
         "bash",

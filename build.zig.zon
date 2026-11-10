@@ -3,7 +3,12 @@
     .version = "0.0.0",
     .fingerprint = 0x1ddc0a596be7b90b,
     .minimum_zig_version = "0.17.1",
-    .dependencies = .{},
+    .dependencies = .{
+        .nghttp2 = .{
+            .url = "git+https://github.com/nghttp2/nghttp2.git#v1.71.0",
+            .hash = "N-V-__8AANWGWAD1XSeM7kQvRpLsi7XN6qH8ApIt5lApMEAg",
+        },
+    },
     .paths = .{
         "LICENSE",
         "build.zig",

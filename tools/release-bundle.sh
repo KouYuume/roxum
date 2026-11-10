@@ -13,11 +13,12 @@ cd "$repo_root"
 staging=zig-out/release/platform
 output_dir=zig-out/release
 # Bound expanded bundle size so host growth cannot silently increase download costs.
-limit_bytes=$((12 * 1000 * 1000))
+limit_bytes=$((13 * 1000 * 1000))
 
 # The platform's Roc modules; the host sources are not part of the bundle.
 rm -f "$staging"/*.roc
 cp platform/*.roc "$staging/"
+cp platform/NGHTTP2-LICENSE "$staging/NGHTTP2-LICENSE"
 
 # roc bundle stores only files under the entry file's directory, so the
 # platform's local packages are copied in and the header is pointed at them.
@@ -55,7 +56,7 @@ fi
 
 rm -f "$output_dir"/*.tar.zst "$output_dir"/release.json "$output_dir"/release-notes.md
 # roc bundle stores paths relative to the entry file's directory.
-(cd "$staging" && "$ROC_BIN" bundle main.roc "${target_files[@]}" --output-dir ../) | tee "$output_dir/bundle.log"
+(cd "$staging" && "$ROC_BIN" bundle main.roc NGHTTP2-LICENSE "${target_files[@]}" --output-dir ../) | tee "$output_dir/bundle.log"
 
 uncompressed=$(sed -n 's/^Uncompressed size: \([0-9]*\) bytes$/\1/p' "$output_dir/bundle.log")
 if [[ -z "$uncompressed" || "$uncompressed" -gt "$limit_bytes" ]]; then
