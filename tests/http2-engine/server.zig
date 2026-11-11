@@ -3,6 +3,8 @@ const std = @import("std");
 const http2 = @import("http2_engine").engine;
 const input = @import("http2_engine").input;
 const streams = @import("http2_engine").streams;
+const roc_values = @import("roc_values.zig");
+const bridge = @import("http2_engine").bridge;
 const transport = @import("http2_engine").owner;
 const readiness = @import("http2_engine").poller;
 const net = @import("http2_engine").net;
@@ -93,8 +95,6 @@ const Connection = struct {
                 defer std.debug.assert(self.state.streams.finish(execution.ticket));
                 const buffer = execution.buffer;
                 const body = buffer.body().?;
-                var length_buffer: [20]u8 = undefined;
-                const length = try std.fmt.bufPrint(&length_buffer, "{d}", .{body.len});
                 const fields = buffer.headers().?;
                 var count_buffer: [20]u8 = undefined;
                 const field_count = try std.fmt.bufPrint(&count_buffer, "{d}", .{fields.len});
@@ -104,13 +104,20 @@ const Connection = struct {
                 }
                 var path_length_buffer: [20]u8 = undefined;
                 const path_length = try std.fmt.bufPrint(&path_length_buffer, "{d}", .{path.len});
-                try owner.respond(execution.id, 200, &.{
+                var values = roc_values.Environment{ .allocator = std.heap.smp_allocator };
+                var host = values.rocHost();
+                defer std.debug.assert(values.live_allocations == 0);
+                var semantics = bridge.ResponseRequestSemantics.regular;
+                for (fields) |field| {
+                    if (std.mem.eql(u8, field.name, ":method") and std.mem.eql(u8, field.value, "HEAD")) semantics = bridge.ResponseRequestSemantics.head;
+                }
+                const response = roc_values.response(200, &.{
                     .{ .name = "content-type", .value = "application/octet-stream" },
-                    .{ .name = "content-length", .value = length },
                     .{ .name = "x-initial-fields", .value = field_count },
                     .{ .name = "x-request-path", .value = path[0..@min(path.len, 64)] },
                     .{ .name = "x-request-path-length", .value = path_length },
-                }, body);
+                }, body, &host);
+                try owner.respondOwned(&self.state.streams, execution.ticket, response, &host, semantics);
                 @memset(buffer.bytes.items, 0xa5);
             }
             const progress = owner.step() catch |err| switch (err) {

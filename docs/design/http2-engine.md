@@ -290,3 +290,32 @@ and release partial scratch. Engine submission still performs its own validation
 and copies output before Roc cleanup; an error there remains the caller's
 responsibility. This adapter adds no production dispatch, Date/access-log fields,
 response trailers, or streaming writer support.
+
+## Owned response submission
+
+`Owner.respondOwned` connects the finite Roc response adapter to the copying
+engine. It consumes a response on success and on every failure. The serialized
+owner supplies its stream registry and an execution ticket; the registry's
+connection token must match the owner, and the ticket must identify a claimed,
+still-open execution. Queued, finished, closed, stale, and foreign tickets cannot
+submit output. The engine also checks protocol state, including resets whose
+close notification has not yet arrived and duplicate response submission.
+
+Conversion scratch shares the registry's connection input budget, using the
+engine's configured header and response-byte limits. Scratch and the consumed
+Roc response are released before the method returns, while successfully copied
+output remains owned by the engine through partial writes and flow-control waits.
+The caller must keep the Roc host and request allocation domain alive through
+this synchronous operation outside callbacks, with the corresponding allocator
+context active. Submission does not finish the
+execution lease: the executor must clean up remaining request resources before
+calling `finish`, including after submission failure.
+
+The independent-client fixture uses synthetic Roc response values through this
+path and checks that every response has released all Roc allocations before the
+next transport step. Its test allocator poisons freed bytes. Focused integration
+tests also cover stale execution, reset/disconnect, conversion failure, scratch
+exhaustion, engine allocation failure, and output serialization after Roc cleanup.
+These tests invoke generated ABI value helpers, not a Roc application. Production
+worker dispatch, live Roc invocation, and cancellation of application effects
+remain pending.

@@ -3,6 +3,9 @@
 const std = @import("std");
 const protocol = @import("engine.zig");
 const net = @import("../net.zig");
+const bridge = @import("../bridge.zig");
+const response = @import("../bridge/http2_response.zig");
+const streams = @import("streams.zig");
 const readiness = @import("../net/poller.zig");
 
 pub const Error = protocol.Error || net.Error || readiness.Error;
@@ -49,6 +52,28 @@ pub const Owner = struct {
         if (self.terminal) return error.Closed;
         try self.engine.respond(id, status, headers, body);
         self.runnable = true;
+    }
+
+    /// Consumes one Roc response on every outcome. The serialized owner must
+    /// run this outside engine callbacks, with the Roc host/request domain alive
+    /// and the corresponding Roc allocator context active.
+    /// A closed or stale execution cannot submit output. The executor still
+    /// owns request cleanup and must finish its lease after this returns.
+    pub fn respondOwned(self: *Owner, registry: *streams.Streams, ticket: streams.Ticket, value: bridge.HttpResponse, roc_host: *bridge.RocHost, semantics: bridge.ResponseRequestSemantics) (Error || response.Error)!void {
+        const id = if (!self.terminal and registry.leases.connection == self.token)
+            registry.leases.runningStream(ticket)
+        else
+            null;
+        const live = id orelse {
+            value.decref(roc_host);
+            return error.Closed;
+        };
+        var owned = try response.OwnedResponse.init(value, roc_host, registry.budget.allocator(), semantics, .{
+            .header_bytes = self.engine.limits.header_bytes,
+            .body_bytes = self.engine.limits.response_bytes,
+        });
+        defer owned.deinit();
+        try self.respond(live, owned.response.status, owned.headers, owned.body);
     }
 
     pub fn cancel(self: *Owner, id: protocol.StreamId) Error!void {

@@ -53,3 +53,10 @@ request leases. Unit checks cover EOF-gated execution, one-shot cancellation,
 closed running-slot retention, stale completion, input-budget failure, and the
 15/16/17-slot boundary. These do not establish production worker integration or
 cancellation of Roc effects.
+
+Finite echo responses now pass through `Owner.respondOwned` as synthetic Roc ABI
+values. Their allocation count returns to zero before transport output advances,
+and freed bytes are poisoned. `test-http2-engine` also runs response submission
+checks against the real engine for stale/closed tickets, duplicate submission,
+conversion and allocation failure, and serialized output after Roc cleanup. This
+fixture does not invoke Roc application code or the production request scheduler.

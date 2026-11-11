@@ -50,6 +50,13 @@ pub const Requests = struct {
         return slot.id;
     }
 
+    /// A response may be submitted only while the claimed execution is open.
+    pub fn runningStream(self: *Requests, ticket: Ticket) ?StreamId {
+        const slot = self.get(ticket) orelse return null;
+        if (slot.closed or slot.phase != Phase.running) return null;
+        return slot.id;
+    }
+
     /// Records the initial metadata anchor exactly once, before body waits.
     pub fn ready(self: *Requests, ticket: Ticket, now: u64) bool {
         const slot = self.get(ticket) orelse return false;

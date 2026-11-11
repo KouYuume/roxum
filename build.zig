@@ -12,6 +12,16 @@ pub fn build(b: *std.Build) void {
     const http2_test_step = b.step("test-http2-engine", "Test the internal HTTP/2 engine and its allocation bounds");
     http2_test_step.dependOn(&b.addRunArtifact(http2_tests).step);
 
+    const http2_response_module = b.createModule(.{
+        .root_source_file = b.path("tests/http2-engine/response_test.zig"),
+        .target = b.graph.host,
+        .optimize = std.builtin.OptimizeMode.ReleaseSafe,
+        .link_libc = true,
+    });
+    http2_response_module.addImport("http2_engine", http2_module);
+    const http2_response_tests = b.addTest(.{ .root_module = http2_response_module, .use_llvm = true });
+    http2_test_step.dependOn(&b.addRunArtifact(http2_response_tests).step);
+
     const contract_alloc = b.option(
         bool,
         "contract-alloc",
