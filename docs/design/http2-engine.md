@@ -183,3 +183,34 @@ and any joined Cookie bytes. Temporary storage is freed on success and failure;
 the shared request builder copies the result into Roc ownership and rolls back
 partial allocations. Only finite body bytes are supported here. This mapping
 adds no listener negotiation, body reader, or application dispatch capability.
+
+## Finite request input
+
+`http2.input.Input` copies borrowed initial headers and DATA callback bytes into
+connection-owned storage. `headersComplete` freezes the initial field array and
+makes its view available before body EOF. Later header callbacks are trailers and
+are omitted; the engine still validates and accounts for them. `end` exposes the
+finite body. This collector neither validates HTTP fields nor implements streaming
+receive credit, and only accepts callbacks from a validated, admitted stream.
+
+Each input enforces cumulative initial-header accounting (name/value bytes plus
+32 bytes per field) and a body-byte limit. Inputs share a stable `Budget` owned by
+the serialized connection owner. That aggregate allocation ceiling includes field
+arrays, byte-buffer capacities, 16-byte allocation prefixes, and old plus new
+allocations during growth. Its Zig allocator supports alignments up to 16 bytes.
+The fixture normally uses a separate 128 KiB input budget per connection, in addition to
+the engine's session budget; neither budget draws from a Roc request arena.
+
+A limit or allocation failure rejects the input and releases its retained storage.
+The owner queues a stream cancellation outside the callback batch. Invalid call
+ordering returns `InvalidState`; rejected input cannot become ready again.
+Protocol closure or disconnect releases buffered input. Borrowed views must be
+copied into Roc ownership before input release or dispatch to another thread;
+these views do not pin the input across protocol closure. `deinit` also releases
+partially collected input and is safe after rejection.
+
+The independent-client fixture uses this collector for finite echo requests and
+checks copied metadata, fragmented body input, trailer exclusion, stream resets,
+and disconnect cleanup. A smaller fixture budget exercises input rejection,
+unrelated-stream progress, and capacity reuse after repeated cancellations. Production worker integration and application effect
+cancellation remain pending.

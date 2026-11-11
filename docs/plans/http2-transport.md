@@ -155,7 +155,9 @@ and effect cancellation remain pending. The Roc request bridge now has a borrowe
 metadata entry sharing the HTTP/1 allocation/ownership builder; the metadata type can
 represent HTTP/2 as `Http.Version.Http20`. A separate adapter maps completed initial
 field sections into that bridge, including authority and split Cookie fields.
-Production owner integration and stream body capabilities remain pending.
+A bounded input collector now retains callback bytes under per-stream limits and
+a shared connection allocation ceiling, and is exercised by the independent-client
+fixture. Production owner integration and stream body capabilities remain pending.
 Trailer/deadline APIs and their
 Roc integration can follow in focused changes within milestone 1; do not claim
 native gRPC support until the later integration gates pass.

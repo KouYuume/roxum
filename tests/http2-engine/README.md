@@ -1,7 +1,8 @@
 # HTTP/2 engine checks
 
 Run `zig build test-http2-engine` for memory, failure, header validation, and output
-cursor, stale readiness token, and failed owner-initialization unit checks. `zig build test` includes them.
+cursor, stale readiness token, failed owner-initialization, and bounded request-input
+ownership/state/allocation-failure unit checks. `zig build test` includes them.
 
 Run `zig build test-http2-wire` for independent hyper-h2 wire checks. The command
 creates a local venv under `zig-out/http2-engine/`, installs the hashed dependencies
@@ -35,3 +36,14 @@ For another supported target, build `zig build http2-engine-fixture
 -Droc-target=arm64musl` (or `x64musl`), then run `verify.py` with the resulting
 `zig-out/bin/http2-engine-server` on the matching OS/architecture. Build target
 variants sequentially: they share the installed executable path.
+
+Request input uses per-stream header/body limits and a shared 128 KiB connection
+allocation budget by default. The fixture copies callback data, excludes trailers from the
+initial header snapshot, and frees input on reset or disconnect. Wire checks
+verify retained path metadata and body fragments across callback batches.
+
+The fixture-only `ROXUM_TEST_HTTP2_INPUT_BUDGET` override selects a smaller budget
+for rejection tests. A 2 KiB run verifies stream-local reset, unrelated stream
+progress, and capacity reuse after repeated failures. Path diagnostics in responses
+contain at most 64 path bytes plus the original length; long-path tests cover
+request-header accounting immediately below, at, and above the 1024-byte limit.
