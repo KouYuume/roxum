@@ -162,6 +162,9 @@ owned Roc request values and releases input and conversion scratch. Production
 owner integration and stream body capabilities remain pending. A finite stream
 registry now combines input and leases, emits work outside callbacks, and pins
 closed running slots until execution cleanup; the independent fixture uses it.
+A finite Roc response adapter now normalizes fields and retains response ownership
+until copying engine submission; production invocation and response dispatch
+remain pending.
 Trailer/deadline APIs and their
 Roc integration can follow in focused changes within milestone 1; do not claim
 native gRPC support until the later integration gates pass.

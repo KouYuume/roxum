@@ -14,6 +14,8 @@ Changes to the roxum platform and its integrations, newest first. The platform a
 
 ### Added
 
+- Internal finite Roc-to-HTTP/2 response mapping with bounded header scratch, host-owned Content-Length, and explicit response cleanup. Production response dispatch remains pending.
+
 - Internal HTTP/2 stream registry combining bounded input and execution leases, with deferred cancellation and generation-safe cleanup after reset or disconnect. Production worker integration remains pending.
 
 - Internal HTTP/2 handoff from completed connection input to independently owned Roc request values, including bounded conversion scratch and cleanup on failure. Production dispatch remains pending.

@@ -55,6 +55,7 @@ pub const HttpResponseBodyTag = response.HttpResponseBodyTag;
 pub const HttpResponseHeaderList = response.HttpResponseHeaderList;
 pub const GeneratedRocStr = response.RocStr;
 pub const RocByteList = response.RocByteList;
+pub const OwnedHttp2Response = @import("bridge/http2_response.zig").OwnedResponse;
 pub const OwnedResponseEncoder = response.OwnedResponseEncoder;
 pub const WrittenHead = response.WrittenHead;
 pub const writeBodyPart = response.writeBodyPart;
