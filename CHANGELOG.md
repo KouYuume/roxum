@@ -14,6 +14,8 @@ Changes to the roxum platform and its integrations, newest first. The platform a
 
 ### Added
 
+- Internal HTTP/2 handoff from completed connection input to independently owned Roc request values, including bounded conversion scratch and cleanup on failure. Production dispatch remains pending.
+
 - Internal HTTP/2 request input storage with per-stream header/body limits, a shared connection memory budget, and reset/disconnect cleanup. Production scheduler integration remains pending.
 
 - Internal HTTP/2 initial-header mapping into Roc request metadata, including authority handling and split Cookie fields. Production HTTP/2 listener and scheduler integration remain pending.

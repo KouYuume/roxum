@@ -5,7 +5,7 @@ const c = @import("nghttp2_c");
 const Memory = @import("memory.zig").Memory;
 
 pub const StreamId = enum(i32) { _ };
-pub const Header = struct { name: []const u8, value: []const u8 };
+pub const Header = @import("../http_field.zig").Header;
 pub const Error = error{ OutOfMemory, Protocol, Closed, ReentrantCall, InvalidState, InvalidHeaders, LimitExceeded };
 pub const Limits = struct {
     session_bytes: usize = 1024 * 1024,

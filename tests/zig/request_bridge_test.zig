@@ -1118,3 +1118,175 @@ test "HTTP/2 Cookie joining preserves empty crumbs and interleaved field order" 
     try std.testing.expectEqualStrings("x-between", value.headers.items()[2].name.asSlice());
     try std.testing.expectEqualStrings("kept", value.headers.items()[2].value.items());
 }
+
+fn completedHttp2Input(budget: *bridge.Http2InputBudget, fields: []const bridge.RequestMetadataHeader, body: []const u8) !bridge.Http2Input {
+    var input = bridge.Http2Input.init(budget, .{ .header_bytes = 2048, .body_bytes = 4096 });
+    errdefer input.deinit();
+    for (fields) |field| try input.header(field);
+    try input.headersComplete();
+    try input.data(body);
+    try input.end();
+    return input;
+}
+
+test "HTTP/2 handoff owns request values after input release and budget reuse" {
+    for ([_][]const u8{ "", "finite body" }) |body| {
+        var budget = bridge.Http2InputBudget{ .backing = std.testing.allocator, .limit = 8192 };
+        const fields = http2_fields ++ [_]bridge.RequestMetadataHeader{
+            .{ .name = "cookie", .value = "a=1" },
+            .{ .name = "cookie", .value = "b=2" },
+        };
+        var input = try completedHttp2Input(&budget, &fields, body);
+        defer input.deinit();
+        var environment = TestEnvironment{ .allocator = std.testing.allocator };
+        var roc_host = environment.rocHost();
+        var id = "owned-request-id".*;
+        const value = try bridge.requestFromHttp2Input(&input, .{ .v4 = .{ .octets = .{ 127, 0, 0, 1 }, .port = 4321 } }, &id, TestEnvironment.requestHost(&roc_host));
+        {
+            defer value.decref(&roc_host);
+            try std.testing.expectEqual(@as(usize, 0), budget.used);
+            try std.testing.expect(input.headers() == null);
+            try std.testing.expect(input.body() == null);
+            const attempts = environment.allocation_attempts;
+            try std.testing.expectError(error.InvalidState, bridge.requestFromHttp2Input(&input, bridge.RemoteAddress.unix, "", TestEnvironment.requestHost(&roc_host)));
+            try std.testing.expectEqual(attempts, environment.allocation_attempts);
+            @memset(&id, 'x');
+            // Reusing the connection domain must not mutate the earlier request.
+            var replacement = try completedHttp2Input(&budget, &http2_fields, "replacement");
+            defer replacement.deinit();
+            const Version = @TypeOf(value.version);
+            try std.testing.expectEqual(Version.http20, value.version);
+            try std.testing.expectEqual(bridge.HttpMethod.post, value.method);
+            try std.testing.expectEqualStrings("/rpc?name=%2F", value.raw_target.items());
+            try std.testing.expectEqualStrings("/rpc", value.path.asSlice());
+            try std.testing.expectEqualStrings("name=%2F", value.query.items());
+            try std.testing.expectEqualStrings("[::1]:443", value.headers.items()[0].value.items());
+            try std.testing.expectEqualStrings("a=1; b=2", value.headers.items()[1].value.items());
+            try std.testing.expectEqualStrings("owned-request-id", value.request_id.asSlice());
+            try std.testing.expectEqual(@as(u16, 4321), value.remote_addr.payload_tcp().port);
+            if (body.len == 0) {
+                try std.testing.expectEqual(bridge.HttpRequestBodyTag.Empty, value.body.tag);
+            } else {
+                try std.testing.expectEqualStrings(body, value.body.payload_bytes().items());
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
+        try std.testing.expectEqual(@as(usize, 0), budget.used);
+    }
+}
+
+test "HTTP/2 handoff refuses incomplete and rejected input without consuming it" {
+    var budget = bridge.Http2InputBudget{ .backing = std.testing.allocator, .limit = 4096 };
+    var input = bridge.Http2Input.init(&budget, .{ .header_bytes = 1024, .body_bytes = 64 });
+    defer input.deinit();
+    var environment = TestEnvironment{ .allocator = std.testing.allocator };
+    var roc_host = environment.rocHost();
+    for (http2_fields) |field| try input.header(field);
+    const retained = budget.used;
+    const initial_phase = input.phase;
+    try std.testing.expectError(error.InvalidState, bridge.requestFromHttp2Input(&input, bridge.RemoteAddress.unix, "", TestEnvironment.requestHost(&roc_host)));
+    try std.testing.expectEqual(initial_phase, input.phase);
+    try std.testing.expectEqual(retained, budget.used);
+    try input.headersComplete();
+    try input.data("partial");
+    const before_eof = budget.used;
+    const body_phase = input.phase;
+    try std.testing.expectError(error.InvalidState, bridge.requestFromHttp2Input(&input, bridge.RemoteAddress.unix, "", TestEnvironment.requestHost(&roc_host)));
+    try std.testing.expectEqual(body_phase, input.phase);
+    try std.testing.expectEqual(before_eof, budget.used);
+    input.reject();
+    try std.testing.expectError(error.InvalidState, bridge.requestFromHttp2Input(&input, bridge.RemoteAddress.unix, "", TestEnvironment.requestHost(&roc_host)));
+    try std.testing.expectEqual(@as(usize, 0), budget.used);
+    try std.testing.expectEqual(@as(usize, 0), environment.allocation_attempts);
+}
+
+test "HTTP/2 handoff consumes invalid metadata and preserves another stream" {
+    var budget = bridge.Http2InputBudget{ .backing = std.testing.allocator, .limit = 8192 };
+    var peer = try completedHttp2Input(&budget, &http2_fields, "peer");
+    defer peer.deinit();
+    const peer_used = budget.used;
+    var fields = http2_fields;
+    fields[0].value = "CONNECT";
+    var input = try completedHttp2Input(&budget, &fields, "");
+    defer input.deinit();
+    var environment = TestEnvironment{ .allocator = std.testing.allocator };
+    var roc_host = environment.rocHost();
+    try std.testing.expectError(error.UnsupportedMethod, bridge.requestFromHttp2Input(&input, bridge.RemoteAddress.unix, "", TestEnvironment.requestHost(&roc_host)));
+    try std.testing.expectEqual(peer_used, budget.used);
+    try std.testing.expectEqualStrings("peer", peer.body().?);
+    try std.testing.expect(input.body() == null);
+    try std.testing.expectEqual(@as(usize, 0), environment.allocation_attempts);
+}
+
+test "HTTP/2 handoff scratch exhaustion releases only its input" {
+    var budget = bridge.Http2InputBudget{ .backing = std.testing.allocator, .limit = 8192 };
+    var peer = try completedHttp2Input(&budget, &http2_fields, "peer");
+    defer peer.deinit();
+    const peer_used = budget.used;
+    var input = try completedHttp2Input(&budget, &http2_fields, "input");
+    defer input.deinit();
+    budget.limit = budget.used;
+    var environment = TestEnvironment{ .allocator = std.testing.allocator };
+    var roc_host = environment.rocHost();
+    try std.testing.expectError(error.OutOfMemory, bridge.requestFromHttp2Input(&input, bridge.RemoteAddress.unix, "", TestEnvironment.requestHost(&roc_host)));
+    try std.testing.expectEqual(peer_used, budget.used);
+    try std.testing.expectEqualStrings("peer", peer.body().?);
+    try std.testing.expect(input.body() == null);
+    try std.testing.expectEqual(@as(usize, 0), environment.allocation_attempts);
+}
+
+test "HTTP/2 handoff rolls back every failed Roc allocation and frees connection input" {
+    var reached_success = false;
+    for (0..32) |fail_index| {
+        var budget = bridge.Http2InputBudget{ .backing = std.testing.allocator, .limit = 8192 };
+        const fields = http2_fields ++ [_]bridge.RequestMetadataHeader{
+            .{ .name = "cookie", .value = "a=1" },
+            .{ .name = "cookie", .value = "b=2" },
+        };
+        var input = try completedHttp2Input(&budget, &fields, "body");
+        defer input.deinit();
+        var environment = TestEnvironment{ .allocator = std.testing.allocator, .fail_index = fail_index };
+        var roc_host = environment.rocHost();
+        const value = bridge.requestFromHttp2Input(&input, bridge.RemoteAddress.unix, "id", TestEnvironment.requestHost(&roc_host)) catch |err| {
+            try std.testing.expectEqual(error.OutOfMemory, err);
+            try std.testing.expectEqual(@as(usize, 0), budget.used);
+            try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
+            try std.testing.expect(input.body() == null);
+            continue;
+        };
+        value.decref(&roc_host);
+        try std.testing.expectEqual(@as(usize, 0), budget.used);
+        try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
+        reached_success = true;
+        break;
+    }
+    try std.testing.expect(reached_success);
+}
+
+test "HTTP/2 handoff accounts for normalized fields and Cookie scratch at budget boundary" {
+    const fields = http2_fields ++ [_]bridge.RequestMetadataHeader{
+        .{ .name = "cookie", .value = "a=1" },
+        .{ .name = "cookie", .value = "b=2" },
+    };
+    // Three temporary field slots plus eight Cookie bytes, each with a 16-byte prefix.
+    const scratch_bytes = 3 * @sizeOf(bridge.RequestMetadataHeader) + 16 + 8 + 16;
+    for ([_]usize{ scratch_bytes - 1, scratch_bytes, scratch_bytes + 1 }) |available| {
+        var budget = bridge.Http2InputBudget{ .backing = std.testing.allocator, .limit = 8192 };
+        var input = try completedHttp2Input(&budget, &fields, "body");
+        defer input.deinit();
+        budget.limit = budget.used + available;
+        var environment = TestEnvironment{ .allocator = std.testing.allocator };
+        var roc_host = environment.rocHost();
+        const result = bridge.requestFromHttp2Input(&input, bridge.RemoteAddress.unix, "", TestEnvironment.requestHost(&roc_host));
+        if (available < scratch_bytes) {
+            try std.testing.expectError(error.OutOfMemory, result);
+            try std.testing.expectEqual(@as(usize, 0), environment.allocation_attempts);
+        } else {
+            const value = try result;
+            value.decref(&roc_host);
+        }
+        try std.testing.expectEqual(@as(usize, 0), budget.used);
+        try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
+        try std.testing.expect(input.body() == null);
+    }
+}

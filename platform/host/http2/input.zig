@@ -1,7 +1,7 @@
 //! Owned finite request input, serialized by its connection owner. Borrowed engine
 //! callback bytes never escape. This is not a streaming receive-window manager.
 const std = @import("std");
-const protocol = @import("engine.zig");
+const Header = @import("../http_field.zig").Header;
 pub const Budget = @import("memory.zig").Memory;
 pub const Limits = struct { header_bytes: usize, body_bytes: usize };
 pub const Phase = enum { headers, body, ended, rejected };
@@ -11,7 +11,7 @@ pub const Input = struct {
     budget: *Budget,
     limits: Limits,
     phase: Phase = Phase.headers,
-    fields: std.ArrayList(protocol.Header) = std.ArrayList(protocol.Header).empty,
+    fields: std.ArrayList(Header) = std.ArrayList(Header).empty,
     bytes: std.ArrayList(u8) = std.ArrayList(u8).empty,
     header_bytes: usize = 0,
 
@@ -26,7 +26,7 @@ pub const Input = struct {
 
     /// After initial completion, header callbacks contain trailers. They are
     /// intentionally omitted from the initial metadata and remain engine-limited.
-    pub fn header(self: *Input, field: protocol.Header) Error!void {
+    pub fn header(self: *Input, field: Header) Error!void {
         if (self.phase == Phase.body) return;
         if (self.phase != Phase.headers) return error.InvalidState;
         errdefer self.reject();
@@ -63,7 +63,7 @@ pub const Input = struct {
     /// The owner copies these views before releasing input or dispatching work
     /// to another thread. Rejection or deinit invalidates every borrowed view;
     /// views do not pin input across protocol closure.
-    pub fn headers(self: *const Input) ?[]const protocol.Header {
+    pub fn headers(self: *const Input) ?[]const Header {
         if (self.phase != Phase.body and self.phase != Phase.ended) return null;
         return self.fields.items;
     }
@@ -78,7 +78,7 @@ pub const Input = struct {
         for (self.fields.items) |field| allocator.free(field.name.ptr[0 .. field.name.len + field.value.len]);
         self.fields.deinit(allocator);
         self.bytes.deinit(allocator);
-        self.fields = std.ArrayList(protocol.Header).empty;
+        self.fields = std.ArrayList(Header).empty;
         self.bytes = std.ArrayList(u8).empty;
         self.header_bytes = 0;
         self.phase = Phase.rejected;
