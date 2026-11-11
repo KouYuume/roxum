@@ -386,15 +386,25 @@ aggregate live request bytes must return to zero after all invocations finish.
 
 These are byte-driven integration checks, not a production listener or scheduler.
 Suspensions register with the production `scheduler.Waits` only after heap
-detachment. A real kqueue/epoll backend collects wakes and expired timers, removing
-wait registrations before resumption or destruction. Cancellation uses the installed
-`fiber_wait` registry rather than its unregistered-wait fallback. Checks count
+detachment. A real kqueue/epoll backend collects socket readiness, wakes, and expired
+timers, removing wait registrations before resumption or destruction. Cancellation
+uses the installed `fiber_wait` registry rather than its unregistered-wait fallback. Checks count
 registrations, collections, and wake events, and require no jobs or waits at exit.
 Ordinary batch boundaries poll without blocking; empty records drain outstanding
-timers using the production blocking-wait deadline calculation. An immediate peer
+waits using the production blocking-wait deadline calculation. An immediate peer
 in the same batch still precedes the delayed response, but later batches need not
-precede a timer that has expired. No cross-thread resumption, socket waits, or
-crash isolation is exercised. The cancellation checks
-cover sleep and held concurrency permits, not interrupted TCP/file operations. The socket fixture continues to cover nonblocking transport and
-backpressure independently. Production scheduling and effect cancellation remain
-required before HTTP/2 is available to applications.
+precede a timer that has expired.
+
+A separate interactive client exercises real outbound TCP reads through the
+production socket-wait hook. Its loopback upstream sends a byte only after the read
+wait is registered, proving readiness-driven resumption and peer progress without timed
+server delays. Reset and disconnect interrupt unanswered reads before the hosted
+effect returns to Roc. Cleanup closes the borrowed connection (observed as upstream
+EOF), releases a held permit, and reclaims the detached heap. A successful read
+after reset also exercises reused request/wait slots. Normal completion explicitly
+discards its upstream connection; registration and collection counts must balance.
+
+No cross-thread resumption, TCP write/TLS cancellation, file-operation cancellation,
+or crash isolation is exercised. The socket fixture continues to cover nonblocking
+transport and backpressure independently. Production scheduling and effect
+cancellation remain required before HTTP/2 is available to applications.

@@ -13,9 +13,9 @@ in a separate local venv. An initial run requires access to those packages.
 
 The client sends bounded length-prefixed batches of HTTP/2 bytes over stdin and
 parses stdout as HTTP/2. Batches separate execution turns without introducing
-socket scheduling. Nonempty records admit and start ready requests; an empty
-record blocks on the production poller until deadline waits finish. Ordinary
-records collect ready timers without blocking at batch boundaries. Responses
+HTTP/2 transport socket scheduling. Nonempty records admit and start ready requests; an empty
+record blocks on the production poller until outstanding waits finish. Ordinary
+records collect ready sockets and timers without blocking at batch boundaries. Responses
 submitted during that collection are flushed before reading the next record. EOF
 disconnects the stream registry before stopping its remaining invocations. Tests
 assert decoded statuses and bodies, HEAD representation length, routing errors,
@@ -64,12 +64,22 @@ same input batch must still finish before the delayed response; later peers have
 no ordering guarantee relative to elapsed timers. The real short sleeps retain
 their existing scheduling sensitivity if a deadline passes before suspension.
 
+A separate interactive client exercises real outbound `Tcp.with_origin!` reads.
+A loopback upstream withholds its byte until the host reports a registered read
+wait, then the production socket hook and readiness event resume the Roc handler.
+An immediate HTTP/2 peer completes while that read is suspended. Reset and EOF
+cancel two unanswered reads: neither returns to Roc application code, the upstream
+observes connection closure, and a held concurrency permit becomes available after
+reset. A normal read after reset exercises reused request/wait slots. Normal
+completion explicitly discards its upstream connection. All waits must be collected
+exactly once and all request memory released. The client synchronizes through
+batch-completion and read-registration diagnostics rather than timed sleeps.
+
 This does not test production listener/worker integration, cross-thread resumption,
-socket-effect cancellation, or crash isolation. The loop remains single-threaded
-and byte-driven; it uses the production wait registry and readiness backend. TCP/file cleanup hooks
-are invoked, but the resource regression here exercises concurrency permits.
-The existing `test-http2-wire` socket fixture covers readiness, flow control, and
-backpressure using synthetic Roc responses.
+TCP write/TLS cancellation, file-operation cancellation, or crash isolation. The
+loop remains single-threaded and byte-driven; it uses the production wait registry
+and readiness backend. The existing `test-http2-wire` socket fixture covers
+transport readiness, flow control, and backpressure using synthetic Roc responses.
 
 For compile-only target validation, run `zig build http2-roc-hosts
 -Droc-target=x64musl` (or another supported target). This does not run the Roc

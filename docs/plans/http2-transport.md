@@ -175,8 +175,12 @@ request fibers, real hosted sleep waits, detached request heaps, peer progress,
 and stopping a sleeping invocation after reset or disconnect, including held
 concurrency-permit release and bulk request-memory reclamation. The fixture now
 registers suspensions with the production wait registry and drives deadline/wake
-collection through kqueue/epoll. Production worker dispatch, HTTP/2 socket-loop
-integration, socket-effect cancellation, and cross-thread resumption remain pending.
+collection through kqueue/epoll. Real outbound TCP reads also use the production
+socket-wait hook: readiness resumes the handler, while reset/disconnect close its
+borrowed connection before reclaiming the request. An interactive loopback peer
+synchronizes on read registration and verifies closure and subsequent slot reuse.
+Production worker dispatch, HTTP/2 socket-loop integration, broader effect
+cancellation (including TCP writes/TLS), and cross-thread resumption remain pending.
 Trailer/deadline APIs and their
 Roc integration can follow in focused changes within milestone 1; do not claim
 native gRPC support until the later integration gates pass.
