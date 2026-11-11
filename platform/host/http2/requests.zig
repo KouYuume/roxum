@@ -44,6 +44,12 @@ pub const Requests = struct {
         return slot;
     }
 
+    /// Resolve a generation-checked lease, including a closed running lease.
+    pub fn stream(self: *Requests, ticket: Ticket) ?StreamId {
+        const slot = self.get(ticket) orelse return null;
+        return slot.id;
+    }
+
     /// Records the initial metadata anchor exactly once, before body waits.
     pub fn ready(self: *Requests, ticket: Ticket, now: u64) bool {
         const slot = self.get(ticket) orelse return false;

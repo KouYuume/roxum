@@ -14,6 +14,8 @@ Changes to the roxum platform and its integrations, newest first. The platform a
 
 ### Added
 
+- Internal HTTP/2 stream registry combining bounded input and execution leases, with deferred cancellation and generation-safe cleanup after reset or disconnect. Production worker integration remains pending.
+
 - Internal HTTP/2 handoff from completed connection input to independently owned Roc request values, including bounded conversion scratch and cleanup on failure. Production dispatch remains pending.
 
 - Internal HTTP/2 request input storage with per-stream header/body limits, a shared connection memory budget, and reset/disconnect cleanup. Production scheduler integration remains pending.
