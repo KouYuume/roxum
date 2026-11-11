@@ -5,6 +5,8 @@ const h2 = host.http2;
 const bridge = host.bridge;
 const context = host.allocator_context;
 const fiber = host.fiber;
+const scheduler = host.scheduler;
+const poller_backend = host.poller;
 const tracking = @import("options").tracking;
 const Environment = if (tracking) @import("tracking_environment").Environment else host.arena.ArenaEnvironment;
 
@@ -49,6 +51,8 @@ const State = struct {
 // Stable job storage keeps allocator pointers in suspended fiber locals valid.
 const Job = struct {
     target: ?*fiber.Fiber = null,
+    waits: *scheduler.Waits = undefined,
+    registered: bool = false,
     owner: *h2.owner.Owner = undefined,
     streams: *h2.streams.Streams = undefined,
     ticket: h2.streams.Ticket = undefined,
@@ -67,6 +71,7 @@ const Job = struct {
     }
 
     fn resumeJob(self: *Job, environment: *Environment, handled: *usize, rejected: *usize) !void {
+        if (self.registered) return error.ResumeWhileRegistered;
         const target = self.target.?;
         if (self.heap) |*heap| {
             environment.adoptStream(heap);
@@ -99,6 +104,9 @@ const Job = struct {
                 try environment.resetRequest();
                 self.allocator = environment.streamHostAllocator(&self.heap.?);
             }
+            try self.waits.addWaiting(target);
+            self.registered = true;
+            std.debug.print("registered-wait\n", .{});
             return;
         }
         if (target.locals.allocator != null) return error.LeakedFiberContext;
@@ -125,35 +133,57 @@ const Job = struct {
     }
 };
 
-// Protocol callbacks only invalidate leases. Resume stopped effects after the
-// callback batch, allowing their own cleanup before abandoning Roc allocations.
-fn cancelClosed(jobs: *[16]Job, environment: *Environment, handled: *usize, rejected: *usize) !void {
+// Protocol callbacks only invalidate leases. Wakes go through the production
+// registry; only its ready list may resume a fiber or permit its destruction.
+fn cancelClosed(jobs: *[16]Job, waits: *scheduler.Waits, environment: *Environment, handled: *usize, rejected: *usize) !void {
     for (jobs) |*job| {
         const target = job.target orelse continue;
         if (job.streams.leases.runningStream(job.ticket) != null) continue;
+        if (!job.registered) return error.UnregisteredCancellation;
         host.fiber_wait.wakeStopped(target, target.wait_serial, fiber.Stop.client_gone);
-        target.wait.outcome = fiber.Wait.Outcome.timed_out;
-        try job.resumeJob(environment, handled, rejected);
-        if (job.target != null) return error.CancellationDidNotStop;
+    }
+    try runReady(waits, environment, handled, rejected, false);
+    for (jobs) |*job| {
+        if (job.target != null and job.streams.leases.runningStream(job.ticket) == null) return error.CancellationDidNotStop;
     }
 }
 
-// Empty records explicitly run timer waits to completion. Ordinary wire records
-// leave live timers suspended; closed jobs resume only to stop their effects.
-fn drainJobs(jobs: *[16]Job, environment: *Environment, handled: *usize, rejected: *usize) !void {
-    for (jobs) |*job| {
-        while (job.target) |target| {
-            const now = try host.net.monotonicNanoseconds();
-            if (target.wait.expires_at_nanoseconds > now) {
-                const remaining = target.wait.expires_at_nanoseconds - now;
-                const delay = std.c.timespec{ .sec = @intCast(remaining / std.time.ns_per_s), .nsec = @intCast(remaining % std.time.ns_per_s) };
-                _ = std.c.nanosleep(&delay, null);
-                continue;
-            }
-            target.wait.outcome = fiber.Wait.Outcome.timed_out;
-            try job.resumeJob(environment, handled, rejected);
-        }
+fn runReady(waits: *scheduler.Waits, environment: *Environment, handled: *usize, rejected: *usize, block: bool) !void {
+    var ready: std.ArrayList(*fiber.Fiber) = .empty;
+    defer ready.deinit(std.heap.smp_allocator);
+    // At most sixteen stream jobs can wait. Reserve before the registry removes
+    // entries so appending a ready fiber cannot lose it to allocation failure.
+    try ready.ensureTotalCapacity(std.heap.smp_allocator, 16);
+    var raw: [16]poller_backend.RawEvent = undefined;
+    var events: [16 * poller_backend.events_per_raw]poller_backend.Event = undefined;
+    const timeout = if (block) waits.beginBlockingWait(try host.net.monotonicNanoseconds()) else @as(?u32, 0);
+    const reported = waits.poller.wait(&raw, &events, timeout) catch |err| {
+        if (block) waits.endBlockingWait();
+        return err;
+    };
+    if (block) waits.endBlockingWait();
+    for (reported) |event| {
+        // This fixture currently registers only deadline waits and owner wakes.
+        if (event.kind != poller_backend.Event.Kind.wake) return error.UnexpectedSocketEvent;
+        std.debug.print("poller-wake\n", .{});
     }
+    try waits.collectExpired(try host.net.monotonicNanoseconds(), &ready);
+    for (ready.items) |target| {
+        const job: *Job = @ptrCast(@alignCast(target.userdata.?));
+        if (!job.registered or job.target != target) return error.InvalidReadyJob;
+        // A slot may be reused by an earlier resumed job from this batch.
+        if (waits.slots.items[target.wait.slot]) |entry| {
+            if (entry.target == target) return error.ResumeWhileRegistered;
+        }
+        job.registered = false;
+        std.debug.print("collected-wait\n", .{});
+        try job.resumeJob(environment, handled, rejected);
+    }
+}
+
+// Empty records let the real poller drive every remaining deadline to completion.
+fn drainJobs(waits: *scheduler.Waits, environment: *Environment, handled: *usize, rejected: *usize) !void {
+    while (waits.hasWaiting()) try runReady(waits, environment, handled, rejected, true);
 }
 
 fn main() callconv(std.builtin.CallingConvention.c) c_int {
@@ -193,11 +223,20 @@ fn run() !void {
         .closed = State.closed,
     });
     defer engine.destroy();
-    // Only request/response handoff is exercised: no socket/poller methods run.
+    // The transport owner remains byte-driven; the separate poller below drives
+    // application waits, not HTTP/2 socket I/O.
     var owner = h2.owner.Owner{ .engine = engine, .socket = -1, .poller = undefined, .token = 1 };
     var handled: usize = 0;
     var rejected: usize = 0;
     var jobs: [16]Job = @splat(.{});
+    var poller = try poller_backend.Poller.init();
+    defer poller.deinit();
+    try poller.registerWake(std.math.maxInt(u64) - 1);
+    var waits = scheduler.Waits{ .poller = &poller };
+    defer waits.deinit();
+    if (host.fiber_wait.waits != null) return error.WaitRegistryAlreadyInstalled;
+    host.fiber_wait.waits = &waits;
+    defer host.fiber_wait.waits = null;
     var record: [65536]u8 = undefined;
     while (true) {
         var prefix: [4]u8 = undefined;
@@ -207,7 +246,7 @@ fn run() !void {
         if (length > 0 and !try readExact(record[0..length])) return error.TruncatedRecord;
         try engine.receive(record[0..length]);
         if (state.failed) return error.ObserverFailed;
-        try cancelClosed(&jobs, &environment, &handled, &rejected);
+        try cancelClosed(&jobs, &waits, &environment, &handled, &rejected);
         while (state.streams.next()) |work| {
             switch (work) {
                 h2.streams.Work.cancel => |id| try owner.cancel(id),
@@ -216,6 +255,7 @@ fn run() !void {
                     if (job.target != null) return error.ReusedRunningSlot;
                     job.* = .{
                         .target = try fiber.Fiber.create(),
+                        .waits = &waits,
                         .owner = &owner,
                         .streams = &state.streams,
                         .ticket = execution.ticket,
@@ -229,19 +269,27 @@ fn run() !void {
                 },
             }
         }
-        if (length == 0) try drainJobs(&jobs, &environment, &handled, &rejected);
-        // Submitted responses own their bytes; other request fibers may still wait.
+        if (length == 0) try drainJobs(&waits, &environment, &handled, &rejected);
+        // Collection after serialization can finish a timer and submit another
+        // response. Flush it before waiting for the next input record.
         while (true) {
-            const bytes = try engine.output();
-            if (bytes.len == 0) break;
-            try writeAll(bytes);
-            try engine.consumeOutput(bytes.len);
+            while (true) {
+                const bytes = try engine.output();
+                if (bytes.len == 0) break;
+                try writeAll(bytes);
+                try engine.consumeOutput(bytes.len);
+            }
+            try cancelClosed(&jobs, &waits, &environment, &handled, &rejected);
+            if ((try engine.output()).len == 0) break;
         }
-        try cancelClosed(&jobs, &environment, &handled, &rejected);
     }
     state.streams.disconnect();
-    try cancelClosed(&jobs, &environment, &handled, &rejected);
-    try drainJobs(&jobs, &environment, &handled, &rejected);
+    try cancelClosed(&jobs, &waits, &environment, &handled, &rejected);
+    try drainJobs(&waits, &environment, &handled, &rejected);
+    if (waits.hasWaiting()) return error.WaitRegistryLeak;
+    for (jobs) |job| {
+        if (job.target != null or job.registered) return error.LiveJobAtShutdown;
+    }
     if (state.budget.used != 0) return error.InputLeak;
     if (host.request_memory.current() != 0) return error.RequestLeak;
     std.debug.print("handled={d} rejected={d}\n", .{ handled, rejected });

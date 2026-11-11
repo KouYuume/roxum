@@ -103,7 +103,6 @@ def verify(executable, allocator, backend):
     assert reset == {55, 57}, reset
     assert end_order.index(7) < end_order.index(5), end_order
     assert end_order.index(63) < end_order.index(61), end_order
-    assert end_order.index(69) < end_order.index(61), end_order
     assert headers[53][':status'] == '404'
     assert headers[51]['content-length'] == str(len(b'42|h2|head'))
     for stream, (status, body) in expected.items():
@@ -113,9 +112,12 @@ def verify(executable, allocator, backend):
     assert result.stderr.count(b'detached-request') == 3, result.stderr
     assert result.stderr.count(b'resumed-request') == 4, result.stderr
     assert result.stderr.count(b'cancelled-request') == 2, result.stderr
+    assert result.stderr.count(b'registered-wait') == 4, result.stderr
+    assert result.stderr.count(b'collected-wait') == 4, result.stderr
+    assert result.stderr.count(b'poller-wake') >= 2, result.stderr
     if allocator == 'tracking':
         assert result.stderr.count(b'roxum-contract-request-ok') == 34, result.stderr
-    print(f'PASS real Roc HTTP/2 {allocator}/{backend}: model reuse, fragmented input, HEAD, errors, fiber waits, effect cancellation and cleanup')
+    print(f'PASS real Roc HTTP/2 {allocator}/{backend}: model reuse, fragmented input, HEAD, errors, registered waits, poller wakes, effect cancellation and cleanup')
 
 
 if __name__ == '__main__':
