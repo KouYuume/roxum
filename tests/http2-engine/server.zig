@@ -2,22 +2,16 @@
 const std = @import("std");
 const http2 = @import("http2_engine").engine;
 const input = @import("http2_engine").input;
-const leases = @import("http2_engine").requests;
+const streams = @import("http2_engine").streams;
 const transport = @import("http2_engine").owner;
 const readiness = @import("http2_engine").poller;
 const net = @import("http2_engine").net;
 extern "c" fn setsockopt(c_int, c_int, c_int, *const anyopaque, u32) c_int;
 
-const Request = struct {
-    id: ?http2.StreamId = null,
-    input: ?input.Input = null,
-    rejected: bool = false,
-    sent: bool = false,
-};
 const State = struct {
     budget: input.Budget = .{ .backing = std.heap.smp_allocator, .limit = 128 * 1024 },
-    leases: leases.Requests = .{ .connection = 0 },
-    requests: [16]Request = @splat(.{}),
+    streams: streams.Streams = undefined,
+    failed: bool = false,
     closed: usize = 0,
     admitted: usize = 0,
     active: usize = 0,
@@ -25,62 +19,46 @@ const State = struct {
     fn from(ctx: *anyopaque) *State {
         return @ptrCast(@alignCast(ctx));
     }
-    fn request(self: *State, id: http2.StreamId) *Request {
-        for (&self.requests) |*r| if (r.id == id) return r;
-        for (&self.requests) |*r| {
-            if (r.id != null) continue;
-            _ = self.leases.open(id) catch @panic("fixture lease capacity exceeded");
-            r.* = .{ .id = id, .input = input.Input.init(&self.budget, .{ .header_bytes = 1024, .body_bytes = 4096 }) };
+    fn header(ctx: *anyopaque, id: http2.StreamId, field: http2.Header) void {
+        const self = from(ctx);
+        const existing = self.streams.leases.find(id) != null;
+        self.streams.header(id, field) catch {
+            self.failed = true;
+            return;
+        };
+        if (!existing) {
             self.admitted += 1;
             self.active += 1;
             self.peak_streams = @max(self.peak_streams, self.active);
-            return r;
         }
-        @panic("fixture stream capacity exceeded");
-    }
-    fn header(ctx: *anyopaque, id: http2.StreamId, field: http2.Header) void {
-        const r = from(ctx).request(id);
-        if (r.rejected) return;
-        r.input.?.header(field) catch {
-            r.rejected = true;
-        };
     }
     fn headersComplete(ctx: *anyopaque, id: http2.StreamId) void {
         const self = from(ctx);
-        const r = self.request(id);
-        if (r.rejected) return;
-        r.input.?.headersComplete() catch {
-            r.rejected = true;
+        const now = net.monotonicNanoseconds() catch {
+            self.failed = true;
             return;
         };
-        const ticket = self.leases.find(id) orelse unreachable;
-        std.debug.assert(self.leases.ready(ticket, net.monotonicNanoseconds() catch unreachable));
+        self.streams.headersComplete(id, now) catch {
+            self.failed = true;
+        };
     }
     fn data(ctx: *anyopaque, id: http2.StreamId, bytes: []const u8) void {
-        const r = from(ctx).request(id);
-        if (r.rejected) return;
-        r.input.?.data(bytes) catch {
-            r.rejected = true;
+        const self = from(ctx);
+        self.streams.data(id, bytes) catch {
+            self.failed = true;
         };
     }
     fn end(ctx: *anyopaque, id: http2.StreamId) void {
-        const r = from(ctx).request(id);
-        if (r.rejected) return;
-        r.input.?.end() catch {
-            r.rejected = true;
+        const self = from(ctx);
+        self.streams.end(id) catch {
+            self.failed = true;
         };
     }
     fn close(ctx: *anyopaque, id: http2.StreamId) void {
         const self = from(ctx);
-        self.leases.close(id);
+        if (self.streams.leases.find(id) != null) self.active -= 1;
+        self.streams.close(id);
         self.closed += 1;
-        for (&self.requests) |*entry| {
-            if (entry.id != id) continue;
-            entry.input.?.deinit();
-            entry.* = .{};
-            self.active -= 1;
-            return;
-        }
     }
 };
 
@@ -93,12 +71,8 @@ const Connection = struct {
     fn close(self: *Connection) void {
         const owner = &self.owner.?;
         std.debug.print("closed={d} peak={d} admitted={d} active={d} peak_streams={d}\n", .{ self.state.closed, owner.engine.memory.peak, self.state.admitted, self.state.active, self.state.peak_streams });
-        self.state.leases.disconnect();
+        self.state.streams.disconnect();
         owner.deinit();
-        for (&self.state.requests) |*r| {
-            if (r.input) |*buffer| buffer.deinit();
-            r.* = .{};
-        }
         std.debug.assert(self.state.budget.used == 0);
         self.owner = null;
     }
@@ -107,18 +81,18 @@ const Connection = struct {
         const owner = &self.owner.?;
         // Bound each turn even when a peer continuously sends or reads.
         for (0..32) |_| {
-            for (&self.state.requests) |*r| {
-                if (r.id == null or r.sent) continue;
-                if (r.rejected) {
-                    try owner.cancel(r.id.?);
-                    r.sent = true;
-                    continue;
-                }
-                const buffer = &r.input.?;
-                const body = buffer.body() orelse continue;
-                const ticket = self.state.leases.find(r.id.?) orelse unreachable;
-                _ = self.state.leases.claim(ticket) orelse unreachable;
-                defer std.debug.assert(self.state.leases.finish(ticket));
+            if (self.state.failed) return false;
+            while (self.state.streams.next()) |work| {
+                const execution = switch (work) {
+                    streams.Work.cancel => |id| {
+                        try owner.cancel(id);
+                        continue;
+                    },
+                    streams.Work.execute => |value| value,
+                };
+                defer std.debug.assert(self.state.streams.finish(execution.ticket));
+                const buffer = execution.buffer;
+                const body = buffer.body().?;
                 var length_buffer: [20]u8 = undefined;
                 const length = try std.fmt.bufPrint(&length_buffer, "{d}", .{body.len});
                 const fields = buffer.headers().?;
@@ -130,7 +104,7 @@ const Connection = struct {
                 }
                 var path_length_buffer: [20]u8 = undefined;
                 const path_length = try std.fmt.bufPrint(&path_length_buffer, "{d}", .{path.len});
-                try owner.respond(r.id.?, 200, &.{
+                try owner.respond(execution.id, 200, &.{
                     .{ .name = "content-type", .value = "application/octet-stream" },
                     .{ .name = "content-length", .value = length },
                     .{ .name = "x-initial-fields", .value = field_count },
@@ -138,7 +112,6 @@ const Connection = struct {
                     .{ .name = "x-request-path-length", .value = path_length },
                 }, body);
                 @memset(buffer.bytes.items, 0xa5);
-                r.sent = true;
             }
             const progress = owner.step() catch |err| switch (err) {
                 error.SendFailed, error.ReceiveFailed, error.Protocol => return false,
@@ -223,7 +196,7 @@ pub fn main() !void {
                 };
                 errdefer net.closeSocket(accepted.socket);
                 connection.* = .{};
-                connection.state.leases.connection = next_token;
+                connection.state.streams = streams.Streams.init(next_token, &connection.state.budget, .{ .header_bytes = 1024, .body_bytes = 4096 });
                 connection.state.budget.limit = input_budget;
                 // A small send buffer makes real socket backpressure reachable
                 // without an unbounded response or platform-specific defaults.

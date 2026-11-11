@@ -47,3 +47,9 @@ for rejection tests. A 2 KiB run verifies stream-local reset, unrelated stream
 progress, and capacity reuse after repeated failures. Path diagnostics in responses
 contain at most 64 path bytes plus the original length; long-path tests cover
 request-header accounting immediately below, at, and above the 1024-byte limit.
+
+The fixture uses the host's finite stream registry to join input storage and
+request leases. Unit checks cover EOF-gated execution, one-shot cancellation,
+closed running-slot retention, stale completion, input-budget failure, and the
+15/16/17-slot boundary. These do not establish production worker integration or
+cancellation of Roc effects.

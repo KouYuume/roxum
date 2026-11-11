@@ -159,7 +159,9 @@ A bounded input collector now retains callback bytes under per-stream limits and
 a shared connection allocation ceiling, and is exercised by the independent-client
 fixture. A consuming bridge now converts completed input into independently
 owned Roc request values and releases input and conversion scratch. Production
-owner integration and stream body capabilities remain pending.
+owner integration and stream body capabilities remain pending. A finite stream
+registry now combines input and leases, emits work outside callbacks, and pins
+closed running slots until execution cleanup; the independent fixture uses it.
 Trailer/deadline APIs and their
 Roc integration can follow in focused changes within milestone 1; do not claim
 native gRPC support until the later integration gates pass.

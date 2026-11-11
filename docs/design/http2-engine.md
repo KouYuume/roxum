@@ -235,3 +235,31 @@ ID. The caller retains it until the consuming Roc invocation, or releases it wit
 generated cleanup if dispatch is cancelled. Releasing connection input does not
 finish a request lease or cancel pending execution. Production queue integration,
 live Roc invocation, and streaming body handoff remain separate work.
+
+## Finite stream registry
+
+`http2.streams.Streams` combines bounded input and generation-checked request
+leases in sixteen fixed slots. The connection owner serializes all operations
+and keeps the table and its shared input budget at stable addresses. Only engine
+callbacks from admitted, validated streams may supply fields and data.
+
+Initial headers record the receipt timestamp once; finite execution becomes
+eligible only at body EOF. Between engine calls, `next` emits either one stream
+cancellation or one claimed execution containing its ticket, timestamp, and
+borrowed input. Input limit/allocation failures release storage and queue one
+cancellation without affecting peers. Invalid callback ordering is an error to
+the owner. Capacity or sequence exhaustion is an admission error; no callback
+resumes application code or enters the engine recursively.
+
+The owner must consume the borrowed input synchronously, for example through
+`requestFromHttp2Input`, before handing owned values to another thread. The table
+and shared budget are not thread-safe. Closing a stream or disconnecting releases
+input and invalidates unclaimed work; a claimed slot remains reserved until
+request cleanup calls `finish`. Finishing releases any remaining input, rejects
+stale or duplicate tickets, and cannot release a reused slot. Disconnect also
+prevents further admission. The registry does not itself cancel effects or retain
+Roc values, and it must outlive all claimed executions.
+
+The independent-client fixture uses this registry for finite echo execution.
+Production worker dispatch, cross-thread completion, effect cancellation, and
+streaming receive credit remain separate integration work.
