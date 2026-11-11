@@ -361,7 +361,7 @@ response ownership before resetting the request generation and finishing the lea
 Output serialization runs after the submitting request has released its values;
 other request fibers may still be suspended. Arena
 live bytes are checked before reset; tracking mode additionally checks zero request
-allocations, the persistent baseline, canaries, and valid frees. The numeric fixture
+allocations, the persistent baseline, canaries, and valid frees. The scalar-only fixture
 model also permits a zero-persistent-allocation assertion after releasing its root.
 
 Cases cover repeated model use beyond stream-slot capacity, fragmented input with
@@ -371,14 +371,22 @@ Each invocation runs on a request fiber with fiber-local allocation context. The
 first hosted sleep detaches its live request heap and advances the shared request
 generation; later waits reuse the detached heap. A peer can complete while that
 invocation waits, and the original request metadata/body remain valid on resume.
-Reset and disconnect invalidate submission but retain the running lease until
-normal execution cleanup. The fixture verifies two sleeps per delayed invocation,
-normal completion, reset during a wait, and disconnect with a wait outstanding.
+Reset and disconnect invalidate submission and retain the running lease until
+cleanup. Between callback batches, the fixture wakes closed invocations with a
+client-gone stop. The real sleep effect stops before returning to application code;
+cleanup releases held resources, abandons the detached heap, clears fiber-local
+allocation context, and finishes the lease before destroying the fiber. Normal
+completion still releases Roc values before checking and releasing the heap.
+
+Tests cover two short sleeps with normal completion, plus reset and disconnect
+during long sleeps that must not complete. A concurrency permit remains occupied
+while its handler waits and is available to a peer after reset cleanup. Cancelled
+requests deliberately use bulk reclamation rather than normal decref checks;
+aggregate live request bytes must return to zero after all invocations finish.
 
 These are byte-driven integration checks, not a production listener or scheduler.
 Empty input records drain timer waits explicitly; no wait registry, cross-thread
-resumption, socket waits, immediate effect cancellation, or crash isolation is
-exercised. A reset invocation resumes its effects to completion and discards its
-late response. The socket fixture continues to cover nonblocking transport and
+resumption, socket waits, or crash isolation is exercised. The cancellation checks
+cover sleep and held concurrency permits, not interrupted TCP/file operations. The socket fixture continues to cover nonblocking transport and
 backpressure independently. Production scheduling and effect cancellation remain
 required before HTTP/2 is available to applications.

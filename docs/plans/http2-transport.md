@@ -172,8 +172,9 @@ state before consuming input, and the fixture passes through both Roc ownership
 boundaries. A separate byte-driven fixture now invokes the real Roc application
 through these boundaries in all backends and allocator modes. It also exercises
 request fibers, real hosted sleep waits, detached request heaps, peer progress,
-and cleanup of invocations that finish after reset or disconnect. Timer resumption
-is fixture-driven; production wait registration, worker dispatch, immediate effect
+and stopping a sleeping invocation after reset or disconnect, including held
+concurrency-permit release and bulk request-memory reclamation. Timer resumption
+is fixture-driven; production wait registration, worker dispatch, socket-effect
 cancellation, and cross-thread resumption remain pending.
 Trailer/deadline APIs and their
 Roc integration can follow in focused changes within milestone 1; do not claim

@@ -74,7 +74,22 @@ const Job = struct {
         }
         fiber.resumeFiber(target);
         if (context.current() != null) return error.LeakedFiberContext;
-        if (target.crashed or target.cancelled) return error.UnexpectedFiberStop;
+        if (target.crashed) return error.UnexpectedFiberStop;
+        if (target.cancelled) {
+            if (self.streams.leases.runningStream(self.ticket) != null) return error.CancelledLiveStream;
+            if (target.locals.concurrency.count != 1) return error.MissingHeldPermit;
+            host.tcp_effect.closeHeldBy(target);
+            host.files_effect.closeHeldBy(target);
+            host.concurrency_effect.releaseHeldBy(target);
+            if (self.heap) |*heap| environment.abandonStream(heap) else return error.MissingDetachedHeap;
+            self.heap = null;
+            target.locals.allocator = null;
+            if (!self.streams.finish(self.ticket)) return error.InvalidLease;
+            target.destroy();
+            self.target = null;
+            std.debug.print("cancelled-request\n", .{});
+            return;
+        }
         if (!target.finished) {
             // Only deadline waits are part of this fixture's contract.
             if (target.wait.socket != -1) return error.UnexpectedSocketWait;
@@ -87,6 +102,8 @@ const Job = struct {
             return;
         }
         if (target.locals.allocator != null) return error.LeakedFiberContext;
+        host.files_effect.closeHeldBy(target);
+        host.concurrency_effect.releaseHeldBy(target);
         if (self.heap) |*heap| {
             if (!tracking and heap.heap.live_bytes != 0) return error.RequestLeak;
             try environment.releaseStream(heap);
@@ -108,8 +125,21 @@ const Job = struct {
     }
 };
 
+// Protocol callbacks only invalidate leases. Resume stopped effects after the
+// callback batch, allowing their own cleanup before abandoning Roc allocations.
+fn cancelClosed(jobs: *[16]Job, environment: *Environment, handled: *usize, rejected: *usize) !void {
+    for (jobs) |*job| {
+        const target = job.target orelse continue;
+        if (job.streams.leases.runningStream(job.ticket) != null) continue;
+        host.fiber_wait.wakeStopped(target, target.wait_serial, fiber.Stop.client_gone);
+        target.wait.outcome = fiber.Wait.Outcome.timed_out;
+        try job.resumeJob(environment, handled, rejected);
+        if (job.target != null) return error.CancellationDidNotStop;
+    }
+}
+
 // Empty records explicitly run timer waits to completion. Ordinary wire records
-// never resume them: peer progress and reset-before-resume are deterministic.
+// leave live timers suspended; closed jobs resume only to stop their effects.
 fn drainJobs(jobs: *[16]Job, environment: *Environment, handled: *usize, rejected: *usize) !void {
     for (jobs) |*job| {
         while (job.target) |target| {
@@ -143,7 +173,7 @@ fn run() !void {
     defer {
         context.setCurrent(.{ .host_allocator = &allocator, .domain = host.Domain.persistent, .generation = environment.generation });
         app.model_root.deinit();
-        // The fixture model contains only a number, so releasing its final box
+        // The fixture model contains only scalar values, so releasing its final box
         // must return the persistent tracker to zero as well.
         if (tracking) std.debug.assert(environment.persistent.liveCount() == 0);
         context.clearCurrent();
@@ -177,6 +207,7 @@ fn run() !void {
         if (length > 0 and !try readExact(record[0..length])) return error.TruncatedRecord;
         try engine.receive(record[0..length]);
         if (state.failed) return error.ObserverFailed;
+        try cancelClosed(&jobs, &environment, &handled, &rejected);
         while (state.streams.next()) |work| {
             switch (work) {
                 h2.streams.Work.cancel => |id| try owner.cancel(id),
@@ -206,10 +237,13 @@ fn run() !void {
             try writeAll(bytes);
             try engine.consumeOutput(bytes.len);
         }
+        try cancelClosed(&jobs, &environment, &handled, &rejected);
     }
     state.streams.disconnect();
+    try cancelClosed(&jobs, &environment, &handled, &rejected);
     try drainJobs(&jobs, &environment, &handled, &rejected);
     if (state.budget.used != 0) return error.InputLeak;
+    if (host.request_memory.current() != 0) return error.RequestLeak;
     std.debug.print("handled={d} rejected={d}\n", .{ handled, rejected });
 }
 
