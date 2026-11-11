@@ -263,3 +263,30 @@ Roc values, and it must outlive all claimed executions.
 The independent-client fixture uses this registry for finite echo execution.
 Production worker dispatch, cross-thread completion, effect cancellation, and
 streaming receive credit remain separate integration work.
+
+## Finite Roc response mapping
+
+`bridge.OwnedHttp2Response` consumes one Roc response reference and prepares the
+finite engine's field/body views. It normalizes field names to lowercase while
+preserving field order, duplicate fields, and values. Scratch storage uses a
+caller-supplied bounded allocator; values and body remain in Roc ownership until
+`deinit`. Views survive moving the adapter value, but not its destruction. The
+caller must submit them synchronously to the copying engine outside callbacks,
+and call `deinit` exactly once after either submission success or failure.
+
+The adapter accepts final statuses 200 through 599. It shares the existing HTTP/1
+policy that application Content-Length, Transfer-Encoding, and Connection fields
+are errors, and also rejects HTTP/2 connection-specific fields, pseudo-fields,
+invalid syntax, and values with leading or trailing whitespace. The host adds
+Content-Length except on 204 and 304. HEAD retains the representation length with
+an empty transmitted body. Nonempty bodies on 204, 205, and 304 are rejected,
+including for HEAD, consistently with the existing finite response contract.
+
+Field limits include synthetic Content-Length and the :status accounting. At
+most 64 ordinary fields reach the engine. The caller supplies header and body
+limits matching the connection; the body bound also applies to a HEAD response's
+retained representation. Allocation and validation failures consume the response
+and release partial scratch. Engine submission still performs its own validation
+and copies output before Roc cleanup; an error there remains the caller's
+responsibility. This adapter adds no production dispatch, Date/access-log fields,
+response trailers, or streaming writer support.

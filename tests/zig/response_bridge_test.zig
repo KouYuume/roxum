@@ -650,3 +650,122 @@ test "a written body is chunked on HTTP/1.1 and sent as it is on HTTP/1.0" {
         try std.testing.expectEqual(case.version == bridge.ResponseHttpVersion.http_1_0, head.force_connection_close);
     }
 }
+
+test "HTTP/2 response owns normalized fields and preserves duplicate values until release" {
+    var environment = TestEnvironment{ .allocator = std.testing.allocator };
+    var host = environment.rocHost();
+    const headers = bridge.HttpResponseHeaderList.allocate(2, &host);
+    for (headers.elements_ptr.?[0..2], 0..) |*field, index| field.* = .{
+        .name = bridge.GeneratedRocStr.fromSlice("Set-Cookie", &host),
+        .value = bridge.GeneratedRocStr.fromSlice(if (index == 0) "a=1" else "second-cookie-with-a-value-longer-than-small-string", &host),
+    };
+    var response = try bridge.OwnedHttp2Response.init(.{ .status = 200, .headers = headers, .body = responseBody("payload", &host) }, &host, std.testing.allocator, bridge.ResponseRequestSemantics.regular, .{ .header_bytes = 1024, .body_bytes = 16 });
+    // Moving the owner must not leave views into its previous stack location.
+    var moved = response;
+    response = undefined;
+    try std.testing.expectEqualStrings("set-cookie", moved.headers[0].name);
+    try std.testing.expectEqualStrings("a=1", moved.headers[0].value);
+    try std.testing.expectEqualStrings("set-cookie", moved.headers[1].name);
+    try std.testing.expectEqualStrings("second-cookie-with-a-value-longer-than-small-string", moved.headers[1].value);
+    try std.testing.expectEqualStrings("content-length", moved.headers[2].name);
+    try std.testing.expectEqualStrings("7", moved.headers[2].value);
+    try std.testing.expectEqualStrings("payload", moved.body);
+    moved.deinit();
+    try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
+}
+
+test "HTTP/2 response retains HEAD length and rejects bodies on forbidden statuses" {
+    var environment = TestEnvironment{ .allocator = std.testing.allocator };
+    var host = environment.rocHost();
+    var head = try bridge.OwnedHttp2Response.init(makeResponse(200, "x", "y", "body", &host), &host, std.testing.allocator, bridge.ResponseRequestSemantics.head, .{ .header_bytes = 1024, .body_bytes = 16 });
+    try std.testing.expectEqual(@as(usize, 0), head.body.len);
+    try std.testing.expectEqualStrings("4", head.headers[1].value);
+    head.deinit();
+    for ([_]u16{ 204, 205, 304 }) |status| {
+        var empty = try bridge.OwnedHttp2Response.init(makeResponse(status, "x", "y", "", &host), &host, std.testing.allocator, bridge.ResponseRequestSemantics.regular, .{ .header_bytes = 1024, .body_bytes = 16 });
+        try std.testing.expectEqual(@as(usize, if (status == 205) 2 else 1), empty.headers.len);
+        if (status == 205) try std.testing.expectEqualStrings("0", empty.headers[1].value);
+        empty.deinit();
+        for ([_]bridge.ResponseRequestSemantics{ bridge.ResponseRequestSemantics.regular, bridge.ResponseRequestSemantics.head }) |semantics| {
+            try std.testing.expectError(error.BodyNotAllowedForStatus, bridge.OwnedHttp2Response.init(makeResponse(status, "x", "y", "body", &host), &host, std.testing.allocator, semantics, .{ .header_bytes = 1024, .body_bytes = 16 }));
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
+}
+
+test "HTTP/2 response rejects invalid status and fields while consuming Roc ownership" {
+    var environment = TestEnvironment{ .allocator = std.testing.allocator };
+    var host = environment.rocHost();
+    for ([_]u16{ 199, 200, 201, 598, 599, 600 }) |status| {
+        const result = bridge.OwnedHttp2Response.init(makeResponse(status, "x", "y", "", &host), &host, std.testing.allocator, bridge.ResponseRequestSemantics.regular, .{ .header_bytes = 1024, .body_bytes = 16 });
+        if (status < 200 or status > 599) {
+            try std.testing.expectError(error.InvalidStatus, result);
+        } else {
+            var response = try result;
+            response.deinit();
+        }
+    }
+    for ([_][]const u8{ "Content-Length", "TRANSFER-Encoding", "Connection" }) |name| {
+        try std.testing.expectError(error.ApplicationControlsMessageFraming, bridge.OwnedHttp2Response.init(makeResponse(200, name, "x", "", &host), &host, std.testing.allocator, bridge.ResponseRequestSemantics.regular, .{ .header_bytes = 1024, .body_bytes = 16 }));
+    }
+    for ([_][]const u8{ "", ":status", "bad name", "Keep-Alive", "Proxy-Connection", "Upgrade", "TE" }) |name| {
+        try std.testing.expectError(error.InvalidHeaders, bridge.OwnedHttp2Response.init(makeResponse(200, name, "x", "", &host), &host, std.testing.allocator, bridge.ResponseRequestSemantics.regular, .{ .header_bytes = 1024, .body_bytes = 16 }));
+    }
+    for ([_][]const u8{ "\r", "\n", "\x00", "\x7f", " leading", "trailing ", "\tleading", "trailing\t" }) |value| {
+        try std.testing.expectError(error.InvalidHeaders, bridge.OwnedHttp2Response.init(makeResponse(200, "x", value, "", &host), &host, std.testing.allocator, bridge.ResponseRequestSemantics.regular, .{ .header_bytes = 1024, .body_bytes = 16 }));
+    }
+    try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
+}
+
+test "HTTP/2 response field count header bytes and body limits include synthetic fields" {
+    var environment = TestEnvironment{ .allocator = std.testing.allocator };
+    var host = environment.rocHost();
+    for ([_]usize{ 62, 63, 64 }) |count| {
+        const headers = bridge.HttpResponseHeaderList.allocate(count, &host);
+        for (headers.elements_ptr.?[0..count]) |*field| field.* = .{ .name = bridge.GeneratedRocStr.fromSlice("x", &host), .value = bridge.GeneratedRocStr.fromSlice("y", &host) };
+        const result = bridge.OwnedHttp2Response.init(.{ .status = 200, .headers = headers, .body = responseBody("", &host) }, &host, std.testing.allocator, bridge.ResponseRequestSemantics.regular, .{ .header_bytes = 4096, .body_bytes = 16 });
+        if (count == 64) {
+            try std.testing.expectError(error.LimitExceeded, result);
+        } else {
+            var response = try result;
+            try std.testing.expectEqual(count + 1, response.headers.len);
+            response.deinit();
+        }
+    }
+    // :status (42), x:y (34), content-length:0 (47) total 123.
+    for ([_]usize{ 122, 123, 124 }) |limit| {
+        const result = bridge.OwnedHttp2Response.init(makeResponse(200, "x", "y", "", &host), &host, std.testing.allocator, bridge.ResponseRequestSemantics.regular, .{ .header_bytes = limit, .body_bytes = 16 });
+        if (limit < 123) {
+            try std.testing.expectError(error.LimitExceeded, result);
+        } else {
+            var response = try result;
+            response.deinit();
+        }
+    }
+    for ([_]usize{ 3, 4, 5 }) |size| {
+        const result = bridge.OwnedHttp2Response.init(makeResponse(200, "x", "y", "12345"[0..size], &host), &host, std.testing.allocator, bridge.ResponseRequestSemantics.regular, .{ .header_bytes = 1024, .body_bytes = 4 });
+        if (size > 4) {
+            try std.testing.expectError(error.LimitExceeded, result);
+        } else {
+            var response = try result;
+            response.deinit();
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
+}
+
+test "HTTP/2 response rolls back each scratch allocation failure and releases Roc values" {
+    for (0..3) |fail_index| {
+        var environment = TestEnvironment{ .allocator = std.testing.allocator };
+        var host = environment.rocHost();
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = fail_index });
+        const result = bridge.OwnedHttp2Response.init(makeResponse(200, "Long-Header-Name-For-Ownership", "long-value-to-exercise-Roc-ownership", "body", &host), &host, failing.allocator(), bridge.ResponseRequestSemantics.regular, .{ .header_bytes = 1024, .body_bytes = 16 });
+        if (fail_index < 2) {
+            try std.testing.expectError(error.OutOfMemory, result);
+        } else {
+            var response = try result;
+            response.deinit();
+        }
+        try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
+    }
+}
