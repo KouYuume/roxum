@@ -358,7 +358,8 @@ and decodes the output. The serialized fixture claims finite executions, activat
 the request allocation context, hands off input, retains the initialized model for
 `roc_handle`, and submits the returned response. It releases route metadata and
 response ownership before resetting the request generation and finishing the lease.
-Output serialization runs only after those request generations have ended. Arena
+Output serialization runs after the submitting request has released its values;
+other request fibers may still be suspended. Arena
 live bytes are checked before reset; tracking mode additionally checks zero request
 allocations, the persistent baseline, canaries, and valid frees. The numeric fixture
 model also permits a zero-persistent-allocation assertion after releasing its root.
@@ -366,8 +367,18 @@ model also permits a zero-persistent-allocation assertion after releasing its ro
 Cases cover repeated model use beyond stream-slot capacity, fragmented input with
 an independently progressing peer, reset before execution, HEAD, application errors,
 routing misses, request conversion rejection, and invalid application responses.
-These are byte-driven integration checks, not a production listener or scheduler:
-there are no request fibers, yielding effects, socket deadlines, or concurrent
-application execution. The socket fixture continues to cover nonblocking transport
-and backpressure independently. Production scheduling and effect cancellation remain
+Each invocation runs on a request fiber with fiber-local allocation context. The
+first hosted sleep detaches its live request heap and advances the shared request
+generation; later waits reuse the detached heap. A peer can complete while that
+invocation waits, and the original request metadata/body remain valid on resume.
+Reset and disconnect invalidate submission but retain the running lease until
+normal execution cleanup. The fixture verifies two sleeps per delayed invocation,
+normal completion, reset during a wait, and disconnect with a wait outstanding.
+
+These are byte-driven integration checks, not a production listener or scheduler.
+Empty input records drain timer waits explicitly; no wait registry, cross-thread
+resumption, socket waits, immediate effect cancellation, or crash isolation is
+exercised. A reset invocation resumes its effects to completion and discards its
+late response. The socket fixture continues to cover nonblocking transport and
+backpressure independently. Production scheduling and effect cancellation remain
 required before HTTP/2 is available to applications.

@@ -1,5 +1,6 @@
 app [program] { pf: platform "../../platform/main.roc" }
 
+import pf.Sleep
 import pf.Handler
 import pf.MethodRouter
 import pf.Reply
@@ -27,9 +28,17 @@ init! = |{}| Ok({
 
 routes : Router(Model, [], {})
 routes = {
-	handler = Handler.stateful(answer)
+	handler = Handler.effectful(wait_and_answer!)
 	methods = MethodRouter.methods([MethodRouter.get(handler), MethodRouter.post(handler)])
-	Router.new.route("/echo", methods).route("/reject", methods).route("/invalid-response", methods)
+	Router.new.route("/echo", methods).route("/reject", methods).route("/invalid-response", methods).route("/sleep", methods)
+}
+
+wait_and_answer! = |model, context| {
+	if context.request.path == "/sleep" {
+		Sleep.millis!(2)
+		Sleep.millis!(2)
+	}
+	answer(model, context)
 }
 
 answer = |Model.(number), context| {
