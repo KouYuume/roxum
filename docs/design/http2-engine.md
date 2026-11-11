@@ -152,3 +152,34 @@ a different connection token when replacing the registry.
 The independent-client fixture uses these leases around its finite echo execution.
 Production worker dispatch, cross-thread completion messages, and cancellation of
 Roc effects are still pending; lease bookkeeping alone does not implement them.
+
+## Request metadata mapping
+
+`bridge.requestFromHttp2` accepts a complete, admitted initial field section after
+engine validation. It must run outside engine callbacks, with copied input kept
+alive until conversion returns; a rejected prefix or request trailers are not an
+initial field section. The owner remains responsible for wire validation, header
+and body limits, and stream admission. This adapter is not yet wired into the
+production owner or Roc scheduler.
+
+The adapter recognizes the existing eight application methods and sets
+`Http.Version.Http20`. It rejects missing, repeated, unknown, or out-of-order
+pseudo-headers, unsupported methods (including CONNECT and TRACE), invalid schemes,
+and targets outside origin-form or OPTIONS `*`. It reuses the HTTP/1 target syntax
+and path policy without percent-decoding path or query bytes. The scheme is
+validated but is not stored in the current Roc request representation.
+
+A nonempty valid authority is required, using `:authority` or a single fallback
+`host`. The adapter emits one `host` field so existing authority helpers work.
+When both inputs exist they must match ignoring ASCII case; no default-port,
+percent-escape, or IP spelling equivalence is inferred. This conservative policy
+rejects ambiguous authority metadata. Pseudo-headers are removed from the ordinary
+header list. Repeated ordinary fields retain their order, except Cookie fields,
+which become one field at the first Cookie position joined with `; `, as required
+by [RFC 9113 section 8.2.3](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.2.3).
+
+The caller supplies a budgeted scratch allocator for the normalized field array
+and any joined Cookie bytes. Temporary storage is freed on success and failure;
+the shared request builder copies the result into Roc ownership and rolls back
+partial allocations. Only finite body bytes are supported here. This mapping
+adds no listener negotiation, body reader, or application dispatch capability.

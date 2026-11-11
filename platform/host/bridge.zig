@@ -23,6 +23,7 @@ pub const RequestError = request.RequestError;
 pub const RequestMetadata = request.Metadata;
 pub const RequestMetadataHeader = request.MetadataHeader;
 pub const requestFromMetadata = request.requestFromMetadata;
+pub const requestFromHttp2 = @import("bridge/http2_request.zig").requestFromHttp2;
 pub const requestFromParsed = request.requestFromParsed;
 pub const requestFromParsedStream = request.requestFromParsedStream;
 pub const validateParsedRequestHead = request.validateParsedHead;

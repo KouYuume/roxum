@@ -66,8 +66,10 @@ only remain valid until conversion returns.
 
 The metadata entry accepts origin-form or asterisk targets and finite body bytes.
 `Http.Version.Http20` represents HTTP/2 in the public metadata type. The entry
-does not map pseudo-headers or install an HTTP/2 body reader. Production listeners
-still accept only HTTP/1.0 and HTTP/1.1. Those transport and ABI changes remain separate work.
+has a separate HTTP/2 adapter for initial field sections, described in
+[the engine contract](http2-engine.md#request-metadata-mapping). Neither entry
+installs an HTTP/2 body reader. Production listeners still accept only HTTP/1.0
+and HTTP/1.1; worker dispatch and stream body capabilities remain separate work.
 
 Code that exhaustively matches `Http.Version` must also handle `Http20`. Build
 Roc platform sources and host archives together after this enum extension;
