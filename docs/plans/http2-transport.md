@@ -164,7 +164,10 @@ registry now combines input and leases, emits work outside callbacks, and pins
 closed running slots until execution cleanup; the independent fixture uses it.
 A finite Roc response adapter now normalizes fields and retains response ownership
 until copying engine submission; production invocation and response dispatch
-remain pending.
+remain pending. The owner now submits finite Roc responses using a checked
+execution ticket, consumes them on every outcome, and releases conversion scratch
+before returning. Independent-client tests exercise this path with synthetic Roc
+values; live Roc application dispatch remains pending.
 Trailer/deadline APIs and their
 Roc integration can follow in focused changes within milestone 1; do not claim
 native gRPC support until the later integration gates pass.
