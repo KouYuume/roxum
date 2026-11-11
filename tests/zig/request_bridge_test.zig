@@ -892,6 +892,7 @@ test "metadata entry preserves root and asterisk requests including empty values
     for ([_]Case{
         .{ .target = "/", .method = bridge.HttpMethod.get, .version = Version.http11, .body = "payload", .id = "request-id" },
         .{ .target = "*", .method = bridge.HttpMethod.options, .version = Version.http10, .body = "", .id = "" },
+        .{ .target = "/rpc", .method = bridge.HttpMethod.post, .version = Version.http20, .body = "rpc bytes", .id = "http2-id" },
     }) |case| {
         var environment = TestEnvironment{ .allocator = std.testing.allocator };
         var roc_host = environment.rocHost();

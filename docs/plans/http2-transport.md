@@ -152,7 +152,8 @@ owner can record admission and deadline metadata before body waits. A bounded
 request-lease registry now separates protocol closure from execution completion
 and is exercised by the independent-client fixture; production worker dispatch
 and effect cancellation remain pending. The Roc request bridge now has a borrowed
-metadata entry sharing the HTTP/1 allocation/ownership builder; HTTP/2 version
-exposure, pseudo-header mapping, and stream body capabilities remain pending. Trailer/deadline APIs and their
+metadata entry sharing the HTTP/1 allocation/ownership builder; the metadata type can
+represent HTTP/2 as `Http.Version.Http20`. Pseudo-header mapping and stream body
+capabilities remain pending. Trailer/deadline APIs and their
 Roc integration can follow in focused changes within milestone 1; do not claim
 native gRPC support until the later integration gates pass.

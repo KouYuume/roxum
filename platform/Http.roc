@@ -34,9 +34,9 @@ Http :: [].{
 			}
 	}
 
-	## The HTTP version of a request: HTTP/1.0 or HTTP/1.1. The host answers
-	## other versions itself, so a handler never sees them.
-	Version := [Http10, Http11].{
+	## The HTTP version carried by request metadata. Http20 represents HTTP/2;
+	## production listeners currently accept only HTTP/1.0 and HTTP/1.1.
+	Version := [Http10, Http11, Http20].{
 		is_eq : _
 	}
 
@@ -279,4 +279,16 @@ expect {
 		request_id: "test",
 	}
 	Http.Request.authority(request) == Err(MissingAuthority)
+}
+
+
+expect {
+	versions = [Http.Version.Http10, Http.Version.Http11, Http.Version.Http20]
+	List.map(versions, |version|
+		match version {
+			Http.Version.Http10 => 10
+			Http.Version.Http11 => 11
+			Http.Version.Http20 => 20
+		},
+	) == [10, 11, 20]
 }
