@@ -150,6 +150,47 @@ const BodySource = union(enum) {
     stream: u64,
 };
 
+/// Borrowed, validated transport metadata. Values are copied into Roc ownership.
+pub const MetadataHeader = struct { name: []const u8, value: []const u8 };
+pub const Metadata = struct {
+    method: abi.HttpMethod,
+    target: []const u8,
+    version: abi.HttpVersion,
+    headers: []const MetadataHeader,
+};
+
+const ParsedHeaders = struct {
+    bytes: []const u8,
+    headers: []const Header,
+    fn len(self: @This()) usize {
+        return self.headers.len;
+    }
+    fn at(self: @This(), index: usize) RequestError!MetadataHeader {
+        const header = self.headers[index];
+        return .{ .name = try checkedSlice(self.bytes, header.name), .value = try checkedSlice(self.bytes, header.value) };
+    }
+};
+const MetadataHeaders = struct {
+    headers: []const MetadataHeader,
+    fn len(self: @This()) usize {
+        return self.headers.len;
+    }
+    fn at(self: @This(), index: usize) RequestError!MetadataHeader {
+        return self.headers[index];
+    }
+};
+
+/// The transport validates method/header and target wire syntax, including
+/// controls, fragments, and percent escapes, before supplying an origin-form or
+/// asterisk target.
+/// This builder enforces the same path policy and allocation rollback as HTTP/1.
+pub fn requestFromMetadata(metadata: Metadata, body: []const u8, remote: RemoteAddress, id: []const u8, host: RequestHost) RequestError!abi.HttpRequest {
+    if (metadata.target.len == 0 or (metadata.target[0] != '/' and !std.mem.eql(u8, metadata.target, "*"))) return error.InvalidTarget;
+    const target = splitPathAndQuery(metadata.target);
+    try validatePath(target.path);
+    return buildRequest(.{ .method = metadata.method, .raw_target = metadata.target, .target = target }, metadata.version, MetadataHeaders{ .headers = metadata.headers }, .{ .bytes = body }, remote, id, host);
+}
+
 fn requestFromParsedBody(
     bytes: []const u8,
     request_line: RequestLine,
@@ -159,10 +200,15 @@ fn requestFromParsedBody(
     request_id: []const u8,
     host: RequestHost,
 ) RequestError!abi.HttpRequest {
-    const parsed_head = try parseHead(bytes, request_line);
+    return buildRequest(try parseHead(bytes, request_line), switch (request_line.version) {
+        http1.HttpVersion.http_1_0 => abi.HttpVersion.http10,
+        http1.HttpVersion.http_1_1 => abi.HttpVersion.http11,
+    }, ParsedHeaders{ .bytes = bytes, .headers = headers }, body_source, remote_address, request_id, host);
+}
 
+fn buildRequest(parsed_head: ParsedHead, version: abi.HttpVersion, headers: anytype, body_source: BodySource, remote_address: RemoteAddress, request_id: []const u8, host: RequestHost) RequestError!abi.HttpRequest {
     var shared = try SharedBytes.init(
-        try sharedLength(bytes, parsed_head, headers, request_id),
+        try sharedLength(parsed_head, headers, request_id),
         host,
     );
     // Runs after the errdefers below: each value built holds its own
@@ -178,8 +224,7 @@ fn requestFromParsedBody(
     const query = shared.list(parsed_head.target.query);
     errdefer query.decref(host.roc_host);
 
-    const request_headers = try requestHeadersFromParsed(
-        bytes,
+    const request_headers = try requestHeaders(
         headers,
         &shared,
         host,
@@ -211,10 +256,7 @@ fn requestFromParsedBody(
         .remote_addr = remoteAddressToRoc(remote_address),
         .request_id = roc_request_id,
         .method = parsed_head.method,
-        .version = switch (request_line.version) {
-            http1.HttpVersion.http_1_0 => abi.HttpVersion.http10,
-            http1.HttpVersion.http_1_1 => abi.HttpVersion.http11,
-        },
+        .version = version,
     };
 }
 
@@ -313,16 +355,15 @@ fn classifyMethod(method: []const u8) ?abi.HttpMethod {
     return null;
 }
 
-fn requestHeadersFromParsed(
-    bytes: []const u8,
-    headers: []const Header,
+fn requestHeaders(
+    headers: anytype,
     shared: *SharedBytes,
     host: RequestHost,
 ) RequestError!abi.RocList(abi.HttpRequestHeader) {
     var result = try allocateRocList(
         abi.HttpRequestHeader,
         true,
-        headers.len,
+        headers.len(),
         host,
     );
     var initialized: usize = 0;
@@ -334,9 +375,10 @@ fn requestHeadersFromParsed(
     }
 
     const output = result.elements_ptr orelse return result;
-    for (headers) |header| {
-        const name_bytes = try checkedSlice(bytes, header.name);
-        const value_bytes = try checkedSlice(bytes, header.value);
+    for (0..headers.len()) |index| {
+        const header = try headers.at(index);
+        const name_bytes = header.name;
+        const value_bytes = header.value;
         output[initialized] = .{
             .name = shared.str(name_bytes, SharedBytes.Case.lower),
             .value = shared.list(value_bytes),
@@ -349,9 +391,8 @@ fn requestHeadersFromParsed(
 /// The bytes `SharedBytes` must hold for one request: every byte value except
 /// strings short enough to be stored inline.
 fn sharedLength(
-    bytes: []const u8,
     parsed_head: ParsedHead,
-    headers: []const Header,
+    headers: anytype,
     request_id: []const u8,
 ) RequestError!usize {
     var total: usize = 0;
@@ -366,9 +407,10 @@ fn sharedLength(
     try add.list(&total, parsed_head.raw_target.len);
     try add.str(&total, parsed_head.target.path.len);
     try add.list(&total, parsed_head.target.query.len);
-    for (headers) |header| {
-        try add.str(&total, (try checkedSlice(bytes, header.name)).len);
-        try add.list(&total, (try checkedSlice(bytes, header.value)).len);
+    for (0..headers.len()) |index| {
+        const header = try headers.at(index);
+        try add.str(&total, header.name.len);
+        try add.list(&total, header.value.len);
     }
     try add.str(&total, request_id.len);
     return total;

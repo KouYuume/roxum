@@ -54,3 +54,16 @@ A crash outside a request fiber, host panic, or stack overflow terminates the wo
 The event loop owns final connection closure. Lingering close shuts down writes and drains unread input under bounded byte/time limits to reduce resets that could discard the response. This differs from unread-body cleanup for keep-alive, which only skips data already buffered.
 
 See [streaming lifecycle](streaming.md) for response cancellation and [deployment](../guides/deployment.md) for limits and draining. Validation includes `zig build test-contract`, `zig build test-tcp`, and Linux `zig build test-tsan`, as well as E2E tests across backends and allocator modes.
+
+## Request metadata conversion
+
+The request bridge shares one Roc-value builder between HTTP/1 parsed spans and
+borrowed transport metadata. The transport validates method, header, and request-target wire syntax (including
+control characters, fragments, and percent escapes) and supplies the request version; the builder checks target/path policy, normalizes
+header names, and copies metadata into Roc-owned storage. Allocation failure
+releases partially built values and the shared byte backing. Input slices need
+only remain valid until conversion returns.
+
+The metadata entry accepts origin-form or asterisk targets and finite body bytes.
+It does not add an HTTP/2 version to the public API, map pseudo-headers, or install
+an HTTP/2 body reader. Those transport and ABI changes remain separate work.
