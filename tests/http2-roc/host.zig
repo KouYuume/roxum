@@ -54,7 +54,7 @@ fn main() callconv(std.builtin.CallingConvention.c) c_int {
 }
 
 fn run() !void {
-    var environment = Environment.init(std.heap.smp_allocator);
+    var environment = if (tracking) Environment.init(std.heap.smp_allocator) else Environment.production();
     defer environment.deinit();
     var allocator = environment.hostAllocator();
     var roc_host = host.runtime.makeRocHost(&environment);

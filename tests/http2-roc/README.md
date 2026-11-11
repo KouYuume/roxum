@@ -18,6 +18,7 @@ length, routing errors, exact completion/reset sets, and cleanup counts. Twenty
 repeated calls exceed the sixteen-slot registry capacity over successive turns.
 
 The real `roc_init` and `roc_handle` run with production allocation contexts.
+The arena variant uses the production slab allocator and block cache.
 Request live bytes must be zero before reset, and output is serialized only after
 the request generation ends. Tracking additionally verifies the persistent baseline,
 canaries, and invalid frees; the fixture's numeric model must leave zero persistent
