@@ -1,4 +1,4 @@
-//! A bounded connection allocation domain for the engine's C allocator hooks.
+//! A bounded connection allocation domain for engine and input storage.
 //! Prefixes account for sizes and alignment; request arenas are never borrowed.
 const std = @import("std");
 const alignment = std.mem.Alignment.fromByteUnits(16);
@@ -9,6 +9,28 @@ pub const Memory = struct {
     limit: usize,
     used: usize = 0,
     peak: usize = 0,
+
+    /// Serialized by the connection owner. The Memory address must remain stable
+    /// until all allocations are released. Alignments above 16 are unsupported.
+    pub fn allocator(self: *Memory) std.mem.Allocator {
+        return .{ .ptr = self, .vtable = &.{
+            .alloc = allocBytes,
+            .resize = std.mem.Allocator.noResize,
+            .remap = std.mem.Allocator.noRemap,
+            .free = freeBytes,
+        } };
+    }
+
+    fn allocBytes(context: *anyopaque, size: usize, requested_alignment: std.mem.Alignment, _: usize) ?[*]u8 {
+        if (requested_alignment.toByteUnits() > 16) return null;
+        const self: *Memory = @ptrCast(@alignCast(context));
+        return @ptrCast(self.allocate(size) orelse return null);
+    }
+
+    fn freeBytes(context: *anyopaque, bytes: []u8, _: std.mem.Alignment, _: usize) void {
+        const self: *Memory = @ptrCast(@alignCast(context));
+        self.release(bytes.ptr);
+    }
 
     pub fn allocate(self: *Memory, size: usize) ?*anyopaque {
         const total = std.math.add(usize, size, prefix_size) catch return null;
@@ -73,4 +95,20 @@ test "failed growth preserves allocation and bytes; resize to zero frees" {
     try std.testing.expect(memory.resize(moved, 0) == null);
     try std.testing.expectEqual(@as(usize, 0), memory.used);
     try std.testing.expect(memory.allocate(std.math.maxInt(usize)) == null);
+}
+
+test "Zig allocator supports alignments below and at 16 and rejects above" {
+    var memory = Memory{ .backing = std.testing.allocator, .limit = 1024 };
+    const allocator = memory.allocator();
+    for ([_]usize{ 8, 16, 32 }) |bytes| {
+        const requested = std.mem.Alignment.fromByteUnits(bytes);
+        const allocation = allocator.rawAlloc(1, requested, @returnAddress());
+        try std.testing.expectEqual(bytes <= 16, allocation != null);
+        if (allocation) |ptr| {
+            try std.testing.expectEqual(@as(usize, 0), @intFromPtr(ptr) % bytes);
+            try std.testing.expectEqual(@as(usize, 17), memory.used);
+            allocator.rawFree(ptr[0..1], requested, @returnAddress());
+        }
+        try std.testing.expectEqual(@as(usize, 0), memory.used);
+    }
 }

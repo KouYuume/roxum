@@ -1,6 +1,7 @@
 //! Independent-client fixture for the engine, not a production listener.
 const std = @import("std");
 const http2 = @import("http2_engine").engine;
+const input = @import("http2_engine").input;
 const leases = @import("http2_engine").requests;
 const transport = @import("http2_engine").owner;
 const readiness = @import("http2_engine").poller;
@@ -9,12 +10,12 @@ extern "c" fn setsockopt(c_int, c_int, c_int, *const anyopaque, u32) c_int;
 
 const Request = struct {
     id: ?http2.StreamId = null,
-    body: [4096]u8 = undefined,
-    length: usize = 0,
-    ended: bool = false,
+    input: ?input.Input = null,
+    rejected: bool = false,
     sent: bool = false,
 };
 const State = struct {
+    budget: input.Budget = .{ .backing = std.heap.smp_allocator, .limit = 128 * 1024 },
     leases: leases.Requests = .{ .connection = 0 },
     requests: [16]Request = @splat(.{}),
     closed: usize = 0,
@@ -29,7 +30,7 @@ const State = struct {
         for (&self.requests) |*r| {
             if (r.id != null) continue;
             _ = self.leases.open(id) catch @panic("fixture lease capacity exceeded");
-            r.* = .{ .id = id };
+            r.* = .{ .id = id, .input = input.Input.init(&self.budget, .{ .header_bytes = 1024, .body_bytes = 4096 }) };
             self.admitted += 1;
             self.active += 1;
             self.peak_streams = @max(self.peak_streams, self.active);
@@ -37,21 +38,37 @@ const State = struct {
         }
         @panic("fixture stream capacity exceeded");
     }
-    fn header(ctx: *anyopaque, id: http2.StreamId, _: http2.Header) void {
-        _ = from(ctx).request(id);
+    fn header(ctx: *anyopaque, id: http2.StreamId, field: http2.Header) void {
+        const r = from(ctx).request(id);
+        if (r.rejected) return;
+        r.input.?.header(field) catch {
+            r.rejected = true;
+        };
     }
     fn headersComplete(ctx: *anyopaque, id: http2.StreamId) void {
         const self = from(ctx);
+        const r = self.request(id);
+        if (r.rejected) return;
+        r.input.?.headersComplete() catch {
+            r.rejected = true;
+            return;
+        };
         const ticket = self.leases.find(id) orelse unreachable;
         std.debug.assert(self.leases.ready(ticket, net.monotonicNanoseconds() catch unreachable));
     }
     fn data(ctx: *anyopaque, id: http2.StreamId, bytes: []const u8) void {
         const r = from(ctx).request(id);
-        @memcpy(r.body[r.length..][0..bytes.len], bytes);
-        r.length += bytes.len;
+        if (r.rejected) return;
+        r.input.?.data(bytes) catch {
+            r.rejected = true;
+        };
     }
     fn end(ctx: *anyopaque, id: http2.StreamId) void {
-        from(ctx).request(id).ended = true;
+        const r = from(ctx).request(id);
+        if (r.rejected) return;
+        r.input.?.end() catch {
+            r.rejected = true;
+        };
     }
     fn close(ctx: *anyopaque, id: http2.StreamId) void {
         const self = from(ctx);
@@ -59,6 +76,7 @@ const State = struct {
         self.closed += 1;
         for (&self.requests) |*entry| {
             if (entry.id != id) continue;
+            entry.input.?.deinit();
             entry.* = .{};
             self.active -= 1;
             return;
@@ -77,6 +95,11 @@ const Connection = struct {
         std.debug.print("closed={d} peak={d} admitted={d} active={d} peak_streams={d}\n", .{ self.state.closed, owner.engine.memory.peak, self.state.admitted, self.state.active, self.state.peak_streams });
         self.state.leases.disconnect();
         owner.deinit();
+        for (&self.state.requests) |*r| {
+            if (r.input) |*buffer| buffer.deinit();
+            r.* = .{};
+        }
+        std.debug.assert(self.state.budget.used == 0);
         self.owner = null;
     }
 
@@ -85,17 +108,36 @@ const Connection = struct {
         // Bound each turn even when a peer continuously sends or reads.
         for (0..32) |_| {
             for (&self.state.requests) |*r| {
-                if (!r.ended or r.sent) continue;
+                if (r.id == null or r.sent) continue;
+                if (r.rejected) {
+                    try owner.cancel(r.id.?);
+                    r.sent = true;
+                    continue;
+                }
+                const buffer = &r.input.?;
+                const body = buffer.body() orelse continue;
                 const ticket = self.state.leases.find(r.id.?) orelse unreachable;
                 _ = self.state.leases.claim(ticket) orelse unreachable;
                 defer std.debug.assert(self.state.leases.finish(ticket));
                 var length_buffer: [20]u8 = undefined;
-                const length = try std.fmt.bufPrint(&length_buffer, "{d}", .{r.length});
+                const length = try std.fmt.bufPrint(&length_buffer, "{d}", .{body.len});
+                const fields = buffer.headers().?;
+                var count_buffer: [20]u8 = undefined;
+                const field_count = try std.fmt.bufPrint(&count_buffer, "{d}", .{fields.len});
+                var path: []const u8 = "";
+                for (fields) |field| {
+                    if (std.mem.eql(u8, field.name, ":path")) path = field.value;
+                }
+                var path_length_buffer: [20]u8 = undefined;
+                const path_length = try std.fmt.bufPrint(&path_length_buffer, "{d}", .{path.len});
                 try owner.respond(r.id.?, 200, &.{
                     .{ .name = "content-type", .value = "application/octet-stream" },
                     .{ .name = "content-length", .value = length },
-                }, r.body[0..r.length]);
-                @memset(r.body[0..r.length], 0xa5);
+                    .{ .name = "x-initial-fields", .value = field_count },
+                    .{ .name = "x-request-path", .value = path[0..@min(path.len, 64)] },
+                    .{ .name = "x-request-path-length", .value = path_length },
+                }, body);
+                @memset(buffer.bytes.items, 0xa5);
                 r.sent = true;
             }
             const progress = owner.step() catch |err| switch (err) {
@@ -119,6 +161,10 @@ const Connection = struct {
 };
 
 pub fn main() !void {
+    const input_budget = if (std.c.getenv("ROXUM_TEST_HTTP2_INPUT_BUDGET")) |value|
+        try std.fmt.parseInt(usize, std.mem.span(value), 10)
+    else
+        128 * 1024;
     const ignore = std.posix.Sigaction{ .handler = .{ .handler = std.posix.SIG.IGN }, .mask = std.posix.sigemptyset(), .flags = 0 };
     std.posix.sigaction(std.posix.SIG.PIPE, &ignore, null);
     const listener = try net.listenIpv4(.{ 127, 0, 0, 1 }, 0);
@@ -178,6 +224,7 @@ pub fn main() !void {
                 errdefer net.closeSocket(accepted.socket);
                 connection.* = .{};
                 connection.state.leases.connection = next_token;
+                connection.state.budget.limit = input_budget;
                 // A small send buffer makes real socket backpressure reachable
                 // without an unbounded response or platform-specific defaults.
                 const send_buffer: c_int = 4096;

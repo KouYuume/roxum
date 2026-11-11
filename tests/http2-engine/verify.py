@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Independent wire checks for the internal engine's finite-response contract."""
 import argparse
+import os
 from collections import defaultdict
 import select
 import socket
@@ -28,6 +29,7 @@ def verify(executable):
         conn.initiate_connection()
         conn.update_settings({SettingCodes.INITIAL_WINDOW_SIZE: 16})
         body, status, ended, reset = defaultdict(bytes), {}, set(), set()
+        response_fields = {}
 
         def flush():
             sock.sendall(conn.data_to_send())
@@ -44,7 +46,8 @@ def verify(executable):
                         if event.flow_controlled_length:
                             conn.increment_flow_control_window(event.flow_controlled_length)
                     elif isinstance(event, ResponseReceived):
-                        status[event.stream_id] = dict(event.headers)[':status']
+                        response_fields[event.stream_id] = dict(event.headers)
+                        status[event.stream_id] = response_fields[event.stream_id][':status']
                     elif isinstance(event, StreamEnded):
                         ended.add(event.stream_id)
                     elif isinstance(event, StreamReset):
@@ -54,9 +57,9 @@ def verify(executable):
                 flush()
                 assert time.monotonic() < deadline, 'progress timeout'
 
-        def request(stream, payload=b'', extra=(), end=True, method='POST'):
+        def request(stream, payload=b'', extra=(), end=True, method='POST', path='/'):
             conn.send_headers(stream, [(':method', method), (':scheme', 'http'),
-                                      (':authority', 'localhost'), (':path', '/'), *extra], end_stream=end and not payload)
+                                      (':authority', 'localhost'), (':path', path), *extra], end_stream=end and not payload)
             if payload:
                 conn.send_data(stream, payload, end_stream=end)
             flush()
@@ -132,9 +135,36 @@ def verify(executable):
         request(97, b'after reject')
         completed(97, b'after reject')
 
+        # Input survives callback batches; trailers never enter initial metadata.
+        conn.send_headers(99, [(':method', 'POST'), (':scheme', 'http'),
+                               (':authority', 'localhost'), (':path', '/owned?x=%2F'),
+                               ('x-repeat', 'first'), ('x-repeat', 'second')])
+        conn.send_data(99, b'part-')
+        flush()
+        conn.send_data(99, b'two')
+        conn.send_headers(99, [('x-trailer', 'discarded')], end_stream=True)
+        flush()
+        completed(99, b'part-two')
+        assert response_fields[99]['x-request-path'] == '/owned?x=%2F'
+        assert response_fields[99]['x-initial-fields'] == '6'
+
+        # Initial header accounting is 174 + path length. A valid long path
+        # must not overflow the fixture's diagnostic response headers.
+        for stream, path_length in [(101, 849), (103, 850), (105, 851)]:
+            path = '/' + 'a' * (path_length - 1)
+            request(stream, path=path)
+            if path_length == 851:
+                until(lambda: stream in reset)
+            else:
+                completed(stream, b'')
+                assert response_fields[stream]['x-request-path'] == path[:64]
+                assert response_fields[stream]['x-request-path-length'] == str(path_length)
+        request(107, b'after long path')
+        completed(107, b'after long path')
+
         # Disconnect with engine-owned response bytes still flow controlled.
-        request(99, b'x' * 4096)
-        until(lambda: len(body[99]) == 16)
+        request(109, b'x' * 4096)
+        until(lambda: len(body[109]) == 16)
         sock.close()
         sock = None
         _, stderr = process.communicate(timeout=10)
@@ -142,6 +172,81 @@ def verify(executable):
         print('PASS multiplexing/reset, partial output, owned responses, 15/16/17 output, '
               'body/header bounds, 16 admitted streams, disconnect cleanup')
         print(stderr.strip())
+    finally:
+        if sock is not None:
+            sock.close()
+        if process.poll() is None:
+            process.kill()
+        process.wait()
+
+
+def verify_input_budget(executable):
+    """Input budget failure resets one stream and releases capacity for reuse."""
+    env = dict(os.environ, ROXUM_TEST_HTTP2_INPUT_BUDGET='2048')
+    process = subprocess.Popen([executable], stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True, env=env)
+    sock = None
+    try:
+        assert select.select([process.stdout], [], [], 5)[0], 'startup timeout'
+        sock = socket.create_connection(('127.0.0.1', int(process.stdout.readline())), timeout=5)
+        conn = H2Connection(config=H2Configuration(client_side=True, header_encoding='utf-8'))
+        conn.initiate_connection()
+        bodies, ended, reset = defaultdict(bytes), set(), set()
+
+        def flush():
+            sock.sendall(conn.data_to_send())
+
+        def until(predicate):
+            deadline = time.monotonic() + 5
+            while not predicate():
+                sock.settimeout(max(.001, deadline - time.monotonic()))
+                data = sock.recv(65536)
+                assert data, 'unexpected EOF after input budget rejection'
+                for event in conn.receive_data(data):
+                    if isinstance(event, DataReceived):
+                        bodies[event.stream_id] += event.data
+                        conn.acknowledge_received_data(event.flow_controlled_length, event.stream_id)
+                    elif isinstance(event, StreamEnded):
+                        ended.add(event.stream_id)
+                    elif isinstance(event, StreamReset):
+                        reset.add(event.stream_id)
+                    elif isinstance(event, ConnectionTerminated):
+                        raise AssertionError(f'input rejection closed connection: {event}')
+                flush()
+                assert time.monotonic() < deadline, 'input budget progress timeout'
+
+        def start(stream):
+            conn.send_headers(stream, [(':method', 'POST'), (':scheme', 'http'),
+                                       (':authority', 'localhost'), (':path', '/')])
+
+        start(1)
+        conn.send_data(1, b'held')
+        start(3)
+        # Below the engine's 4096-byte body cap, but above the shared input budget.
+        conn.send_data(3, b'x' * 2048, end_stream=True)
+        flush()
+        until(lambda: 3 in reset)
+        assert 1 not in reset
+        conn.end_stream(1)
+        flush()
+        until(lambda: 1 in ended)
+        assert bodies[1] == b'held'
+        # Repeated rejection cannot consume the budget or the lease slots.
+        for stream in range(5, 39, 2):
+            start(stream)
+            conn.send_data(stream, b'x' * 2048, end_stream=True)
+            flush()
+            until(lambda: stream in reset)
+        start(39)
+        conn.send_data(39, b'reused', end_stream=True)
+        flush()
+        until(lambda: 39 in ended)
+        assert bodies[39] == b'reused'
+        sock.close()
+        sock = None
+        _, stderr = process.communicate(timeout=10)
+        assert process.returncode == 0, stderr
+        print('PASS input budget rejection, unrelated stream progress, repeated reset and budget reuse')
     finally:
         if sock is not None:
             sock.close()
@@ -367,6 +472,7 @@ if __name__ == '__main__':
     parser.add_argument('server')
     executable = parser.parse_args().server
     verify(executable)
+    verify_input_budget(executable)
     for count in (15, 16, 17):
         verify_admission(executable, count)
     verify_connections(executable)
