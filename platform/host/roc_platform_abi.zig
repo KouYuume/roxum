@@ -2892,6 +2892,7 @@ comptime {
 pub const HttpVersion = enum(u8) {
     @"http10" = 0,
     @"http11" = 1,
+    @"http20" = 2,
     /// Recursively decrement Roc-owned payloads.
     pub fn decref(self: @This(), roc_host: *RocHost) void {
         _ = self;

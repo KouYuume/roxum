@@ -65,5 +65,11 @@ releases partially built values and the shared byte backing. Input slices need
 only remain valid until conversion returns.
 
 The metadata entry accepts origin-form or asterisk targets and finite body bytes.
-It does not add an HTTP/2 version to the public API, map pseudo-headers, or install
-an HTTP/2 body reader. Those transport and ABI changes remain separate work.
+`Http.Version.Http20` represents HTTP/2 in the public metadata type. The entry
+does not map pseudo-headers or install an HTTP/2 body reader. Production listeners
+still accept only HTTP/1.0 and HTTP/1.1. Those transport and ABI changes remain separate work.
+
+Code that exhaustively matches `Http.Version` must also handle `Http20`. Build
+Roc platform sources and host archives together after this enum extension;
+regenerated glue defines the shared tag representation. The metadata value does
+not enable HTTP/2 listener negotiation.

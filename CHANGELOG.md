@@ -6,6 +6,8 @@ Changes to the roxum platform and its integrations, newest first. The platform a
 
 ### Breaking changes
 
+- `Http.Version` includes `Http20`; exhaustive matches must handle the new variant. This represents HTTP/2 request metadata; production listeners still accept only HTTP/1.0 and HTTP/1.1.
+
 - Listener settings use `Server.Endpoint.Tcp({ address, port })` or `Server.Endpoint.Unix({ path })`; request peers use `RemoteAddr.Tcp({ ip, port })` or `RemoteAddr.Unix`. Match on the transport before using IP-based policies.
 
 - Application and metrics listener addresses now use `IpAddr.V4` / `IpAddr.V6` instead of `Server.Ipv4Address`. Import `pf.IpAddr` and replace `Server.Ipv4Address.(a, b, c, d)` with `IpAddr.V4((a, b, c, d))`.
