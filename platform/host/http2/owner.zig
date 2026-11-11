@@ -4,6 +4,8 @@ const std = @import("std");
 const protocol = @import("engine.zig");
 const net = @import("../net.zig");
 const bridge = @import("../bridge.zig");
+const request = @import("../bridge/http2_request.zig");
+const request_types = @import("../bridge/request.zig");
 const response = @import("../bridge/http2_response.zig");
 const streams = @import("streams.zig");
 const readiness = @import("../net/poller.zig");
@@ -52,6 +54,18 @@ pub const Owner = struct {
         if (self.terminal) return error.Closed;
         try self.engine.respond(id, status, headers, body);
         self.runnable = true;
+    }
+
+    /// Transfer finite input to the active Roc request domain outside callbacks.
+    /// Reject invalid execution/protocol identities without touching input. Once
+    /// conversion starts, input is consumed on success or failure. The caller
+    /// owns the returned request and must finish the lease after its cleanup.
+    pub fn requestOwned(self: *Owner, registry: *streams.Streams, ticket: streams.Ticket, remote: bridge.RemoteAddress, request_id: []const u8, host: bridge.RequestHost) (Error || request.Error)!request_types.HttpRequest {
+        if (self.terminal or registry.leases.connection != self.token) return error.Closed;
+        const id = registry.leases.runningStream(ticket) orelse return error.Closed;
+        try self.engine.checkDispatchable(id);
+        const buffer = registry.runningInput(ticket) orelse return error.Closed;
+        return request.requestFromHttp2Input(buffer, remote, request_id, host);
     }
 
     /// Consumes one Roc response on every outcome. The serialized owner must

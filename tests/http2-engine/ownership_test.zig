@@ -209,3 +209,103 @@ test "owned submission rolls back every partial allocation before successful sub
         try std.testing.expectEqual(failing.allocations, failing.deallocations);
     }
 }
+
+test "owned request consumes input once and survives protocol closure" {
+    var fixture: Fixture = .{};
+    try fixture.init();
+    defer fixture.deinit();
+    const work = fixture.registry.next().?.execute;
+    defer _ = fixture.registry.finish(work.ticket);
+    var environment = values.Environment{ .allocator = std.testing.allocator };
+    var host = environment.rocHost();
+    const request = try fixture.owner.requestOwned(&fixture.registry, work.ticket, bridge.RemoteAddress.unix, "owned-request-id", values.Environment.requestHost(&host));
+    {
+        defer request.decref(&host);
+        try std.testing.expectEqual(@as(usize, 0), fixture.budget.used);
+        try std.testing.expectError(error.InvalidState, fixture.owner.requestOwned(&fixture.registry, work.ticket, bridge.RemoteAddress.unix, "", values.Environment.requestHost(&host)));
+        fixture.registry.close(work.id);
+        try std.testing.expectEqualStrings("/", request.raw_target.items());
+        try std.testing.expectEqualStrings("localhost", request.headers.items()[0].value.items());
+        try std.testing.expectEqualStrings("owned-request-id", request.request_id.asSlice());
+        try std.testing.expectEqual(bridge.HttpMethod.post, request.method);
+    }
+    try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
+    try std.testing.expect(fixture.registry.finish(work.ticket));
+}
+
+test "owned request rejects invalid leases and pending protocol cancellation before allocation" {
+    const Case = enum { queued, finished, reset, disconnected, wrong_connection, wrong_sequence, wrong_slot, terminal, wrong_owner, cancelled, responded, reentrant, failed };
+    for (std.enums.values(Case)) |case| {
+        var fixture: Fixture = .{};
+        try fixture.init();
+        defer fixture.deinit();
+        const id: http2.engine.StreamId = @fromBackingInt(@intCast(1));
+        const ticket = fixture.registry.leases.find(id).?;
+        if (case != Case.queued) _ = fixture.registry.next().?.execute;
+        defer _ = fixture.registry.finish(ticket);
+        var submitted = ticket;
+        switch (case) {
+            Case.queued => {},
+            Case.finished => try std.testing.expect(fixture.registry.finish(ticket)),
+            Case.reset => fixture.registry.close(id),
+            Case.disconnected => fixture.registry.disconnect(),
+            Case.wrong_connection => submitted.connection += 1,
+            Case.wrong_sequence => submitted.sequence += 1,
+            Case.wrong_slot => submitted.slot = 16,
+            Case.terminal => fixture.owner.terminal = true,
+            Case.wrong_owner => fixture.owner.token += 1,
+            Case.cancelled => try fixture.owner.cancel(id),
+            Case.responded => try fixture.owner.respond(id, 200, &.{}, ""),
+            Case.reentrant => fixture.owner.engine.entered = true,
+            Case.failed => fixture.owner.engine.failed = true,
+        }
+        defer fixture.owner.engine.entered = false;
+        var environment = values.Environment{ .allocator = std.testing.allocator };
+        var host = environment.rocHost();
+        const used = fixture.budget.used;
+        const expected = switch (case) {
+            Case.responded => error.InvalidState,
+            Case.reentrant => error.ReentrantCall,
+            else => error.Closed,
+        };
+        try std.testing.expectError(expected, fixture.owner.requestOwned(&fixture.registry, submitted, bridge.RemoteAddress.unix, "", values.Environment.requestHost(&host)));
+        try std.testing.expectEqual(@as(usize, 0), environment.allocation_count);
+        try std.testing.expectEqual(used, fixture.budget.used);
+    }
+}
+
+test "owned request allocation failures consume input but retain execution for cleanup" {
+    // Independently sweep connection scratch and fallible Roc allocations. Setup
+    // uses a fresh session before enabling faults at each subsequent allocation.
+    for ([_]bool{ false, true }) |fail_roc| {
+        var count: usize = 0;
+        var index: usize = 0;
+        while (index == 0 or index <= count) : (index += 1) {
+            var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+            var fixture: Fixture = .{};
+            try fixture.initWithAllocator(if (fail_roc) std.testing.allocator else failing.allocator());
+            defer fixture.deinit();
+            const work = fixture.registry.next().?.execute;
+            defer _ = fixture.registry.finish(work.ticket);
+            var environment = values.Environment{ .allocator = if (fail_roc) failing.allocator() else std.testing.allocator };
+            var host = environment.rocHost();
+            const start = failing.alloc_index;
+            if (index > 0) failing.fail_index = start + index - 1;
+            const result = fixture.owner.requestOwned(&fixture.registry, work.ticket, bridge.RemoteAddress.unix, "owned-request-id", values.Environment.requestHost(&host));
+            if (index == 0) {
+                const request = try result;
+                count = failing.alloc_index - start;
+                try std.testing.expect(count > 0);
+                request.decref(&host);
+            } else {
+                try std.testing.expectError(error.OutOfMemory, result);
+                try std.testing.expect(failing.has_induced_failure);
+                try std.testing.expectEqual(index - 1, failing.alloc_index - start);
+            }
+            try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
+            try std.testing.expectEqual(@as(usize, 0), fixture.budget.used);
+            try std.testing.expect(fixture.registry.leases.runningStream(work.ticket) != null);
+            try std.testing.expectError(error.InvalidState, fixture.owner.requestOwned(&fixture.registry, work.ticket, bridge.RemoteAddress.unix, "", values.Environment.requestHost(&host)));
+        }
+    }
+}

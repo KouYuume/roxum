@@ -66,6 +66,7 @@ const State = struct {
 
 const Connection = struct {
     state: State = .{},
+    remote: bridge.RemoteAddress = bridge.RemoteAddress.unix,
     owner: ?transport.Owner = null,
     deadline: net.Deadline = undefined,
     blocked_reported: bool = false,
@@ -93,24 +94,21 @@ const Connection = struct {
                     streams.Work.execute => |value| value,
                 };
                 defer std.debug.assert(self.state.streams.finish(execution.ticket));
-                const buffer = execution.buffer;
-                const body = buffer.body().?;
-                const fields = buffer.headers().?;
-                var count_buffer: [20]u8 = undefined;
-                const field_count = try std.fmt.bufPrint(&count_buffer, "{d}", .{fields.len});
-                var path: []const u8 = "";
-                for (fields) |field| {
-                    if (std.mem.eql(u8, field.name, ":path")) path = field.value;
-                }
-                var path_length_buffer: [20]u8 = undefined;
-                const path_length = try std.fmt.bufPrint(&path_length_buffer, "{d}", .{path.len});
                 var values = roc_values.Environment{ .allocator = std.heap.smp_allocator };
                 var host = values.rocHost();
                 defer std.debug.assert(values.live_allocations == 0);
-                var semantics = bridge.ResponseRequestSemantics.regular;
-                for (fields) |field| {
-                    if (std.mem.eql(u8, field.name, ":method") and std.mem.eql(u8, field.value, "HEAD")) semantics = bridge.ResponseRequestSemantics.head;
-                }
+                const request = owner.requestOwned(&self.state.streams, execution.ticket, self.remote, "fixture-request", roc_values.Environment.requestHost(&host)) catch {
+                    try owner.cancel(execution.id);
+                    continue;
+                };
+                defer request.decref(&host);
+                const body = if (request.body.tag == bridge.HttpRequestBodyTag.Bytes) request.body.payload_bytes().items() else "";
+                const path = request.raw_target.items();
+                var count_buffer: [20]u8 = undefined;
+                const field_count = try std.fmt.bufPrint(&count_buffer, "{d}", .{request.headers.items().len});
+                var path_length_buffer: [20]u8 = undefined;
+                const path_length = try std.fmt.bufPrint(&path_length_buffer, "{d}", .{path.len});
+                const semantics = if (request.method == bridge.HttpMethod.head) bridge.ResponseRequestSemantics.head else bridge.ResponseRequestSemantics.regular;
                 const response = roc_values.response(200, &.{
                     .{ .name = "content-type", .value = "application/octet-stream" },
                     .{ .name = "x-initial-fields", .value = field_count },
@@ -118,7 +116,6 @@ const Connection = struct {
                     .{ .name = "x-request-path-length", .value = path_length },
                 }, body, &host);
                 try owner.respondOwned(&self.state.streams, execution.ticket, response, &host, semantics);
-                @memset(buffer.bytes.items, 0xa5);
             }
             const progress = owner.step() catch |err| switch (err) {
                 error.SendFailed, error.ReceiveFailed, error.Protocol => return false,
@@ -203,6 +200,7 @@ pub fn main() !void {
                 };
                 errdefer net.closeSocket(accepted.socket);
                 connection.* = .{};
+                connection.remote = .{ .v4 = .{ .octets = accepted.remote_address.v4, .port = accepted.remote_port } };
                 connection.state.streams = streams.Streams.init(next_token, &connection.state.budget, .{ .header_bytes = 1024, .body_bytes = 4096 });
                 connection.state.budget.limit = input_budget;
                 // A small send buffer makes real socket backpressure reachable

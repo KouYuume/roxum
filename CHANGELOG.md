@@ -14,6 +14,8 @@ Changes to the roxum platform and its integrations, newest first. The platform a
 
 ### Added
 
+- Internal HTTP/2 request handoff guarded by execution tickets and protocol state, with input release on conversion failure. Independent-client checks pass through both Roc ownership boundaries; live Roc dispatch remains pending.
+
 - Internal HTTP/2 owner submission of finite Roc responses with generation-checked execution tickets and cleanup on success or failure. Independent-client checks now exercise this ownership boundary; production worker dispatch remains pending.
 
 - Internal finite Roc-to-HTTP/2 response mapping with bounded header scratch, host-owned Content-Length, and explicit response cleanup. Production response dispatch remains pending.

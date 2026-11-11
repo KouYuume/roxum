@@ -146,7 +146,7 @@ def verify(executable):
         flush()
         completed(99, b'part-two')
         assert response_fields[99]['x-request-path'] == '/owned?x=%2F'
-        assert response_fields[99]['x-initial-fields'] == '6'
+        assert response_fields[99]['x-initial-fields'] == '3'
 
         # Initial header accounting is 174 + path length. A valid long path
         # must not overflow the fixture's diagnostic response headers.
@@ -162,9 +162,17 @@ def verify(executable):
         request(107, b'after long path')
         completed(107, b'after long path')
 
+        # Engine-valid metadata rejected by the Roc request contract stays local.
+        request(109, method='TRACE')
+        until(lambda: 109 in reset)
+        request(111, path='/invalid//segment')
+        until(lambda: 111 in reset)
+        request(113, b'after rejection')
+        completed(113, b'after rejection')
+
         # Disconnect with engine-owned response bytes still flow controlled.
-        request(109, b'x' * 4096)
-        until(lambda: len(body[109]) == 16)
+        request(115, b'x' * 4096)
+        until(lambda: len(body[115]) == 16)
         sock.close()
         sock = None
         _, stderr = process.communicate(timeout=10)

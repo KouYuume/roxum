@@ -110,6 +110,16 @@ pub const Engine = struct {
         self.pending = self.pending[count..];
     }
 
+    /// Check protocol admission immediately before handing input to execution.
+    /// A queued reset already rejects dispatch before its close callback runs.
+    pub fn checkDispatchable(self: *Engine, id: StreamId) Error!void {
+        try self.enter();
+        defer self.entered = false;
+        const slot = self.find(@backingInt(id)) orelse return error.Closed;
+        if (slot.rejected) return error.Closed;
+        if (slot.responded) return error.InvalidState;
+    }
+
     /// Copies response bytes; callers may release their buffers on return.
     /// This initial adapter supports finite responses, not duplex writers.
     pub fn respond(self: *Engine, id: StreamId, status: u16, headers: []const Header, body: []const u8) Error!void {

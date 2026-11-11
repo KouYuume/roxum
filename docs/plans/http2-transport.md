@@ -167,7 +167,9 @@ until copying engine submission; production invocation and response dispatch
 remain pending. The owner now submits finite Roc responses using a checked
 execution ticket, consumes them on every outcome, and releases conversion scratch
 before returning. Independent-client tests exercise this path with synthetic Roc
-values; live Roc application dispatch remains pending.
+values. Checked request handoff now validates the claimed ticket and protocol
+state before consuming input, and the fixture passes through both Roc ownership
+boundaries; live Roc application dispatch remains pending.
 Trailer/deadline APIs and their
 Roc integration can follow in focused changes within milestone 1; do not claim
 native gRPC support until the later integration gates pass.
