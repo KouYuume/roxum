@@ -9,8 +9,13 @@ const Fixture = struct {
     owner: http2.owner.Owner = undefined,
 
     fn init(self: *Fixture) !void {
+        return self.initWithAllocator(std.testing.allocator);
+    }
+
+    fn initWithAllocator(self: *Fixture, allocator: std.mem.Allocator) !void {
+        self.budget.backing = allocator;
         self.registry = http2.streams.Streams.init(7, &self.budget, .{ .header_bytes = 1024, .body_bytes = 16 });
-        const engine = try http2.engine.Engine.create(std.testing.allocator, .{}, .{
+        const engine = try http2.engine.Engine.create(allocator, .{}, .{
             .context = self,
             .header = header,
             .headers_complete = headersComplete,
@@ -155,5 +160,52 @@ test "owned submission rolls back conversion and engine failure without consumin
             try fixture.owner.respondOwned(&fixture.registry, work.ticket, response(&host), &host, bridge.ResponseRequestSemantics.regular);
             try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
         }
+    }
+}
+
+test "owned submission rolls back every partial allocation before successful submission" {
+    // Measure only the submission allocations; setup must succeed before fault
+    // injection. A fresh session per index avoids caches hiding later failures.
+    var submission_allocations: usize = 0;
+    var failure_index: usize = 0;
+    while (failure_index == 0 or failure_index <= submission_allocations) : (failure_index += 1) {
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+        {
+            var fixture: Fixture = .{};
+            try fixture.initWithAllocator(failing.allocator());
+            defer fixture.deinit();
+            const work = fixture.registry.next().?.execute;
+            defer _ = fixture.registry.finish(work.ticket);
+            var environment = values.Environment{ .allocator = std.testing.allocator };
+            var host = environment.rocHost();
+            const input_bytes = fixture.budget.used;
+            const start = failing.alloc_index;
+            // First run establishes the allocation count, then fail each one.
+            if (failure_index > 0) failing.fail_index = start + failure_index - 1;
+            const result = fixture.owner.respondOwned(&fixture.registry, work.ticket, response(&host), &host, bridge.ResponseRequestSemantics.regular);
+            if (failure_index == 0) {
+                try result;
+                submission_allocations = failing.alloc_index - start;
+                // Two scratch allocations, the body copy, then nghttp2's
+                // submission allocations must all be included in the sweep.
+                try std.testing.expect(submission_allocations > 3);
+            } else {
+                try std.testing.expect(failing.has_induced_failure);
+                try std.testing.expectEqual(failure_index - 1, failing.alloc_index - start);
+                try std.testing.expectError(error.OutOfMemory, result);
+            }
+            try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
+            try std.testing.expectEqual(input_bytes, fixture.budget.used);
+            try std.testing.expect(fixture.registry.leases.runningStream(work.ticket) != null);
+            failing.fail_index = std.math.maxInt(usize);
+            if (failure_index > 0) {
+                try fixture.owner.respondOwned(&fixture.registry, work.ticket, response(&host), &host, bridge.ResponseRequestSemantics.regular);
+                try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
+                try std.testing.expectEqual(input_bytes, fixture.budget.used);
+            }
+        }
+        // Include the session's retained allocations in the final leak check.
+        try std.testing.expectEqual(failing.allocated_bytes, failing.freed_bytes);
+        try std.testing.expectEqual(failing.allocations, failing.deallocations);
     }
 }
