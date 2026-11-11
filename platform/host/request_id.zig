@@ -42,6 +42,31 @@ pub fn decide(source: Source, headers: []const http1_types.Header, head_bytes: [
     );
 }
 
+/// HTTP/2 fields have owned slices instead of HTTP/1 parser offsets.
+pub fn decideFields(source: Source, fields: []const @import("http_field.zig").Header) Id {
+    if (source == Source.trust_incoming) {
+        var found: ?[]const u8 = null;
+        var repeated = false;
+        for (fields) |field| {
+            if (!std.ascii.eqlIgnoreCase(field.name, "x-request-id")) continue;
+            if (found != null) repeated = true;
+            found = field.value;
+        }
+        if (!repeated) {
+            if (found) |value| {
+                if (value.len > 0 and value.len <= maximum_bytes) {
+                    var valid = true;
+                    for (value) |byte| if (byte < 0x21 or byte > 0x7e) {
+                        valid = false;
+                    };
+                    if (valid) return copied(value);
+                }
+            }
+        }
+    }
+    return decide(Source.generate, &.{}, "");
+}
+
 /// The value of the single `x-request-id` field when it is a valid ID.
 /// Repeated fields cannot name one request, so they count as none.
 fn incoming(headers: []const http1_types.Header, head_bytes: []const u8) ?[]const u8 {
@@ -173,4 +198,23 @@ test "hex encoding preserves word order and nibble boundaries" {
         _ = try std.fmt.bufPrint(&expected, "{x:0>16}{x:0>16}", .{ word, word });
         try testing.expectEqualStrings(&expected, generated(word, word).slice());
     }
+}
+
+test "owned field request IDs preserve valid boundaries and reject duplicates or invalid bytes" {
+    const Header = @import("http_field.zig").Header;
+    for ([_]usize{ 1, 2, 127, 128 }) |length| {
+        const bytes: [128]u8 = @splat('a');
+        const id = decideFields(Source.trust_incoming, &.{Header{ .name = "x-request-id", .value = bytes[0..length] }});
+        try std.testing.expectEqualStrings(bytes[0..length], id.slice());
+    }
+    for ([_][]const u8{ "!", "~" }) |value| {
+        const id = decideFields(Source.trust_incoming, &.{Header{ .name = "x-request-id", .value = value }});
+        try std.testing.expectEqualStrings(value, id.slice());
+    }
+    for ([_][]const u8{ "", &@as([129]u8, @splat('a')), " ", "\x7f" }) |value| {
+        const id = decideFields(Source.trust_incoming, &.{Header{ .name = "x-request-id", .value = value }});
+        try std.testing.expectEqual(@as(u8, 32), id.len);
+    }
+    const repeated = decideFields(Source.trust_incoming, &.{ Header{ .name = "x-request-id", .value = "same" }, Header{ .name = "x-request-id", .value = "same" } });
+    try std.testing.expectEqual(@as(u8, 32), repeated.len);
 }

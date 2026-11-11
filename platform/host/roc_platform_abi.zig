@@ -1430,7 +1430,7 @@ pub const __AnonStruct_8cf0b1000143cff5 = if (@sizeOf(usize) == 4) extern struct
 
 comptime {
     if (@sizeOf(usize) == 8) {
-        if (@sizeOf(__AnonStruct_8cf0b1000143cff5) != 272) @compileError("__AnonStruct_8cf0b1000143cff5 size mismatch");
+        if (@sizeOf(__AnonStruct_8cf0b1000143cff5) != 280) @compileError("__AnonStruct_8cf0b1000143cff5 size mismatch");
         if (@alignOf(__AnonStruct_8cf0b1000143cff5) != 8) @compileError("__AnonStruct_8cf0b1000143cff5 alignment mismatch");
     }
     if (@sizeOf(usize) == 4) {
@@ -1449,6 +1449,7 @@ pub const ServerListenOptions = if (@sizeOf(usize) == 4) extern struct {
     @"processes": u16,
     @"threads": ServerThreads,
     @"access_log": ServerAccessLog,
+    @"protocol": ServerProtocol,
     @"request_id": ServerRequestIdSource,
     /// Recursively decrement Roc-owned fields.
     pub fn decref(self: @This(), roc_host: *RocHost) void {
@@ -1459,6 +1460,7 @@ pub const ServerListenOptions = if (@sizeOf(usize) == 4) extern struct {
         value.@"metrics".decref(roc_host);
         value.@"threads".decref(roc_host);
         value.@"access_log".decref(roc_host);
+        value.@"protocol".decref(roc_host);
         value.@"request_id".decref(roc_host);
     }
 
@@ -1471,6 +1473,7 @@ pub const ServerListenOptions = if (@sizeOf(usize) == 4) extern struct {
         value.@"metrics".incref(amount);
         value.@"threads".incref(amount);
         value.@"access_log".incref(amount);
+        value.@"protocol".incref(amount);
         value.@"request_id".incref(amount);
     }
 } else extern struct {
@@ -1482,6 +1485,7 @@ pub const ServerListenOptions = if (@sizeOf(usize) == 4) extern struct {
     @"processes": u16,
     @"threads": ServerThreads,
     @"access_log": ServerAccessLog,
+    @"protocol": ServerProtocol,
     @"request_id": ServerRequestIdSource,
     /// Recursively decrement Roc-owned fields.
     pub fn decref(self: @This(), roc_host: *RocHost) void {
@@ -1492,6 +1496,7 @@ pub const ServerListenOptions = if (@sizeOf(usize) == 4) extern struct {
         value.@"metrics".decref(roc_host);
         value.@"threads".decref(roc_host);
         value.@"access_log".decref(roc_host);
+        value.@"protocol".decref(roc_host);
         value.@"request_id".decref(roc_host);
     }
 
@@ -1504,13 +1509,14 @@ pub const ServerListenOptions = if (@sizeOf(usize) == 4) extern struct {
         value.@"metrics".incref(amount);
         value.@"threads".incref(amount);
         value.@"access_log".incref(amount);
+        value.@"protocol".incref(amount);
         value.@"request_id".incref(amount);
     }
 };
 
 comptime {
     if (@sizeOf(usize) == 8) {
-        if (@sizeOf(ServerListenOptions) != 240) @compileError("ServerListenOptions size mismatch");
+        if (@sizeOf(ServerListenOptions) != 248) @compileError("ServerListenOptions size mismatch");
         if (@alignOf(ServerListenOptions) != 8) @compileError("ServerListenOptions alignment mismatch");
     }
     if (@sizeOf(usize) == 4) {
@@ -2972,9 +2978,9 @@ pub const Init_for_hostResult = if (@sizeOf(usize) == 4) extern struct {
 
 comptime {
     if (@sizeOf(usize) == 8) {
-        if (@sizeOf(Init_for_hostResult) != 280) @compileError("Init_for_hostResult size mismatch");
+        if (@sizeOf(Init_for_hostResult) != 288) @compileError("Init_for_hostResult size mismatch");
         if (@alignOf(Init_for_hostResult) != 8) @compileError("Init_for_hostResult alignment mismatch");
-        if (@offsetOf(Init_for_hostResult, "tag") != 272) @compileError("Init_for_hostResult tag offset mismatch");
+        if (@offsetOf(Init_for_hostResult, "tag") != 280) @compileError("Init_for_hostResult tag offset mismatch");
     }
     if (@sizeOf(usize) == 4) {
         if (@sizeOf(Init_for_hostResult) != 248) @compileError("Init_for_hostResult size mismatch");
@@ -3311,6 +3317,34 @@ comptime {
         if (@sizeOf(ServerMetrics) != 28) @compileError("ServerMetrics size mismatch");
         if (@alignOf(ServerMetrics) != 4) @compileError("ServerMetrics alignment mismatch");
         if (@offsetOf(ServerMetrics, "tag") != 24) @compileError("ServerMetrics tag offset mismatch");
+    }
+}
+
+/// Tag union: Server.Protocol
+pub const ServerProtocol = enum(u8) {
+    @"http1" = 0,
+    @"http2" = 1,
+    /// Recursively decrement Roc-owned payloads.
+    pub fn decref(self: @This(), roc_host: *RocHost) void {
+        _ = self;
+        _ = roc_host;
+    }
+
+    /// Increment Roc-owned payloads.
+    pub fn incref(self: @This(), amount: isize) void {
+        _ = self;
+        _ = amount;
+    }
+};
+
+comptime {
+    if (@sizeOf(usize) == 8) {
+        if (@sizeOf(ServerProtocol) != 1) @compileError("ServerProtocol size mismatch");
+        if (@alignOf(ServerProtocol) != 1) @compileError("ServerProtocol alignment mismatch");
+    }
+    if (@sizeOf(usize) == 4) {
+        if (@sizeOf(ServerProtocol) != 1) @compileError("ServerProtocol size mismatch");
+        if (@alignOf(ServerProtocol) != 1) @compileError("ServerProtocol alignment mismatch");
     }
 }
 

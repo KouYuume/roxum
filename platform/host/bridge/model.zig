@@ -20,6 +20,7 @@ pub const rocHandle = abi.roc_handle;
 
 pub const ListenOptions = struct {
     endpoint: net.Endpoint,
+    http2: bool = false,
     timeouts: Timeouts,
     limits: Limits,
     threads: Threads,
@@ -111,6 +112,7 @@ pub const Application = struct {
             ),
             .listen_options = .{
                 .endpoint = endpoint,
+                .http2 = value.listen.protocol == abi.ServerProtocol.http2,
                 .timeouts = .{
                     .initial_request_milliseconds = value.listen.timeouts.initial_request_milliseconds,
                     .keep_alive_idle_milliseconds = value.listen.timeouts.keep_alive_idle_milliseconds,

@@ -74,6 +74,10 @@ pub const Owner = struct {
     /// A closed or stale execution cannot submit output. The executor still
     /// owns request cleanup and must finish its lease after this returns.
     pub fn respondOwned(self: *Owner, registry: *streams.Streams, ticket: streams.Ticket, value: bridge.HttpResponse, roc_host: *bridge.RocHost, semantics: bridge.ResponseRequestSemantics) (Error || response.Error)!void {
+        return self.respondOwnedWithDebug(registry, ticket, value, roc_host, semantics, false);
+    }
+
+    pub fn respondOwnedWithDebug(self: *Owner, registry: *streams.Streams, ticket: streams.Ticket, value: bridge.HttpResponse, roc_host: *bridge.RocHost, semantics: bridge.ResponseRequestSemantics, debug: bool) (Error || response.Error)!void {
         const id = if (!self.terminal and registry.leases.connection == self.token)
             registry.leases.runningStream(ticket)
         else
@@ -87,7 +91,26 @@ pub const Owner = struct {
             .body_bytes = self.engine.limits.response_bytes,
         });
         defer owned.deinit();
-        try self.respond(live, owned.response.status, owned.headers, owned.body);
+        var headers: [64]protocol.Header = undefined;
+        @memcpy(headers[0..owned.headers.len], owned.headers);
+        var count = owned.headers.len;
+        if (debug) {
+            const request_debug = @import("../request_debug.zig");
+            var accounted: usize = 42;
+            for (owned.headers) |field| accounted += field.name.len + field.value.len + 32;
+            var captured: [request_debug.maximum_headers]@import("../http1/encoder.zig").Header = undefined;
+            for (request_debug.takeResponseHeadersWithOverhead(&captured, .{
+                .bytes = self.engine.limits.header_bytes - accounted,
+                .fields = headers.len - count,
+            }, 32)) |field| {
+                headers[count] = .{
+                    .name = if (std.mem.eql(u8, field.name, "X-Roxum-Dbg")) "x-roxum-dbg" else "x-roxum-dbg-truncated",
+                    .value = field.value,
+                };
+                count += 1;
+            }
+        }
+        try self.respond(live, owned.response.status, headers[0..count], owned.body);
     }
 
     pub fn cancel(self: *Owner, id: protocol.StreamId) Error!void {

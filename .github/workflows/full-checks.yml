@@ -64,6 +64,10 @@ jobs:
         env:
           ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
         run: zig build test-http2-roc
+      - name: Verify production HTTP/2 TCP and Unix listeners
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-http2-listener
       - name: Verify platform-dependent package boundary
         env:
           ROC_BIN: ${{ github.workspace }}/.roc-bin/roc

@@ -40,7 +40,8 @@ connection state while holding a queue lock. After removal, it validates the
 identity and unclaimed state under the connection lock before rejecting a request.
 This avoids queue-to-connection lock ordering against dispatch's
 connection-to-queue order. HTTP/1 keeps a claimed connection slot pinned until
-completion; this does not yet provide independent HTTP/2 stream lifetimes.
+completion. HTTP/2 dispatch additionally carries a stream lease; the connection
+slot stays pinned until every queued/running lease has finished cleanup.
 While a request is dispatched, its handler does not hold the connection lock. A request starts with the shared request heap; its first suspension detaches live allocations into its own heap so the shared heap can serve another request.
 
 Initialize Roc on one thread before creating the remaining Roc threads. The compiler runtime's lazy process-wide initialization must not race. Fiber switching uses host register-save routines. Socket waits use one-shot poller registration; timeout and readiness compete to resume a wait exactly once. DNS resolution runs on dedicated threads, with the request fiber waiting on a pipe under a deadline.
@@ -68,10 +69,11 @@ The metadata entry accepts origin-form or asterisk targets and finite body bytes
 `Http.Version.Http20` represents HTTP/2 in the public metadata type. The entry
 has a separate HTTP/2 adapter for initial field sections, described in
 [the engine contract](http2-engine.md#request-metadata-mapping). Neither entry
-installs an HTTP/2 body reader. Production listeners still accept only HTTP/1.0
-and HTTP/1.1; worker dispatch and stream body capabilities remain separate work.
+installs an HTTP/2 body reader. Opt-in HTTP/2 listeners use finite body collection
+and the shared worker scheduler; incremental stream body capabilities remain
+separate work.
 
 Code that exhaustively matches `Http.Version` must also handle `Http20`. Build
 Roc platform sources and host archives together after this enum extension;
 regenerated glue defines the shared tag representation. The metadata value does
-not enable HTTP/2 listener negotiation.
+not select a listener protocol; `Server.ListenOptions.protocol` does that.

@@ -157,17 +157,23 @@ Server :: [].{
 	## route for that.
 	Metrics := [Off, Listen(Server.Endpoint)]
 
+	## Explicit cleartext protocol selection. Http2 uses prior knowledge; no Upgrade.
+	## Http2 currently buffers request bodies and supports finite responses only.
+	## Response streaming, files, trailers, and native gRPC are not supported yet.
+	Protocol := [Http1, Http2]
+
 	## Where the server listens, its connection timeouts, its limits, and how
 	## many threads and processes serve it. Returned by the app's `init!`;
 	## `threads`, `processes`, `drain_timeout_milliseconds`, `request_id`,
-	## `access_log`, and `metrics` may be left out. The processes (1 to 64, 1
-	## by default) share nothing: each runs `init!` and has its own model,
+	## `access_log`, `metrics`, and `protocol` may be left out. The processes
+	## (1 to 64, 1 by default) share nothing: each runs `init!` and has its own model,
 	## pools, and limits. One process with a thread per CPU shares them all;
 	## more processes keep a host failure in one from stopping the others.
 	ListenOptions := {
 		## V6 listeners accept IPv6 only; groups are host-order U16 values.
 		## Scoped addresses requiring an interface identifier are not supported.
 		endpoint : Server.Endpoint,
+		protocol : Server.Protocol ?? Server.Protocol.Http1,
 		timeouts : Server.Timeouts,
 		limits : Server.Limits,
 		threads : Server.Threads ?? Server.Threads.Auto,

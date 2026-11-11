@@ -19,7 +19,7 @@ roxumは、[Roc](https://github.com/roc-lang/roc)の思想に沿ったWebサー�
 
 ## axum・Goとの比較
 
-roxumはaxumと同じく、ハンドラーの入力を型で受け取り、Goにない型による検査（error処理、null、data race、網羅的なmatch）を持ちます。axumに加えて、ドメインの純粋性をコンパイラが保証し、routeをビルド時に検査します。その代わり、受信のTLS、HTTP/2、WebSocketには対応せず（TLSとHTTP/2はリバースプロキシを前に置きます）、ミドルウェアはroxumのintegrationだけを使え、まだ若いプロジェクトです。実行性能はまだaxumに届かず、2コアで固定応答を返す負荷ではaxumの73〜96%でした。最適化ビルドは、変更がなくても約3秒かかります。
+roxumはaxumと同じく、ハンドラーの入力を型で受け取り、Goにない型による検査（error処理、null、data race、網羅的なmatch）を持ちます。axumに加えて、ドメインの純粋性をコンパイラが保証し、routeをビルド時に検査します。その代わり、受信のTLSとWebSocketには対応せず（TLSはリバースプロキシを前に置きます）、明示的に選択するHTTP/2も現時点では有限のレスポンスに限られ、ミドルウェアはroxumのintegrationだけを使え、まだ若いプロジェクトです。実行性能はまだaxumに届かず、2コアで固定応答を返す負荷ではaxumの73〜96%でした。最適化ビルドは、変更がなくても約3秒かかります。
 
 観点ごとの評価と根拠は[比較](docs/comparison.md)、測定は[性能の現状](docs/performance.md)にあります。
 
@@ -60,7 +60,7 @@ routes = Router.new
 
 ## 制約
 
-- IPv4・IPv6のTCPとファイルパスを使うUnixソケットに対応。HTTP/1.1のみ。受信TLS・HTTP/2・HTTP/3は[リバースプロキシ](docs/guides/reverse-proxy.md)で終端。
+- IPv4・IPv6のTCPとファイルパスを使うUnixソケットに対応。HTTP/1.1が既定で、[有限のレスポンス向けに平文HTTP/2を明示的に選択可能](docs/guides/deployment.md#opt-in-http2)。受信TLS・HTTP/3は[リバースプロキシ](docs/guides/reverse-proxy.md)で終端。native gRPCは未対応。
 - WebSocket、CONNECT、TRACE、拡張メソッド、HTTPトレーラーは未対応。
 - CONNECT、TRACE、任意の拡張メソッドは、強い利用者要望がない限り[対応対象外](docs/design/non-goals.md)とする。
 - タイムアウトで任意のRocの計算を強制中断することはできません。
