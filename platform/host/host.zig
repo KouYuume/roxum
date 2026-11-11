@@ -1,3 +1,4 @@
+pub const fiber = @import("fiber.zig");
 pub const bridge = @import("bridge.zig");
 pub const http2 = @import("http2.zig");
 pub const allocator_context = @import("allocator/context.zig");

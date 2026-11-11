@@ -4,6 +4,7 @@ const host = @import("host");
 const h2 = host.http2;
 const bridge = host.bridge;
 const context = host.allocator_context;
+const fiber = host.fiber;
 const tracking = @import("options").tracking;
 const Environment = if (tracking) @import("tracking_environment").Environment else host.arena.ArenaEnvironment;
 
@@ -44,6 +45,86 @@ const State = struct {
         from(ptr).streams.close(id);
     }
 };
+
+// Stable job storage keeps allocator pointers in suspended fiber locals valid.
+const Job = struct {
+    target: ?*fiber.Fiber = null,
+    owner: *h2.owner.Owner = undefined,
+    streams: *h2.streams.Streams = undefined,
+    ticket: h2.streams.Ticket = undefined,
+    model: *bridge.ModelRoot = undefined,
+    allocator: host.HostAllocator = undefined,
+    roc_host: bridge.RocHost = undefined,
+    generation: usize = 0,
+    heap: ?Environment.Stream = null,
+    failure: ?anyerror = null,
+
+    fn start(target: *fiber.Fiber) void {
+        const self: *Job = @ptrCast(@alignCast(target.userdata.?));
+        execute(self.owner, self.streams, self.ticket, self.model, &self.allocator, &self.roc_host, self.generation) catch |err| {
+            self.failure = err;
+        };
+    }
+
+    fn resumeJob(self: *Job, environment: *Environment, handled: *usize, rejected: *usize) !void {
+        const target = self.target.?;
+        if (self.heap) |*heap| {
+            environment.adoptStream(heap);
+            std.debug.print("resumed-request\n", .{});
+        }
+        fiber.resumeFiber(target);
+        if (context.current() != null) return error.LeakedFiberContext;
+        if (target.crashed or target.cancelled) return error.UnexpectedFiberStop;
+        if (!target.finished) {
+            // Only deadline waits are part of this fixture's contract.
+            if (target.wait.socket != -1) return error.UnexpectedSocketWait;
+            if (self.heap == null) {
+                self.heap = try environment.detachRequest();
+                std.debug.print("detached-request\n", .{});
+                try environment.resetRequest();
+                self.allocator = environment.streamHostAllocator(&self.heap.?);
+            }
+            return;
+        }
+        if (target.locals.allocator != null) return error.LeakedFiberContext;
+        if (self.heap) |*heap| {
+            if (!tracking and heap.heap.live_bytes != 0) return error.RequestLeak;
+            try environment.releaseStream(heap);
+            self.heap = null;
+        } else {
+            if (!tracking and environment.request_heap.live_bytes != 0) return error.RequestLeak;
+            try environment.resetRequest();
+        }
+        if (self.failure != null) {
+            rejected.* += 1;
+            // A peer reset already closed this stream; do not cancel a reused ID.
+            if (self.streams.leases.runningStream(self.ticket)) |id| try self.owner.cancel(id);
+        } else {
+            handled.* += 1;
+        }
+        if (!self.streams.finish(self.ticket)) return error.InvalidLease;
+        target.destroy();
+        self.target = null;
+    }
+};
+
+// Empty records explicitly run timer waits to completion. Ordinary wire records
+// never resume them: peer progress and reset-before-resume are deterministic.
+fn drainJobs(jobs: *[16]Job, environment: *Environment, handled: *usize, rejected: *usize) !void {
+    for (jobs) |*job| {
+        while (job.target) |target| {
+            const now = try host.net.monotonicNanoseconds();
+            if (target.wait.expires_at_nanoseconds > now) {
+                const remaining = target.wait.expires_at_nanoseconds - now;
+                const delay = std.c.timespec{ .sec = @intCast(remaining / std.time.ns_per_s), .nsec = @intCast(remaining % std.time.ns_per_s) };
+                _ = std.c.nanosleep(&delay, null);
+                continue;
+            }
+            target.wait.outcome = fiber.Wait.Outcome.timed_out;
+            try job.resumeJob(environment, handled, rejected);
+        }
+    }
+}
 
 fn main() callconv(std.builtin.CallingConvention.c) c_int {
     run() catch |err| {
@@ -86,6 +167,7 @@ fn run() !void {
     var owner = h2.owner.Owner{ .engine = engine, .socket = -1, .poller = undefined, .token = 1 };
     var handled: usize = 0;
     var rejected: usize = 0;
+    var jobs: [16]Job = @splat(.{});
     var record: [65536]u8 = undefined;
     while (true) {
         var prefix: [4]u8 = undefined;
@@ -99,21 +181,25 @@ fn run() !void {
             switch (work) {
                 h2.streams.Work.cancel => |id| try owner.cancel(id),
                 h2.streams.Work.execute => |execution| {
-                    defer std.debug.assert(state.streams.finish(execution.ticket));
-                    const outcome = execute(&owner, &state.streams, execution.ticket, &app.model_root, &allocator, &roc_host, environment.generation);
-                    // Check before reset: an arena reset must not hide leaks.
-                    if (!tracking and environment.request_heap.live_bytes != 0) return error.RequestLeak;
-                    try environment.resetRequest();
-                    if (outcome) |_| {
-                        handled += 1;
-                    } else |_| {
-                        rejected += 1;
-                        try owner.cancel(execution.id);
-                    }
+                    const job = &jobs[execution.ticket.slot];
+                    if (job.target != null) return error.ReusedRunningSlot;
+                    job.* = .{
+                        .target = try fiber.Fiber.create(),
+                        .owner = &owner,
+                        .streams = &state.streams,
+                        .ticket = execution.ticket,
+                        .model = &app.model_root,
+                        .allocator = environment.hostAllocator(),
+                        .generation = environment.generation,
+                    };
+                    job.roc_host = host.runtime.makeRocHost(@ptrCast(&job.allocator));
+                    job.target.?.prepare(Job.start, job);
+                    try job.resumeJob(&environment, &handled, &rejected);
                 },
             }
         }
-        // All request generations have ended before serialization touches bytes.
+        if (length == 0) try drainJobs(&jobs, &environment, &handled, &rejected);
+        // Submitted responses own their bytes; other request fibers may still wait.
         while (true) {
             const bytes = try engine.output();
             if (bytes.len == 0) break;
@@ -122,6 +208,7 @@ fn run() !void {
         }
     }
     state.streams.disconnect();
+    try drainJobs(&jobs, &environment, &handled, &rejected);
     if (state.budget.used != 0) return error.InputLeak;
     std.debug.print("handled={d} rejected={d}\n", .{ handled, rejected });
 }
