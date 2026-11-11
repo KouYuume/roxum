@@ -319,3 +319,28 @@ exhaustion, engine allocation failure, and output serialization after Roc cleanu
 These tests invoke generated ABI value helpers, not a Roc application. Production
 worker dispatch, live Roc invocation, and cancellation of application effects
 remain pending.
+
+## Checked request dispatch handoff
+
+`Owner.requestOwned` transfers finite input for a claimed execution into the
+active Roc request allocation domain. The owner and registry connection tokens
+must agree, and the ticket must still identify an open, running lease. The
+engine also rejects a queued reset before its close callback arrives, a failed
+session, reentrant calls, and streams with a response already submitted. These
+checks allocate nothing and leave input unchanged.
+
+After these checks, the input bridge consumes completed input on success or
+conversion failure. Repeating the handoff returns `InvalidState`. The returned
+request owns its metadata and body independently of connection input; reset or
+disconnect cannot free those Roc values. The caller must consume the request in
+Roc or release it with generated cleanup, then finish the execution lease. A
+conversion failure also leaves that lease claimed until caller cleanup. No
+engine call may interleave with this synchronous handoff.
+
+The independent-client fixture now echoes bytes from the owned request and passes
+its synthetic response through `respondOwned`. It releases both Roc values before
+advancing transport output. Diagnostic header counts describe normalized ordinary
+fields, including the synthesized Host field, rather than HTTP/2 pseudo-fields.
+Unsupported methods and invalid application paths reset only their stream. This
+exercises both ownership boundaries together; live Roc invocation, production
+worker dispatch, and application effect cancellation remain pending.

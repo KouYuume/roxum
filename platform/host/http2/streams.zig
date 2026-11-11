@@ -96,6 +96,13 @@ pub const Streams = struct {
         return null;
     }
 
+    /// Borrow input only for a still-open claimed execution. The owner must
+    /// consume it before another engine call can close or reuse the slot.
+    pub fn runningInput(self: *Streams, ticket: Ticket) ?*input.Input {
+        _ = self.leases.runningStream(ticket) orelse return null;
+        return if (self.entries[ticket.slot].buffer) |*buffer| buffer else null;
+    }
+
     pub fn finish(self: *Streams, ticket: Ticket) bool {
         if (!self.leases.finish(ticket)) return false;
         const entry_value = &self.entries[ticket.slot];

@@ -26,6 +26,14 @@ pub const Environment = struct {
         length: usize,
         alignment: usize,
     ) callconv(std.builtin.CallingConvention.c) *anyopaque {
+        return tryAllocate(roc_host, length, alignment) orelse @panic("out of memory");
+    }
+
+    pub fn requestHost(host: *bridge.RocHost) bridge.RequestHost {
+        return .{ .roc_host = host, .try_alloc = tryAllocate };
+    }
+
+    fn tryAllocate(roc_host: *bridge.RocHost, length: usize, alignment: usize) ?*anyopaque {
         const self: *Environment = @ptrCast(
             @alignCast(roc_host.env),
         );
@@ -34,7 +42,7 @@ pub const Environment = struct {
             usize,
             prefix_length,
             length,
-        ) catch @panic("out of memory");
+        ) catch return null;
         const allocation_alignment =
             std.mem.Alignment.fromByteUnits(
                 @max(alignment, @alignOf(usize)),
@@ -43,7 +51,7 @@ pub const Environment = struct {
             total_length,
             allocation_alignment,
             @returnAddress(),
-        ) orelse @panic("out of memory");
+        ) orelse return null;
         const data = base + prefix_length;
         const stored_size: *usize = @ptrFromInt(
             @intFromPtr(data) - @sizeOf(usize),

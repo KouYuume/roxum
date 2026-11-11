@@ -11,8 +11,8 @@ venv support is required; the first run needs PyPI access. `tools/check.py` incl
 this group, and the Linux test image provides `python3-venv`.
 
 The fixture uses the host's kqueue/epoll backend and nonblocking connection owner.
-It echoes finite request bodies after input EOF, overwrites its response source
-buffer after submission, and writes at most seven socket bytes at a time. Each
+It echoes finite request bodies after input EOF and writes at most seven socket
+bytes at a time. Request and response allocations are poisoned on release. Each
 connection gets at most 32 steps per turn; runnable work is continued without
 waiting for another edge.
 The client checks exact response bytes, completion, rejection, and subsequent
@@ -60,3 +60,11 @@ and freed bytes are poisoned. `test-http2-engine` also runs response submission
 checks against the real engine for stale/closed tickets, duplicate submission,
 conversion and allocation failure, and serialized output after Roc cleanup. This
 fixture does not invoke Roc application code or the production request scheduler.
+
+`Owner.requestOwned` checks execution identity and protocol state before consuming
+input into Roc-owned metadata/body. The fixture echoes those owned bytes, with
+normalized ordinary header counts, and resets stream-local conversion failures.
+Ownership tests cover duplicate handoff, stale/closed/unclaimed tickets, pending
+reset, completed response, failed session, reentrancy, and each scratch/Roc
+allocation failure. Requests survive protocol closure until generated cleanup;
+leases remain claimed until explicit finish, including on conversion failure.
