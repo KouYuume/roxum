@@ -169,7 +169,9 @@ execution ticket, consumes them on every outcome, and releases conversion scratc
 before returning. Independent-client tests exercise this path with synthetic Roc
 values. Checked request handoff now validates the claimed ticket and protocol
 state before consuming input, and the fixture passes through both Roc ownership
-boundaries; live Roc application dispatch remains pending.
+boundaries. A separate byte-driven fixture now invokes the real Roc application
+through these boundaries in all backends and allocator modes. Production worker
+dispatch and effect cancellation remain pending.
 Trailer/deadline APIs and their
 Roc integration can follow in focused changes within milestone 1; do not claim
 native gRPC support until the later integration gates pass.
