@@ -418,7 +418,8 @@ fn outcomeLabel(outcome: u64) []const u8 {
 const testing = std.testing;
 
 /// A region of its own, standing in for the shared one.
-fn testRegion() !*Region {
+pub fn testRegion() !*Region {
+    if (!@import("builtin").is_test) @compileError("test-only metrics region");
     const created = try std.heap.page_allocator.create(Region);
     created.* = .{};
     region = created;
@@ -426,7 +427,8 @@ fn testRegion() !*Region {
     return created;
 }
 
-fn endTestRegion(created: *Region) void {
+pub fn endTestRegion(created: *Region) void {
+    if (!@import("builtin").is_test) @compileError("test-only metrics region");
     route_indexes.clearAndFree(std.heap.smp_allocator);
     region = null;
     counting = false;

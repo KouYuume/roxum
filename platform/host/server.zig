@@ -644,7 +644,7 @@ fn RequestFiber(comptime Environment: type) type {
                     net.PeerAddress.v6 => |ip| .{ .v6 = .{ .segments = ip, .port = item.accepted.remote_port } },
                 };
                 const input = protocol.streams.runningInput(ticket) orelse return true;
-                const id = @import("request_id.zig").decideFields(self.shared.limits.request_id_source, input.fields.items);
+                const id = if (protocol.access[ticket.slot]) |entry| entry.request_id else @import("request_id.zig").decideFields(self.shared.limits.request_id_source, input.fields.items);
                 var method: []const u8 = "";
                 var path: []const u8 = "";
                 var trace: ?[]const u8 = null;
@@ -654,14 +654,7 @@ fn RequestFiber(comptime Environment: type) type {
                     if (std.mem.eql(u8, field.name, "traceparent")) trace = field.value;
                 }
                 request_debug.beginRequest(method, path, id.slice(), trace);
-                if (access_log.enabled()) {
-                    var entry = access_log.Entry{ .request_id = id, .started_at = self.dispatch.queued_at, .queue_nanoseconds = self.started_at -| self.dispatch.queued_at };
-                    for (input.fields.items) |field| {
-                        if (std.mem.eql(u8, field.name, ":method")) entry.method.set(field.value);
-                        if (std.mem.eql(u8, field.name, ":path")) entry.path.set(field.value[0 .. std.mem.indexOfScalar(u8, field.value, '?') orelse field.value.len]);
-                    }
-                    protocol.access[ticket.slot] = entry;
-                }
+                if (protocol.access[ticket.slot]) |*entry| entry.queue_nanoseconds = self.started_at -| self.dispatch.queued_at;
                 break :blk try protocol.owner.requestOwned(&protocol.streams, ticket, remote, id.slice(), .{ .roc_host = &self.roc_host, .try_alloc = runtime.tryAllocWithHost });
             };
             const semantics = if (request.method == bridge.HttpMethod.head) bridge.ResponseRequestSemantics.head else bridge.ResponseRequestSemantics.regular;

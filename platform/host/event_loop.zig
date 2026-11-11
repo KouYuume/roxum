@@ -1161,7 +1161,20 @@ pub const Loop = struct {
                 switch (work) {
                     h2_streams.Work.cancel => |id| protocol.owner.cancel(id) catch return self.close(slot),
                     h2_streams.Work.execute => |execution| {
+                        if (access_log.enabled()) {
+                            const fields = execution.buffer.fields.items;
+                            var entry = access_log.Entry{
+                                .request_id = @import("request_id.zig").decideFields(self.limits.request_id_source, fields),
+                                .started_at = self.now,
+                            };
+                            for (fields) |field| {
+                                if (std.mem.eql(u8, field.name, ":method")) entry.method.set(field.value);
+                                if (std.mem.eql(u8, field.name, ":path")) entry.path.set(field.value[0 .. std.mem.indexOfScalar(u8, field.value, '?') orelse field.value.len]);
+                            }
+                            protocol.access[execution.ticket.slot] = entry;
+                        }
                         if (self.handoff.queuedJobs() >= self.limits.maximum_queued_requests) {
+                            if (protocol.access[execution.ticket.slot]) |*entry| entry.outcome = access_log.Outcome.queue_full;
                             protocol.owner.cancel(execution.id) catch {};
                             _ = protocol.streams.finish(execution.ticket);
                             continue;
@@ -2409,4 +2422,99 @@ test "dispatch sequence exhaustion never wraps into an older identity" {
     try std.testing.expect(item.dispatchRequest(0, 2) == null);
     try std.testing.expect(item.matchesRequest(boundary));
     try std.testing.expect(!item.matchesRequest(below));
+}
+
+test "HTTP/2 admission rejections record one access entry and metric before Roc runs" {
+    // Exercise both consumers together and metrics with access logging disabled.
+    for ([_]bool{ true, false }) |logging| {
+        for ([_]access_log.Outcome{ access_log.Outcome.queue_full, access_log.Outcome.queue_timeout, access_log.Outcome.in_progress_full }) |outcome| {
+            const region = try metrics.testRegion();
+            defer metrics.endTestRegion(region);
+            var capture: access_log.TestCapture = .{};
+            if (logging) capture.start();
+            defer if (logging) capture.stop();
+            var pair: [2]c_int = undefined;
+            try std.testing.expectEqual(@as(c_int, 0), std.c.socketpair(std.c.AF.UNIX, std.c.SOCK.STREAM, 0, &pair));
+            defer net.closeSocket(pair[1]);
+            try net.setListenerNonBlocking(pair[0]);
+            var poller = try poller_backend.Poller.init();
+            defer poller.deinit();
+            var handoff = try Handoff.init(1);
+            defer std.heap.page_allocator.free(handoff.connections);
+            defer std.heap.page_allocator.free(handoff.free_slots);
+            defer handoff.work.injector.deinit();
+            handoff.poller = &poller;
+            handoff.work = try work_queue.Jobs.init(1, &poller);
+            defer std.heap.smp_allocator.free(handoff.work.queues);
+            defer handoff.work.queues[0].deinit();
+            handoff.http2 = true;
+            handoff.limits.maximum_queued_requests = 1;
+            var loop = Loop.init(&handoff);
+            defer loop.expired.deinit(std.heap.smp_allocator);
+            loop.readClock();
+            loop.open(.{ .socket = pair[0], .remote_address = .{ .v4 = .{ 127, 0, 0, 1 } }, .remote_port = 1 });
+            defer loop.close(0);
+            const protocol = handoff.connections[0].http2.?;
+            const preface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" ++ "\x00\x00\x00\x04\x00\x00\x00\x00\x00";
+            try std.testing.expectEqual(@as(isize, preface.len), std.c.send(pair[1], preface, preface.len, 0));
+            protocol.owner.runnable = true;
+            loop.advanceHttp2(0);
+            var previous_id: request_id.Id = .{};
+            // A second stream also checks slot reuse and duplicate cleanup.
+            for ([_]u8{ 1, 3 }, 0..) |stream_id, index| {
+                if (outcome == access_log.Outcome.queue_full) {
+                    try handoff.work.push(.{ .request = .{ .slot = 0, .generation = 0, .sequence = 0, .queued_at = loop.now } });
+                }
+                const block = "\x82\x86\x04\x13/overload?q=secret!\x01\x09localhost";
+                var frame = [_]u8{ 0, 0, block.len, 1, 5, 0, 0, 0, stream_id } ++ block.*;
+                try std.testing.expectEqual(@as(isize, frame.len), std.c.send(pair[1], &frame, frame.len, 0));
+                protocol.owner.runnable = true;
+                loop.advanceHttp2(0);
+                if (outcome == access_log.Outcome.queue_full) {
+                    _ = handoff.work.next(0).?;
+                    try std.testing.expectEqual(@as(usize, 0), handoff.queuedJobs());
+                } else {
+                    try std.testing.expectEqual(@as(usize, 1), handoff.queuedJobs());
+                    if (outcome == access_log.Outcome.queue_timeout) {
+                        loop.now += (loop.limits.queue_timeout_milliseconds + 1) * std.time.ns_per_ms;
+                        loop.rejectExpiredQueue();
+                    } else {
+                        const request = handoff.work.next(0).?.request;
+                        try std.testing.expect(handoff.claimRequest(request));
+                        loop.rejectTaken(request, .{ .expires_at_nanoseconds = 0 }, outcome, request_id.Source.generate);
+                        // A stale completion must not record the same request twice.
+                        loop.rejectTaken(request, .{ .expires_at_nanoseconds = 0 }, outcome, request_id.Source.generate);
+                    }
+                }
+                loop.advanceHttp2(0);
+                protocol.recordCompleted();
+                protocol.recordCompleted();
+                try std.testing.expect(!protocol.busy());
+                try std.testing.expectEqual(@as(usize, 0), protocol.budget.used);
+                if (logging) {
+                    try std.testing.expectEqual(index + 1, capture.count());
+                    const entry = capture.entry(index);
+                    try std.testing.expectEqual(outcome, entry.outcome);
+                    // A reset has no HTTP response status.
+                    try std.testing.expectEqual(@as(u16, 0), entry.status);
+                    try std.testing.expectEqualStrings("GET", entry.method.slice());
+                    try std.testing.expectEqualStrings("/overload", entry.path.slice());
+                    try std.testing.expect(entry.request_id.len > 0);
+                    try std.testing.expect(!std.mem.eql(u8, previous_id.slice(), entry.request_id.slice()));
+                    previous_id = entry.request_id;
+                    var buffer: [2048]u8 = undefined;
+                    const json = capture.json(index, &buffer);
+                    try std.testing.expect(std.mem.indexOf(u8, json, "secret") == null);
+                    try std.testing.expect(std.mem.indexOf(u8, json, @tagName(outcome)) != null);
+                }
+            }
+            var buffer: [8192]u8 = undefined;
+            var writer = std.Io.Writer.fixed(&buffer);
+            try metrics.render(&writer, 0);
+            var expected: [256]u8 = undefined;
+            const series = try std.fmt.bufPrint(&expected, "roxum_http_requests_total{{route=\"\",method=\"GET\",status=\"0\",outcome=\"{s}\"}} 2\n", .{@tagName(outcome)});
+            try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), series) != null);
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, writer.buffered(), "roxum_http_requests_total{"));
+        }
+    }
 }
