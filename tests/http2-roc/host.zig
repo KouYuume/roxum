@@ -96,8 +96,6 @@ const Job = struct {
             return;
         }
         if (!target.finished) {
-            // Only deadline waits are part of this fixture's contract.
-            if (target.wait.socket != -1) return error.UnexpectedSocketWait;
             if (self.heap == null) {
                 self.heap = try environment.detachRequest();
                 std.debug.print("detached-request\n", .{});
@@ -107,6 +105,9 @@ const Job = struct {
             try self.waits.addWaiting(target);
             self.registered = true;
             std.debug.print("registered-wait\n", .{});
+            if (target.wait.socket >= 0 and target.wait.events & std.c.POLL.IN != 0) {
+                std.debug.print("socket-read-wait stream={d}\n", .{self.streams.leases.runningStream(self.ticket).?});
+            }
             return;
         }
         if (target.locals.allocator != null) return error.LeakedFiberContext;
@@ -163,9 +164,15 @@ fn runReady(waits: *scheduler.Waits, environment: *Environment, handled: *usize,
     };
     if (block) waits.endBlockingWait();
     for (reported) |event| {
-        // This fixture currently registers only deadline waits and owner wakes.
-        if (event.kind != poller_backend.Event.Kind.wake) return error.UnexpectedSocketEvent;
-        std.debug.print("poller-wake\n", .{});
+        if (event.kind == poller_backend.Event.Kind.wake) {
+            std.debug.print("poller-wake\n", .{});
+            continue;
+        }
+        if (!scheduler.isFiberToken(event.token)) return error.UnexpectedSocketEvent;
+        if (try waits.onEvent(event.token, try host.net.monotonicNanoseconds())) |target| {
+            ready.appendAssumeCapacity(target);
+            std.debug.print("socket-ready\n", .{});
+        }
     }
     try waits.collectExpired(try host.net.monotonicNanoseconds(), &ready);
     for (ready.items) |target| {
@@ -181,7 +188,7 @@ fn runReady(waits: *scheduler.Waits, environment: *Environment, handled: *usize,
     }
 }
 
-// Empty records let the real poller drive every remaining deadline to completion.
+// Empty records let the real poller drive remaining waits to completion.
 fn drainJobs(waits: *scheduler.Waits, environment: *Environment, handled: *usize, rejected: *usize) !void {
     while (waits.hasWaiting()) try runReady(waits, environment, handled, rejected, true);
 }
@@ -237,6 +244,9 @@ fn run() !void {
     if (host.fiber_wait.waits != null) return error.WaitRegistryAlreadyInstalled;
     host.fiber_wait.waits = &waits;
     defer host.fiber_wait.waits = null;
+    if (host.tcp.fiber_wait != null) return error.SocketWaitHookAlreadyInstalled;
+    host.tcp.fiber_wait = host.fiber_wait.waitSocketHook;
+    defer host.tcp.fiber_wait = null;
     var record: [65536]u8 = undefined;
     while (true) {
         var prefix: [4]u8 = undefined;
@@ -282,6 +292,7 @@ fn run() !void {
             try cancelClosed(&jobs, &waits, &environment, &handled, &rejected);
             if ((try engine.output()).len == 0) break;
         }
+        std.debug.print("batch-complete\n", .{});
     }
     state.streams.disconnect();
     try cancelClosed(&jobs, &waits, &environment, &handled, &rejected);

@@ -32,5 +32,6 @@ for allocator in arena tracking; do
         output="$work_dir/app-$allocator-$backend"
         "$ROC_BIN" build --no-cache --opt="$backend" --target="$target" --output="$output" "$work_dir/tests/http2-roc/app.roc"
         "$venv/bin/python" tests/http2-roc/verify.py "$output" "$allocator" "$backend"
+        "$venv/bin/python" tests/http2-roc/verify_sockets.py "$output" "$allocator" "$backend"
     done
 done

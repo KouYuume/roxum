@@ -6,6 +6,7 @@ pub const bridge = @import("bridge.zig");
 pub const http2 = @import("http2.zig");
 pub const allocator_context = @import("allocator/context.zig");
 pub const exportRuntime = @import("exports.zig").exportRuntime;
+pub const tcp = @import("net/tcp.zig");
 pub const net = @import("net.zig");
 pub const chunked = @import("http1/chunked.zig");
 pub const diagnostics = @import("diagnostics.zig");
