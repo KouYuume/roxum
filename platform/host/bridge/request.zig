@@ -343,7 +343,7 @@ fn splitAbsoluteTarget(
     return splitPathAndQuery(target[suffix_start..]);
 }
 
-fn classifyMethod(method: []const u8) ?abi.HttpMethod {
+pub fn classifyMethod(method: []const u8) ?abi.HttpMethod {
     if (std.mem.eql(u8, method, "OPTIONS")) return abi.HttpMethod.options;
     if (std.mem.eql(u8, method, "GET")) return abi.HttpMethod.get;
     if (std.mem.eql(u8, method, "HEAD")) return abi.HttpMethod.head;

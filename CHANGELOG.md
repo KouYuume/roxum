@@ -14,6 +14,8 @@ Changes to the roxum platform and its integrations, newest first. The platform a
 
 ### Added
 
+- Internal HTTP/2 initial-header mapping into Roc request metadata, including authority handling and split Cookie fields. Production HTTP/2 listener and scheduler integration remain pending.
+
 - Filesystem Unix domain sockets for application and metrics listeners, with shared worker descriptors and identity-checked shutdown cleanup.
 - roxum-proxy-headers: explicit `trust_unix` / `try_trust_unix` policies; ordinary CIDR trust rejects Unix forwarding headers.
 
