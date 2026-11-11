@@ -474,3 +474,32 @@ test "a reused entry exposes none of the previous request's fields" {
     const fresh = Line{ .entry = .{}, .time_unix_milliseconds = 0, .duration_nanoseconds = 0 };
     try testing.expectEqualStrings(format(&expected, &fresh, true, 1), format(&actual, &reused, true, 1));
 }
+
+/// Synchronous capture for host contract tests, without a stderr writer thread.
+pub const TestCapture = if (builtin.is_test) struct {
+    lines: [16]Line = undefined,
+    target: Queue = undefined,
+
+    pub fn start(self: *@This()) void {
+        self.target = .{ .lines = &self.lines };
+        queue = &self.target;
+        mode = Mode.json_lines_with_path;
+    }
+
+    pub fn stop(_: *@This()) void {
+        queue = null;
+        mode = Mode.off;
+    }
+
+    pub fn count(self: *const @This()) usize {
+        return self.target.count;
+    }
+
+    pub fn entry(self: *const @This(), index: usize) Entry {
+        return self.lines[index].entry;
+    }
+
+    pub fn json(self: *const @This(), index: usize, buffer: []u8) []const u8 {
+        return format(buffer, &self.lines[index], true, 1);
+    }
+} else void;

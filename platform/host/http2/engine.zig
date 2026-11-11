@@ -16,6 +16,8 @@ pub const Limits = struct {
 };
 pub const Observer = struct {
     context: *anyopaque,
+    headers_started: ?*const fn (*anyopaque, StreamId) void = null,
+    headers_finished: ?*const fn (*anyopaque, StreamId) void = null,
     /// Initial metadata is complete, before body EOF; never emitted for trailers.
     headers_complete: ?*const fn (*anyopaque, StreamId) void = null,
     header: *const fn (*anyopaque, StreamId, Header) void,
@@ -44,6 +46,8 @@ pub const Engine = struct {
     pending: []const u8 = &.{},
     entered: bool = false,
     failed: bool = false,
+    /// Valid during the closed observer callback.
+    close_error: u32 = 0,
 
     pub fn create(allocator: std.mem.Allocator, limits: Limits, observer: Observer) Error!*Engine {
         if (limits.concurrent_streams == 0 or limits.concurrent_streams > 16) return error.LimitExceeded;
@@ -178,6 +182,20 @@ pub const Engine = struct {
         slot.rejected = true;
     }
 
+    pub fn beginDrain(self: *Engine) Error!void {
+        try self.enter();
+        defer self.entered = false;
+        try check(c.nghttp2_submit_goaway(self.session, c.NGHTTP2_FLAG_NONE, c.nghttp2_session_get_last_proc_stream_id(self.session), c.NGHTTP2_NO_ERROR, null, 0));
+    }
+
+    pub fn activeStreams(self: *const Engine) usize {
+        var count: usize = 0;
+        for (self.slots) |slot| if (slot.id != 0) {
+            count += 1;
+        };
+        return count;
+    }
+
     fn enter(self: *Engine) Error!void {
         if (self.entered) return error.ReentrantCall;
         if (self.failed) return error.Closed;
@@ -238,6 +256,7 @@ fn beginHeaders(_: ?*c.nghttp2_session, frame: [*c]const c.nghttp2_frame, user: 
     for (self.slots[0..self.limits.concurrent_streams]) |*slot| {
         if (slot.id != 0) continue;
         slot.* = .{ .id = frame.*.hd.stream_id };
+        if (self.observer.headers_started) |started| started(self.observer.context, @fromBackingInt(@intCast(slot.id)));
         return 0;
     }
     return c.NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
@@ -267,6 +286,7 @@ fn dataReceived(_: ?*c.nghttp2_session, _: u8, id: i32, data: [*c]const u8, leng
 fn frameReceived(_: ?*c.nghttp2_session, frame: [*c]const c.nghttp2_frame, user: ?*anyopaque) callconv(std.builtin.CallingConvention.c) c_int {
     const self = engine(user);
     if (frame.*.hd.type == c.NGHTTP2_HEADERS and frame.*.headers.cat == c.NGHTTP2_HCAT_REQUEST) {
+        if (self.observer.headers_finished) |finished| finished(self.observer.context, @fromBackingInt(@intCast(frame.*.hd.stream_id)));
         if (self.find(frame.*.hd.stream_id)) |slot| {
             if (!slot.rejected) {
                 if (self.observer.headers_complete) |notify| notify(self.observer.context, @fromBackingInt(@intCast(slot.id)));
@@ -280,11 +300,12 @@ fn frameReceived(_: ?*c.nghttp2_session, frame: [*c]const c.nghttp2_frame, user:
     }
     return 0;
 }
-fn streamClosed(_: ?*c.nghttp2_session, id: i32, _: u32, user: ?*anyopaque) callconv(std.builtin.CallingConvention.c) c_int {
+fn streamClosed(_: ?*c.nghttp2_session, id: i32, error_code: u32, user: ?*anyopaque) callconv(std.builtin.CallingConvention.c) c_int {
     const self = engine(user);
     const slot = self.find(id) orelse return 0;
     if (slot.response) |bytes| self.memory.release(bytes.ptr);
     slot.* = .{};
+    self.close_error = error_code;
     self.observer.closed(self.observer.context, @fromBackingInt(@intCast(id)));
     return 0;
 }

@@ -19,7 +19,7 @@ The host also provides request-scoped memory reuse and cleanup. Streaming, SSE, 
 
 ## Comparison with axum and Go
 
-Like axum, roxum takes handlers' inputs as types and has Rust's kind of type-level checks that Go lacks (errors, null, data races, exhaustive matching). Beyond axum, the compiler keeps domain code pure, and routes are checked at build time. In exchange, roxum has no inbound TLS, HTTP/2, or WebSocket (put a reverse proxy in front for TLS and HTTP/2), reuses only its own integrations, and is young. Its runtime performance does not reach axum's yet: on fixed-response workloads with two cores, its throughput was 73–96% of axum's. Optimized builds take about 3 seconds even when nothing changed.
+Like axum, roxum takes handlers' inputs as types and has Rust's kind of type-level checks that Go lacks (errors, null, data races, exhaustive matching). Beyond axum, the compiler keeps domain code pure, and routes are checked at build time. In exchange, roxum has no inbound TLS or WebSocket (put a reverse proxy in front for TLS), and opt-in HTTP/2 currently supports finite responses only, reuses only its own integrations, and is young. Its runtime performance does not reach axum's yet: on fixed-response workloads with two cores, its throughput was 73–96% of axum's. Optimized builds take about 3 seconds even when nothing changed.
 
 See the [comparison](docs/comparison.md) for each criterion and its sources, and [performance status](docs/performance.md) for the measurements.
 
@@ -60,7 +60,7 @@ Core and integrations are versioned independently. See [versioning](docs/design/
 
 ## Limitations
 
-- IPv4/IPv6 TCP and filesystem Unix sockets; HTTP/1.1 only; use a [reverse proxy](docs/guides/reverse-proxy.md) for inbound TLS, HTTP/2, or HTTP/3.
+- IPv4/IPv6 TCP and filesystem Unix sockets; HTTP/1.1 by default, with [opt-in cleartext HTTP/2 for finite responses](docs/guides/deployment.md#opt-in-http2). Use a [reverse proxy](docs/guides/reverse-proxy.md) for inbound TLS or HTTP/3. Native gRPC is not supported yet.
 - No WebSocket, CONNECT, TRACE, extension methods, or HTTP trailers.
 - CONNECT, TRACE, and arbitrary extension methods are [non-goals](docs/design/non-goals.md) unless strong user demand justifies reconsideration.
 - Timeouts cannot forcibly interrupt arbitrary Roc computation.

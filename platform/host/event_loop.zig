@@ -1,4 +1,6 @@
 const std = @import("std");
+const h2 = @import("http2/connection.zig");
+const h2_streams = @import("http2/streams.zig");
 const builtin = @import("builtin");
 const connection = @import("connection.zig");
 const diagnostics = @import("diagnostics.zig");
@@ -119,6 +121,7 @@ pub const Connection = struct {
     /// free slots without taking their locks.
     open: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     accepted: net.AcceptedSocket = undefined,
+    http2: ?*h2.Connection = null,
     generation: u32 = 0,
     state: State = State.free,
     buffer: []u8 = &.{},
@@ -459,6 +462,7 @@ pub const Completion = struct {
 /// its own until it completes.
 pub const Handoff = struct {
     connections: []Connection,
+    http2: bool = false,
     limits: connection.Limits = .{},
     /// The process's poller: every connection's socket and every waiting
     /// fiber's. The Roc threads wait on it, and the acceptor looks at it when
@@ -529,6 +533,14 @@ pub const Handoff = struct {
         const item = &self.connections[request.slot];
         item.lock.lock();
         defer item.lock.unlock();
+        if (request.http2) |ticket| {
+            if (item.generation != request.generation) return false;
+            const protocol = item.http2 orelse return false;
+            const execution = protocol.execution(ticket) orelse return false;
+            if (execution.claimed) return false;
+            execution.claimed = true;
+            return true;
+        }
         if (!item.matchesRequest(request) or item.dispatch_claimed) return false;
         item.dispatch_claimed = true;
         return true;
@@ -870,6 +882,10 @@ pub const Loop = struct {
         item.lock.lock();
         defer item.lock.unlock();
         if (item.generation != generation) return;
+        if (item.http2) |protocol| {
+            _ = protocol.owner.ready(event);
+            return self.advanceHttp2(slot);
+        }
         switch (event.kind) {
             poller_backend.Event.Kind.readable => {
                 item.read_exhausted = false;
@@ -908,6 +924,7 @@ pub const Loop = struct {
         const item = &self.handoff.connections[request.slot];
         item.lock.lock();
         defer item.lock.unlock();
+        if (request.http2 != null) return self.finishHttp2Locked(request, outcome);
         if (!item.matchesRequest(request)) return;
         self.readClock();
         item.setErrorResponse(error_response.Kind.service_unavailable) catch return self.resumeConnection(.{ .request = request, .action = Completion.Action.close });
@@ -1056,11 +1073,13 @@ pub const Loop = struct {
     }
 
     fn isIdle(item: *const Connection) bool {
+        if (item.http2) |protocol| return !protocol.busy() and protocol.owner.engine.activeStreams() == 0 and protocol.owner.engine.pending.len == 0;
         return item.state == Connection.State.reading and item.length == 0 and item.completed_requests > 0;
     }
 
     /// Takes a connection only to answer it 503 and close it.
     fn openRejected(self: *Loop, accepted: net.AcceptedSocket) void {
+        if (self.handoff.http2) return net.closeSocket(accepted.socket);
         const slot = self.handoff.takeSlot().?;
         const item = &self.handoff.connections[slot];
         item.lock.lock();
@@ -1113,11 +1132,91 @@ pub const Loop = struct {
         item.client_gone = false;
         item.prefetch = .{};
         item.timeout = self.after(self.limits.initial_request_timeout_milliseconds);
+        if (self.handoff.http2) {
+            item.http2 = h2.Connection.create(accepted.socket, self.poller, token(slot, item.generation), self.limits) catch return self.close(slot);
+            return self.advanceHttp2(slot);
+        }
         // The socket stays registered while a Roc thread runs its request;
         // readable notifications invalidate the last exhaustion observation.
         self.poller.watchReadable(accepted.socket, token(slot, item.generation)) catch
             return self.close(slot);
         self.advance(slot);
+    }
+
+    /// The worker lock serializes callbacks, transport steps and submissions.
+    /// Bounded turns leave runnable work for the acceptor tick as well as events.
+    fn advanceHttp2(self: *Loop, slot: u32) void {
+        const item = &self.handoff.connections[slot];
+        const protocol = item.http2 orelse return;
+        if (protocol.closed) return;
+        protocol.expire(self.now);
+        if (protocol.failed) return self.close(slot);
+        for (0..4) |_| {
+            const progress = protocol.owner.step() catch return self.close(slot);
+            if (protocol.failed) return self.close(slot);
+            protocol.recordCompleted();
+            protocol.wakeClosed();
+            if (progress == @import("http2/owner.zig").Progress.closed) return self.close(slot);
+            while (protocol.streams.next()) |work| {
+                switch (work) {
+                    h2_streams.Work.cancel => |id| protocol.owner.cancel(id) catch return self.close(slot),
+                    h2_streams.Work.execute => |execution| {
+                        if (access_log.enabled()) {
+                            const fields = execution.buffer.fields.items;
+                            var entry = access_log.Entry{
+                                .request_id = @import("request_id.zig").decideFields(self.limits.request_id_source, fields),
+                                .started_at = self.now,
+                            };
+                            for (fields) |field| {
+                                if (std.mem.eql(u8, field.name, ":method")) entry.method.set(field.value);
+                                if (std.mem.eql(u8, field.name, ":path")) entry.path.set(field.value[0 .. std.mem.indexOfScalar(u8, field.value, '?') orelse field.value.len]);
+                            }
+                            protocol.access[execution.ticket.slot] = entry;
+                        }
+                        if (self.handoff.queuedJobs() >= self.limits.maximum_queued_requests) {
+                            if (protocol.access[execution.ticket.slot]) |*entry| entry.outcome = access_log.Outcome.queue_full;
+                            protocol.owner.cancel(execution.id) catch {};
+                            _ = protocol.streams.finish(execution.ticket);
+                            continue;
+                        }
+                        protocol.deadlines[execution.ticket.slot] = 0;
+                        protocol.executions[execution.ticket.slot] = .{ .ticket = execution.ticket };
+                        self.queue(.{ .request = .{ .slot = slot, .generation = item.generation, .sequence = execution.ticket.sequence, .queued_at = self.now, .http2 = execution.ticket } });
+                    },
+                }
+            }
+            if (protocol.draining and !protocol.busy() and protocol.owner.engine.activeStreams() == 0 and (protocol.owner.engine.output() catch return self.close(slot)).len == 0) return self.close(slot);
+            if (progress == @import("http2/owner.zig").Progress.waiting) break;
+        }
+    }
+
+    pub fn finishHttp2(self: *Loop, request: work_queue.Request, failure: ?access_log.Outcome) void {
+        const item = &self.handoff.connections[request.slot];
+        item.lock.lock();
+        defer item.lock.unlock();
+        self.finishHttp2Locked(request, failure);
+    }
+
+    fn finishHttp2Locked(self: *Loop, request: work_queue.Request, failure: ?access_log.Outcome) void {
+        const item = &self.handoff.connections[request.slot];
+        if (item.generation != request.generation) return;
+        const protocol = item.http2 orelse return;
+        const ticket = request.http2 orelse return;
+        const execution = protocol.execution(ticket) orelse return;
+        execution.waiter = null;
+        if (failure) |outcome| {
+            if (protocol.access[ticket.slot]) |*entry| entry.outcome = outcome;
+            if (protocol.streams.leases.runningStream(ticket)) |id| protocol.owner.cancel(id) catch {};
+        }
+        _ = protocol.streams.finish(ticket);
+        execution.* = .{};
+        self.readClock();
+        item.timeout = self.after(self.limits.keep_alive_idle_timeout_milliseconds);
+        if (protocol.closed) {
+            if (!protocol.busy()) self.close(request.slot);
+            return;
+        }
+        self.advanceHttp2(request.slot);
     }
 
     /// Reads until the socket would block, dispatching once the buffered
@@ -1362,6 +1461,13 @@ pub const Loop = struct {
     /// Called with the connection's lock held.
     fn expireIfDue(self: *Loop, slot: u32) void {
         const item = &self.handoff.connections[slot];
+        if (item.http2) |protocol| {
+            protocol.expire(self.now);
+            if (protocol.owner.runnable) self.advanceHttp2(slot);
+            if (item.http2 == null) return;
+            if (!protocol.busy() and protocol.owner.engine.activeStreams() == 0 and protocol.owner.engine.pending.len == 0 and item.timeout.hasPassedAt(self.now)) self.close(slot);
+            return;
+        }
         switch (item.state) {
             Connection.State.reading,
             Connection.State.reading_body,
@@ -1429,6 +1535,10 @@ pub const Loop = struct {
             const item = &self.handoff.connections[slot];
             item.lock.lock();
             defer item.lock.unlock();
+            if (request.http2 != null) {
+                self.finishHttp2Locked(request, access_log.Outcome.queue_timeout);
+                continue;
+            }
             if (!item.matchesRequest(request) or item.dispatch_claimed) continue;
             self.reject(slot, access_log.Outcome.queue_timeout, request.queued_at);
         }
@@ -1458,7 +1568,15 @@ pub const Loop = struct {
             if (!item.open.load(std.builtin.AtomicOrder.acquire)) continue;
             item.lock.lock();
             defer item.lock.unlock();
-            if (isIdle(item)) {
+            if (item.http2) |protocol| {
+                protocol.draining = true;
+                protocol.owner.engine.beginDrain() catch {
+                    self.close(@intCast(index));
+                    continue;
+                };
+                protocol.owner.runnable = true;
+                self.advanceHttp2(@intCast(index));
+            } else if (isIdle(item)) {
                 self.close(@intCast(index));
             } else {
                 drainStream(item);
@@ -1514,6 +1632,13 @@ pub const Loop = struct {
 
     fn close(self: *Loop, slot: u32) void {
         const item = &self.handoff.connections[slot];
+        if (item.http2) |protocol| {
+            protocol.disconnect();
+            if (protocol.busy()) return;
+            protocol.destroy();
+            item.http2 = null;
+            return self.free(slot);
+        }
         // Closing the socket also removes its registration: accepted sockets
         // are never shared with another process, which epoll requires.
         net.closeSocket(item.accepted.socket);
@@ -2297,4 +2422,99 @@ test "dispatch sequence exhaustion never wraps into an older identity" {
     try std.testing.expect(item.dispatchRequest(0, 2) == null);
     try std.testing.expect(item.matchesRequest(boundary));
     try std.testing.expect(!item.matchesRequest(below));
+}
+
+test "HTTP/2 admission rejections record one access entry and metric before Roc runs" {
+    // Exercise both consumers together and metrics with access logging disabled.
+    for ([_]bool{ true, false }) |logging| {
+        for ([_]access_log.Outcome{ access_log.Outcome.queue_full, access_log.Outcome.queue_timeout, access_log.Outcome.in_progress_full }) |outcome| {
+            const region = try metrics.testRegion();
+            defer metrics.endTestRegion(region);
+            var capture: access_log.TestCapture = .{};
+            if (logging) capture.start();
+            defer if (logging) capture.stop();
+            var pair: [2]c_int = undefined;
+            try std.testing.expectEqual(@as(c_int, 0), std.c.socketpair(std.c.AF.UNIX, std.c.SOCK.STREAM, 0, &pair));
+            defer net.closeSocket(pair[1]);
+            try net.setListenerNonBlocking(pair[0]);
+            var poller = try poller_backend.Poller.init();
+            defer poller.deinit();
+            var handoff = try Handoff.init(1);
+            defer std.heap.page_allocator.free(handoff.connections);
+            defer std.heap.page_allocator.free(handoff.free_slots);
+            defer handoff.work.injector.deinit();
+            handoff.poller = &poller;
+            handoff.work = try work_queue.Jobs.init(1, &poller);
+            defer std.heap.smp_allocator.free(handoff.work.queues);
+            defer handoff.work.queues[0].deinit();
+            handoff.http2 = true;
+            handoff.limits.maximum_queued_requests = 1;
+            var loop = Loop.init(&handoff);
+            defer loop.expired.deinit(std.heap.smp_allocator);
+            loop.readClock();
+            loop.open(.{ .socket = pair[0], .remote_address = .{ .v4 = .{ 127, 0, 0, 1 } }, .remote_port = 1 });
+            defer loop.close(0);
+            const protocol = handoff.connections[0].http2.?;
+            const preface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" ++ "\x00\x00\x00\x04\x00\x00\x00\x00\x00";
+            try std.testing.expectEqual(@as(isize, preface.len), std.c.send(pair[1], preface, preface.len, 0));
+            protocol.owner.runnable = true;
+            loop.advanceHttp2(0);
+            var previous_id: request_id.Id = .{};
+            // A second stream also checks slot reuse and duplicate cleanup.
+            for ([_]u8{ 1, 3 }, 0..) |stream_id, index| {
+                if (outcome == access_log.Outcome.queue_full) {
+                    try handoff.work.push(.{ .request = .{ .slot = 0, .generation = 0, .sequence = 0, .queued_at = loop.now } });
+                }
+                const block = "\x82\x86\x04\x13/overload?q=secret!\x01\x09localhost";
+                var frame = [_]u8{ 0, 0, block.len, 1, 5, 0, 0, 0, stream_id } ++ block.*;
+                try std.testing.expectEqual(@as(isize, frame.len), std.c.send(pair[1], &frame, frame.len, 0));
+                protocol.owner.runnable = true;
+                loop.advanceHttp2(0);
+                if (outcome == access_log.Outcome.queue_full) {
+                    _ = handoff.work.next(0).?;
+                    try std.testing.expectEqual(@as(usize, 0), handoff.queuedJobs());
+                } else {
+                    try std.testing.expectEqual(@as(usize, 1), handoff.queuedJobs());
+                    if (outcome == access_log.Outcome.queue_timeout) {
+                        loop.now += (loop.limits.queue_timeout_milliseconds + 1) * std.time.ns_per_ms;
+                        loop.rejectExpiredQueue();
+                    } else {
+                        const request = handoff.work.next(0).?.request;
+                        try std.testing.expect(handoff.claimRequest(request));
+                        loop.rejectTaken(request, .{ .expires_at_nanoseconds = 0 }, outcome, request_id.Source.generate);
+                        // A stale completion must not record the same request twice.
+                        loop.rejectTaken(request, .{ .expires_at_nanoseconds = 0 }, outcome, request_id.Source.generate);
+                    }
+                }
+                loop.advanceHttp2(0);
+                protocol.recordCompleted();
+                protocol.recordCompleted();
+                try std.testing.expect(!protocol.busy());
+                try std.testing.expectEqual(@as(usize, 0), protocol.budget.used);
+                if (logging) {
+                    try std.testing.expectEqual(index + 1, capture.count());
+                    const entry = capture.entry(index);
+                    try std.testing.expectEqual(outcome, entry.outcome);
+                    // A reset has no HTTP response status.
+                    try std.testing.expectEqual(@as(u16, 0), entry.status);
+                    try std.testing.expectEqualStrings("GET", entry.method.slice());
+                    try std.testing.expectEqualStrings("/overload", entry.path.slice());
+                    try std.testing.expect(entry.request_id.len > 0);
+                    try std.testing.expect(!std.mem.eql(u8, previous_id.slice(), entry.request_id.slice()));
+                    previous_id = entry.request_id;
+                    var buffer: [2048]u8 = undefined;
+                    const json = capture.json(index, &buffer);
+                    try std.testing.expect(std.mem.indexOf(u8, json, "secret") == null);
+                    try std.testing.expect(std.mem.indexOf(u8, json, @tagName(outcome)) != null);
+                }
+            }
+            var buffer: [8192]u8 = undefined;
+            var writer = std.Io.Writer.fixed(&buffer);
+            try metrics.render(&writer, 0);
+            var expected: [256]u8 = undefined;
+            const series = try std.fmt.bufPrint(&expected, "roxum_http_requests_total{{route=\"\",method=\"GET\",status=\"0\",outcome=\"{s}\"}} 2\n", .{@tagName(outcome)});
+            try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), series) != null);
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, writer.buffered(), "roxum_http_requests_total{"));
+        }
+    }
 }

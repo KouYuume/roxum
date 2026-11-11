@@ -15,6 +15,7 @@ pub const Request = struct {
     generation: u32,
     sequence: u64,
     queued_at: u64,
+    http2: ?@import("http2/requests.zig").Ticket = null,
 };
 
 pub const Job = union(enum) {

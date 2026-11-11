@@ -3,8 +3,8 @@
 The host build includes the nghttp2 1.71.0 protocol library. The internal adapter
 in `platform/host/http2/engine.zig` and the connection owner in
 `platform/host/http2/owner.zig` are exercised by a separate socket fixture.
-It is not yet connected to the production listener or Roc request scheduler;
-applications still use HTTP/1. The [gRPC plan](../plans/grpc.md) records the remaining
+Opt-in TCP/Unix listeners now use the production worker scheduler for finite
+HTTP/2 exchanges; HTTP/1 remains the default. The [gRPC plan](../plans/grpc.md) records the remaining
 milestone 1 work.
 
 ## Dependency and replacement boundary
@@ -89,14 +89,13 @@ scheduler removes it and releases its resources.
 Each readiness token must be unique across connection reuse, including queued
 stale events. `ready` ignores mismatched tokens and terminal owners. The fixture
 assigns monotonically increasing tokens and checks connection-slot reuse. This
-is a transport contract, not yet generation-safe Roc request/effect scheduling.
+is a transport contract; the worker integration below also tracks request/effect lifetimes.
 
 The fixture uses the same kqueue/epoll backend as the production host and admits
 two connections for independent-client tests. It checks real socket backpressure,
 writable resumption, aborted writes, invalid-preface isolation, and TCP half-close.
-The production worker connection table, request scheduler, drain coordination,
-listener protocol selection, and public Roc APIs are still separate integration
-work. Fixture timeouts are test bounds, not production deadline support.
+The fixture is separate from the production worker integration described below.
+Its timeouts are test bounds, not RPC execution deadlines.
 
 ## Bounds and failures
 
@@ -121,9 +120,9 @@ allocations are outside this domain and require separate bounded admission.
 Request input currently uses automatic receive-window replenishment with bounded
 finite request sizes. A streaming request reader must replace that with explicit
 consumption accounting and aggregate backpressure before this adapter can serve
-unbounded or full-duplex requests. Trailers, request deadlines, GOAWAY drain,
-production scheduler integration, and corresponding observability are not yet
-implemented here. The [transport design](../plans/http2-transport.md) describes
+unbounded or full-duplex requests. Trailers and generic RPC execution deadlines
+remain pending. Finite worker scheduling, GOAWAY drain and observability are
+described below. The [transport design](../plans/http2-transport.md) describes
 those proposed contracts, not capabilities of this adapter.
 
 ## Verification
@@ -150,8 +149,8 @@ Sequence exhaustion rejects new leases instead of wrapping. The owner must suppl
 a different connection token when replacing the registry.
 
 The independent-client fixture uses these leases around its finite echo execution.
-Production worker dispatch, cross-thread completion messages, and cancellation of
-Roc effects are still pending; lease bookkeeping alone does not implement them.
+Lease bookkeeping alone does not cancel effects; the worker integration below
+records parked fibers and wakes them after protocol closure.
 
 ## Request metadata mapping
 
@@ -159,8 +158,8 @@ Roc effects are still pending; lease bookkeeping alone does not implement them.
 engine validation. It must run outside engine callbacks, with copied input kept
 alive until conversion returns; a rejected prefix or request trailers are not an
 initial field section. The owner remains responsible for wire validation, header
-and body limits, and stream admission. This adapter is not yet wired into the
-production owner or Roc scheduler.
+and body limits, and stream admission. Both the fixture and production owner
+use this adapter during request handoff.
 
 The adapter recognizes the existing eight application methods and sets
 `Http.Version.Http20`. It rejects missing, repeated, unknown, or out-of-order
@@ -212,8 +211,8 @@ partially collected input and is safe after rejection.
 The independent-client fixture uses this collector for finite echo requests and
 checks copied metadata, fragmented body input, trailer exclusion, stream resets,
 and disconnect cleanup. A smaller fixture budget exercises input rejection,
-unrelated-stream progress, and capacity reuse after repeated cancellations. Production worker integration and application effect
-cancellation remain pending.
+unrelated-stream progress, and capacity reuse after repeated cancellations. The
+production connection uses the same collector under its worker lock.
 
 ## Input handoff to Roc ownership
 
@@ -233,8 +232,8 @@ fails. Other inputs sharing the budget remain owned by their respective streams.
 A successful result has no borrowed references to the connection input or request
 ID. The caller retains it until the consuming Roc invocation, or releases it with
 generated cleanup if dispatch is cancelled. Releasing connection input does not
-finish a request lease or cancel pending execution. Production queue integration,
-request scheduling, and streaming body handoff remain separate work.
+finish a request lease or cancel pending execution. Production queue integration preserves that contract; incremental streaming body
+handoff remains separate work.
 
 ## Finite stream registry
 
@@ -261,8 +260,8 @@ prevents further admission. The registry does not itself cancel effects or retai
 Roc values, and it must outlive all claimed executions.
 
 The independent-client fixture uses this registry for finite echo execution.
-Production worker dispatch, cross-thread completion, effect cancellation, and
-streaming receive credit remain separate integration work.
+Worker dispatch and completion use the same registry under the connection lock.
+Streaming receive credit remains separate work.
 
 ## Finite Roc response mapping
 
@@ -316,8 +315,8 @@ path and checks that every response has released all Roc allocations before the
 next transport step. Its test allocator poisons freed bytes. Focused integration
 tests also cover stale execution, reset/disconnect, conversion failure, scratch
 exhaustion, engine allocation failure, and output serialization after Roc cleanup.
-These tests invoke generated ABI value helpers, not a Roc application. Production
-worker dispatch and cancellation of application effects remain pending.
+These tests invoke generated ABI value helpers, not a Roc application. The real
+Roc fixture and production listener checks cover invocation separately.
 
 ## Checked request dispatch handoff
 
@@ -342,8 +341,7 @@ advancing transport output. Diagnostic header counts describe normalized ordinar
 fields, including the synthesized Host field, rather than HTTP/2 pseudo-fields.
 Unsupported methods and invalid application paths reset only their stream. This
 exercises both ownership boundaries together. The real Roc fixture below also
-checks invocation; production worker dispatch and application effect cancellation
-remain pending.
+checks invocation; production invocation is covered separately below.
 
 ## Real Roc execution fixture
 
@@ -406,5 +404,66 @@ discards its upstream connection; registration and collection counts must balanc
 
 No cross-thread resumption, TCP write/TLS cancellation, file-operation cancellation,
 or crash isolation is exercised. The socket fixture continues to cover nonblocking
-transport and backpressure independently. Production scheduling and effect
-cancellation remain required before HTTP/2 is available to applications.
+transport and backpressure independently. The production listener checks below
+exercise the worker integration.
+
+
+## Production finite HTTP/2 listeners
+
+`Server.ListenOptions.protocol` selects `Http1` (the default) or explicit cleartext
+prior-knowledge `Http2`, independently of TCP/Unix addressing. One initialized
+model and the existing worker threads serve both protocols. The HTTP/2 path buffers
+input through EOF and accepts finite responses; attempted response writers/file
+streams reset their stream instead of silently returning an empty successful body.
+Trailers, metadata-time RPC deadlines and incremental body capabilities are pending.
+
+Each connection table slot optionally owns `http2/connection.zig`. Its connection
+lock serializes every engine call, input conversion and response submission.
+Callbacks only update copied input and closure state. The event loop queues a
+connection generation plus a stream ticket; claiming the job is separate from
+claiming the protocol lease. Closed queued/running leases pin the connection slot
+until executor cleanup. Stale events and completions cannot address a reused slot.
+
+Request fibers share the production wait registry and may resume on another Roc
+thread. Parking records the fiber and wait serial under the connection lock;
+closure signals that wait, including a wake before registry insertion. Resumption
+removes the parked pointer before running Roc. Normal completion consumes Roc
+values before heap release; cancellation/crash closes borrowed resources and
+abandons the heap before finishing the lease. No connection lock is held while
+application code executes or yields.
+
+Transport turns perform at most four bounded owner steps. Readiness drives them;
+the acceptor tick also advances runnable owners so edge-triggered input left after
+a turn is not stranded. Pending frame bytes remain owned by nghttp2 until written.
+The serialized owner protects response copying from concurrent peer reset.
+
+Each connection supports 16 streams, 16 KiB field sections, the configured finite
+body limit, and responses up to 2 MiB. Input/conversion storage and session/output
+storage each have 16 MiB ceilings. A thread-safe 128 MiB worker budget bounds all
+HTTP/2 connection, input and session allocations; this is separate from the Roc
+request heap accounting. Admission limits and queue expiry apply to stream jobs.
+Whole-input limit failures reset streams; allocation/transport failure can close
+the connection. Queued jobs still finish their leases after a disconnect.
+
+Initial/idle connection timeouts cover empty connections. Header/body deadlines
+cover incomplete streams, and submitted responses retain their write deadline
+through flow-control or socket stalls. An unfinished header block closes the connection because decoding spans the
+connection; body/write timeouts reset the stream. A blocked socket that cannot
+deliver that reset closes. These are I/O deadlines, not generic
+RPC execution deadlines. Request IDs retain the configured policy. Response access
+entries are recorded after terminal frame bytes leave the owner buffer; disconnect
+records pending entries as client-closed.
+
+Drain sends GOAWAY with the engine's last processed stream ID. Existing admitted
+streams may finish, including those still receiving a body. Once no stream or
+execution remains and pending bytes are flushed, the connection closes. The
+existing process drain deadline remains the final shutdown bound.
+
+`zig build test-http2-listener` invokes the standard verification runner for all
+three Roc backends and both allocators. It uses the production host and supervisor,
+two worker threads, and independent clients on TCP and Unix listeners. Checks cover
+fragmented input, slot reuse, HEAD, application/adapter errors, effect suspension,
+TCP cancellation and permit recovery, body-limit boundaries, incomplete-body
+timeouts, request IDs/access records and GOAWAY. The internal fixture continues to
+provide more controlled allocator and wait-registration checks. This does not yet
+satisfy the gRPC milestone's trailer/deadline and interoperability gates.

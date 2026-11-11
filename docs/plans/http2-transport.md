@@ -14,7 +14,8 @@ The host build pins the same version's Git source with a Zig content hash in
 [`build.zig.zon`](../../build.zig.zon).
 The spike establishes the initial transport evidence. The first milestone 1
 slice adds [host build integration and an internal engine adapter](../design/http2-engine.md);
-production listener and Roc scheduler integration remain pending.
+finite production listener and Roc scheduler integration are implemented;
+trailers, RPC deadlines and incremental streaming remain pending.
 
 | Candidate | Fit and cost | Decision |
 |---|---|---|
@@ -141,46 +142,16 @@ Before milestone 1 is complete:
   Linux execution matrices. Exercise TCP and Unix listeners and retain HTTP/1
   regressions. The isolated spike does not replace these checks.
 
-The engine build, finite-response adapter, and nonblocking connection owner now
-have an independent-client fixture using the host's readiness backend. The next
-implementation slice should connect the owner to the production worker connection
-table and Roc request scheduler. The production HTTP/1 dispatch path now carries
-generation-safe request identities through queueing, claiming, expiry, and
-completion; this prerequisite does not yet dispatch HTTP/2 streams. The engine
-also exposes initial-header completion independently of request EOF, so the
-owner can record admission and deadline metadata before body waits. A bounded
-request-lease registry now separates protocol closure from execution completion
-and is exercised by the independent-client fixture; production worker dispatch
-and effect cancellation remain pending. The Roc request bridge now has a borrowed
-metadata entry sharing the HTTP/1 allocation/ownership builder; the metadata type can
-represent HTTP/2 as `Http.Version.Http20`. A separate adapter maps completed initial
-field sections into that bridge, including authority and split Cookie fields.
-A bounded input collector now retains callback bytes under per-stream limits and
-a shared connection allocation ceiling, and is exercised by the independent-client
-fixture. A consuming bridge now converts completed input into independently
-owned Roc request values and releases input and conversion scratch. Production
-owner integration and stream body capabilities remain pending. A finite stream
-registry now combines input and leases, emits work outside callbacks, and pins
-closed running slots until execution cleanup; the independent fixture uses it.
-A finite Roc response adapter now normalizes fields and retains response ownership
-until copying engine submission; production invocation and response dispatch
-remain pending. The owner now submits finite Roc responses using a checked
-execution ticket, consumes them on every outcome, and releases conversion scratch
-before returning. Independent-client tests exercise this path with synthetic Roc
-values. Checked request handoff now validates the claimed ticket and protocol
-state before consuming input, and the fixture passes through both Roc ownership
-boundaries. A separate byte-driven fixture now invokes the real Roc application
-through these boundaries in all backends and allocator modes. It also exercises
-request fibers, real hosted sleep waits, detached request heaps, peer progress,
-and stopping a sleeping invocation after reset or disconnect, including held
-concurrency-permit release and bulk request-memory reclamation. The fixture now
-registers suspensions with the production wait registry and drives deadline/wake
-collection through kqueue/epoll. Real outbound TCP reads also use the production
-socket-wait hook: readiness resumes the handler, while reset/disconnect close its
-borrowed connection before reclaiming the request. An interactive loopback peer
-synchronizes on read registration and verifies closure and subsequent slot reuse.
-Production worker dispatch, HTTP/2 socket-loop integration, broader effect
-cancellation (including TCP writes/TLS), and cross-thread resumption remain pending.
-Trailer/deadline APIs and their
-Roc integration can follow in focused changes within milestone 1; do not claim
-native gRPC support until the later integration gates pass.
+The engine, finite request/response bridges and nonblocking owner are integrated
+with opt-in TCP/Unix listeners, the production connection table, work queues,
+request fibers and wait registry. Connection locks serialize protocol operations;
+stream leases pin queued/running requests through cleanup. Independent-client
+checks exercise real Roc backends and allocator modes, socket-effect cancellation,
+input limits/timeouts, request IDs, observability and GOAWAY drain. Isolated fixtures
+retain framing, allocator-failure and controlled lifetime coverage.
+
+Milestone 1 is still incomplete. Generic response trailers, metadata-time RPC
+deadlines and the fixed-byte gRPC interoperability probe remain required. Broader
+cancellation/slow-consumer coverage and incremental streaming capabilities should
+be added in focused changes. Native gRPC is not supported until the later
+integration gates pass.

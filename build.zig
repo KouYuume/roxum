@@ -695,6 +695,10 @@ pub fn build(b: *std.Build) void {
     });
     test_postgres.dependOn(&run_postgres.step);
 
+    const test_http2_listener = b.step("test-http2-listener", "Exercise production HTTP/2 TCP and Unix listeners in all backend/allocator modes");
+    const run_http2_listener = b.addSystemCommand(&.{ "python3", "tools/check.py", "--only", "test-http2-listener" });
+    test_http2_listener.dependOn(&run_http2_listener.step);
+
     const test_layered_app = b.step(
         "test-layered-app",
         "Build the layered sample application and check its HTTP responses in every backend",
@@ -799,6 +803,7 @@ const ZigTest = struct {
     imports: []const []const u8 = &.{},
     modules: []const Module = &.{},
     link_libc: bool = false,
+    link_http2: bool = false,
     /// Runs only when the build machine runs this OS.
     os: ?std.Target.Os.Tag = null,
 };
@@ -845,9 +850,9 @@ const unit_tests = [_]ZigTest{
     .{ .root = "platform/host/net/listener_transfer.zig", .link_libc = true },
     .{ .root = "platform/host/bridge.zig", .link_libc = true },
     .{ .root = "platform/host/sync.zig", .link_libc = true },
-    .{ .root = "platform/host/event_loop.zig", .link_libc = true },
+    .{ .root = "platform/host/event_loop.zig", .link_libc = true, .link_http2 = true },
     .{ .root = "platform/host/http1/date.zig" },
-    .{ .root = "platform/host/server.zig", .link_libc = true },
+    .{ .root = "platform/host/server.zig", .link_libc = true, .link_http2 = true },
     .{ .root = "platform/host/connection.zig", .link_libc = true },
     .{ .root = "platform/host/supervisor.zig", .link_libc = true },
     .{ .root = "tests/zig/request_reader_timeout_test.zig", .imports = &.{"host"}, .modules = &.{host_test_module}, .link_libc = true },
@@ -902,7 +907,7 @@ const tsan_tests = [_]ZigTest{
     .{ .root = "platform/host/fiber.zig", .link_libc = true },
     .{ .root = "platform/host/scheduler.zig", .link_libc = true },
     .{ .root = "platform/host/work_queue.zig", .link_libc = true },
-    .{ .root = "platform/host/event_loop.zig", .link_libc = true },
+    .{ .root = "platform/host/event_loop.zig", .link_libc = true, .link_http2 = true },
     .{ .root = "platform/host/host.zig", .link_libc = true },
     .{
         .root = "tests/support/allocator/tracking_environment.zig",
@@ -937,6 +942,24 @@ const TestBuild = struct {
 fn addZigTests(b: *std.Build, step: *std.Build.Step, tests: []const ZigTest, options: TestBuild) void {
     for (tests) |spec| {
         if (spec.os) |os| if (os != b.graph.host.result.os.tag) continue;
+        if (spec.link_http2) {
+            std.debug.assert(spec.imports.len == 0 and spec.modules.len == 0);
+            const optimize = if (options.optimize) |mode|
+                std.meta.stringToEnum(std.builtin.OptimizeMode, mode).?
+            else
+                std.builtin.OptimizeMode.Debug;
+            const module = b.createModule(.{
+                .root_source_file = b.path(spec.root),
+                .target = b.graph.host,
+                .optimize = optimize,
+                .sanitize_thread = options.sanitize_thread,
+                .link_libc = spec.link_libc,
+            });
+            nghttp2_build.attach(b, module, b.graph.host, optimize);
+            const executable = b.addTest(.{ .root_module = module, .use_llvm = true });
+            step.dependOn(&b.addRunArtifact(executable).step);
+            continue;
+        }
         const run = b.addSystemCommand(&.{ b.graph.zig_exe, "test" });
         // The fiber's file-scope assembly requires LLVM on x86_64; the
         // default Debug backend leaves its entry/switch symbols undefined.

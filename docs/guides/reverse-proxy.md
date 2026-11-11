@@ -1,6 +1,7 @@
 # Running behind a reverse proxy
 
-Terminate inbound TLS at a reverse proxy or load balancer. The proxy connects to roxum over IPv4 HTTP/1.1. Outbound PostgreSQL and HTTP connections can use TLS; see [database](database.md) and [HTTP client](http-client.md).
+Terminate inbound TLS at a reverse proxy or load balancer. The configurations below connect to roxum over IPv4 HTTP/1.1. For explicit
+cleartext HTTP/2 upstreams and their current limits, see [deployment](deployment.md#opt-in-http2). Outbound PostgreSQL and HTTP connections can use TLS; see [database](database.md) and [HTTP client](http-client.md).
 
 ## Keep-alive
 
@@ -94,4 +95,4 @@ For a load balancer, configure an HTTPS listener and an HTTP target pointing to 
 - Request heads are limited to 32 KiB. Buffered bodies default to 2 MiB; streaming bodies have no default size limit. Configure `Server.Limits` and route `BodyLimit` values deliberately.
 - A handler crash before sending the head returns 500 and closes the connection. A crash after a streaming head closes without another status line.
 - An initialization crash terminates the worker and drops its connections. Restrict proxy retries to requests safe to repeat.
-- HTTP/2 or HTTP/3 may be used between clients and the proxy; the backend connection remains HTTP/1.1.
+- HTTP/2 or HTTP/3 may be used between clients and the proxy; the backend connection in these configurations remains HTTP/1.1.

@@ -16,7 +16,7 @@ These documents describe the current implementation, its invariants, and the pro
 - [Scope and non-goals](design/non-goals.md): backend focus, platform suggestions by use case, and responsibilities delegated to libraries and integrations
 - [Public API layout](design/public-api-layout.md) and [request representation](design/request-repr.md)
 - [Execution and ownership](design/execution-model.md) and [I/O scheduling](design/io-execution.md)
-- [Internal HTTP/2 engine](design/http2-engine.md): dependency, ownership, limits, and the boundary before listener integration
+- [Internal HTTP/2 engine](design/http2-engine.md): dependency, ownership, limits, and finite production listener integration
 - [Streaming lifecycle](design/streaming.md) and [HTTP field lists](design/http-field-lists.md)
 - [Versioning](design/versioning.md) and [integration releases](design/integration-releases.md)
 - [Contributing](contributing.md): local checks before pushing, and what CI runs

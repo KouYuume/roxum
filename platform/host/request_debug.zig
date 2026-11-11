@@ -196,6 +196,12 @@ const truncated_field_bytes = truncated_field_name.len + 2 + 20 + 2;
 /// not fit in `room` are counted in `X-Roxum-Dbg-Truncated`, so debug mode
 /// never turns a response that fits into a 500.
 pub fn takeResponseHeaders(output: *[maximum_headers]http1.Header, room: Room) []const http1.Header {
+    return takeResponseHeadersWithOverhead(output, room, 4);
+}
+
+/// Field overhead is 4 for HTTP/1 wire framing and 32 for HTTP/2 field accounting.
+pub fn takeResponseHeadersWithOverhead(output: *[maximum_headers]http1.Header, room: Room, overhead: usize) []const http1.Header {
+    const truncation_bytes = truncated_field_name.len + 20 + overhead;
     const current = state();
     const capture = &current.capture;
     defer capture.open = false;
@@ -204,15 +210,15 @@ pub fn takeResponseHeaders(output: *[maximum_headers]http1.Header, room: Room) [
     var count: usize = 0;
     for (0..capture.count) |index| {
         const value = capture.entries[index][0..capture.lengths[index]];
-        const field_bytes = dbg_field_name.len + 2 + value.len + 2;
+        const field_bytes = dbg_field_name.len + value.len + overhead;
         // Leave room for the truncation field in case a later entry is cut.
-        if (count + 2 > room.fields or used + field_bytes + truncated_field_bytes > room.bytes) break;
+        if (count + 2 > room.fields or used + field_bytes + truncation_bytes > room.bytes) break;
         output[count] = .{ .name = dbg_field_name, .value = value };
         used += field_bytes;
         count += 1;
     }
     const dropped = capture.dropped + (capture.count - count);
-    if (dropped > 0 and count < room.fields and used + truncated_field_bytes <= room.bytes) {
+    if (dropped > 0 and count < room.fields and used + truncation_bytes <= room.bytes) {
         output[count] = .{
             .name = truncated_field_name,
             .value = std.fmt.bufPrint(&current.dropped_buffer, "{d}", .{dropped}) catch unreachable,
@@ -392,4 +398,40 @@ test "captured fields stop where the head runs out of room" {
     try std.testing.expectEqual(@as(usize, 2), by_count.len);
     try std.testing.expectEqualStrings("2", by_count[1].value);
     endRequest();
+}
+
+test "HTTP/2 debug fields respect byte and field accounting boundaries" {
+    var headers: [maximum_headers]http1.Header = undefined;
+    const saved = enabled;
+    defer enabled = saved;
+    enabled = true;
+    const marker_bytes = truncated_field_name.len + 20 + 32;
+    const one_entry = dbg_field_name.len + 3 + 32;
+    const threshold = one_entry + marker_bytes;
+    for ([_]usize{ threshold - 1, threshold, threshold + 1 }) |bytes| {
+        beginRequest("GET", "/", null, null);
+        recordDbg("\"x\"");
+        recordDbg("\"x\"");
+        const attached = takeResponseHeadersWithOverhead(&headers, .{ .bytes = bytes, .fields = 64 }, 32);
+        try std.testing.expectEqual(@as(usize, if (bytes < threshold) 1 else 2), attached.len);
+        var charged: usize = 0;
+        for (attached) |field| charged += field.name.len + field.value.len + 32;
+        try std.testing.expect(charged <= bytes);
+        endRequest();
+    }
+    for ([_]usize{ 0, 1, 2 }) |fields| {
+        beginRequest("GET", "/", null, null);
+        recordDbg("\"x\"");
+        recordDbg("\"x\"");
+        const attached = takeResponseHeadersWithOverhead(&headers, .{ .bytes = threshold, .fields = fields }, 32);
+        try std.testing.expectEqual(fields, attached.len);
+        endRequest();
+    }
+    for ([_]usize{ marker_bytes - 1, marker_bytes, marker_bytes + 1 }) |bytes| {
+        beginRequest("GET", "/", null, null);
+        recordDbg("\"x\"");
+        const attached = takeResponseHeadersWithOverhead(&headers, .{ .bytes = bytes, .fields = 64 }, 32);
+        try std.testing.expectEqual(@as(usize, if (bytes < marker_bytes) 0 else 1), attached.len);
+        endRequest();
+    }
 }

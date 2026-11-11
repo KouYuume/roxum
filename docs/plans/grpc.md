@@ -1,6 +1,6 @@
 # gRPC server implementation plan
 
-Status: milestone 0 experiment completed; production support is not implemented.
+Status: milestone 1 in progress. Finite HTTP/2 listeners are implemented; gRPC support is not.
 See the [transport decision and evidence](http2-transport.md). The responsibility
 split is agreed; API names,
 dependencies, and the detailed implementation below remain proposals until their
@@ -121,7 +121,9 @@ execution model cannot express the required lifetimes safely.
 ### 1. Build core HTTP/2 capabilities
 
 In progress: [host dependency, internal engine, and nonblocking connection owner](../design/http2-engine.md).
-The independent fixture does not expose an HTTP/2 listener to Roc applications.
+Opt-in TCP/Unix HTTP/2 listeners now dispatch finite requests through the production
+worker scheduler. Generic trailers, metadata-time deadlines and the fixed-byte gRPC
+probe remain required before this milestone is complete.
 
 Implement explicit opt-in HTTP/2 listeners and bounded stream execution, generic
 response trailers, deadlines, and cancellation. Keep gRPC schemas and status
