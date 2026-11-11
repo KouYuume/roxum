@@ -14,6 +14,8 @@ Changes to the roxum platform and its integrations, newest first. The platform a
 
 ### Added
 
+- Real Roc HTTP/2 execution checks across all compiler backends and allocator modes, covering finite request/response ownership, repeated model use, reset, and error cleanup. Production HTTP/2 listener and worker integration remain pending.
+
 - Internal HTTP/2 request handoff guarded by execution tickets and protocol state, with input release on conversion failure. Independent-client checks pass through both Roc ownership boundaries; live Roc dispatch remains pending.
 
 - Internal HTTP/2 owner submission of finite Roc responses with generation-checked execution tickets and cleanup on success or failure. Independent-client checks now exercise this ownership boundary; production worker dispatch remains pending.

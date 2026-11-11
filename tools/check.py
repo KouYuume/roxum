@@ -174,6 +174,7 @@ TESTS = [
 ]
 
 COMMANDS = [
+    Command("test-http2-roc", ["zig", "build", "test-http2-roc"], "zig"),
     Command("test-http2-wire", ["zig", "build", "test-http2-wire"], "zig"),
     Command("test-abi", ["zig", "build", "test-abi"], "zig"),
     Command("test", ["zig", "build", "test"], "cache"),

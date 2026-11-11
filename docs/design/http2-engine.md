@@ -234,7 +234,7 @@ A successful result has no borrowed references to the connection input or reques
 ID. The caller retains it until the consuming Roc invocation, or releases it with
 generated cleanup if dispatch is cancelled. Releasing connection input does not
 finish a request lease or cancel pending execution. Production queue integration,
-live Roc invocation, and streaming body handoff remain separate work.
+request scheduling, and streaming body handoff remain separate work.
 
 ## Finite stream registry
 
@@ -317,8 +317,7 @@ next transport step. Its test allocator poisons freed bytes. Focused integration
 tests also cover stale execution, reset/disconnect, conversion failure, scratch
 exhaustion, engine allocation failure, and output serialization after Roc cleanup.
 These tests invoke generated ABI value helpers, not a Roc application. Production
-worker dispatch, live Roc invocation, and cancellation of application effects
-remain pending.
+worker dispatch and cancellation of application effects remain pending.
 
 ## Checked request dispatch handoff
 
@@ -342,5 +341,33 @@ its synthetic response through `respondOwned`. It releases both Roc values befor
 advancing transport output. Diagnostic header counts describe normalized ordinary
 fields, including the synthesized Host field, rather than HTTP/2 pseudo-fields.
 Unsupported methods and invalid application paths reset only their stream. This
-exercises both ownership boundaries together; live Roc invocation, production
-worker dispatch, and application effect cancellation remain pending.
+exercises both ownership boundaries together. The real Roc fixture below also
+checks invocation; production worker dispatch and application effect cancellation
+remain pending.
+
+## Real Roc execution fixture
+
+`zig build test-http2-roc` links the current platform sources and generated ABI to
+an actual Roc application. It runs all three compiler backends with the arena and
+tracking allocators. The fixture host uses the same runtime/hosted exports as the
+production entry point, and keeps its copied platform and target archives in a
+per-run temporary directory.
+
+A pinned independent HTTP/2 client supplies length-delimited batches of wire bytes
+and decodes the output. The serialized fixture claims finite executions, activates
+the request allocation context, hands off input, retains the initialized model for
+`roc_handle`, and submits the returned response. It releases route metadata and
+response ownership before resetting the request generation and finishing the lease.
+Output serialization runs only after those request generations have ended. Arena
+live bytes are checked before reset; tracking mode additionally checks zero request
+allocations, the persistent baseline, canaries, and valid frees. The numeric fixture
+model also permits a zero-persistent-allocation assertion after releasing its root.
+
+Cases cover repeated model use beyond stream-slot capacity, fragmented input with
+an independently progressing peer, reset before execution, HEAD, application errors,
+routing misses, request conversion rejection, and invalid application responses.
+These are byte-driven integration checks, not a production listener or scheduler:
+there are no request fibers, yielding effects, socket deadlines, or concurrent
+application execution. The socket fixture continues to cover nonblocking transport
+and backpressure independently. Production scheduling and effect cancellation remain
+required before HTTP/2 is available to applications.

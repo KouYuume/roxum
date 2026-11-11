@@ -60,6 +60,10 @@ jobs:
         run: zig build test
       - name: Verify the internal HTTP/2 engine with an independent client
         run: zig build test-http2-wire
+      - name: Verify real Roc HTTP/2 execution in every backend and allocator mode
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-http2-roc
       - name: Verify platform-dependent package boundary
         env:
           ROC_BIN: ${{ github.workspace }}/.roc-bin/roc

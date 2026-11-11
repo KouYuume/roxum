@@ -62,6 +62,9 @@ pub fn build(b: *std.Build) void {
     const http2_wire_step = b.step("test-http2-wire", "Verify finite HTTP/2 exchanges with the pinned independent client");
     http2_wire_step.dependOn(&http2_wire.step);
 
+    const http2_roc = b.step("test-http2-roc", "Exercise real Roc HTTP/2 handlers in every backend and allocator mode");
+    http2_roc.dependOn(addHttp2RocFixture(b, roc_target, http2_target));
+
     const host_archive = b.fmt("platform/targets/{s}/libhost.a", .{roc_target});
     // Diagnostic only: measures what the safety checks cost. Release bundles
     // always use ReleaseSafe.
@@ -1066,4 +1069,53 @@ fn addHostBuild(b: *std.Build, roc_target: []const u8, contract_alloc: bool, opt
     write_musl_runtime.addArgs(&.{ roc_target, target_dir });
     write_musl_runtime.step.dependOn(&archive_host.step);
     return &write_musl_runtime.step;
+}
+
+fn addHttp2RocFixture(b: *std.Build, roc_target: []const u8, target: std.Build.ResolvedTarget) *std.Build.Step {
+    const compile_step = b.step("http2-roc-hosts", "Compile the real Roc HTTP/2 fixture hosts for roc-target");
+    const musl = std.mem.endsWith(u8, roc_target, "musl");
+    const c_module = b.createModule(.{
+        .root_source_file = b.addWriteFiles().add("http2-roc-engine.zig", ""),
+        .target = target,
+        .optimize = std.builtin.OptimizeMode.ReleaseSafe,
+        .pic = if (musl) true else null,
+    });
+    nghttp2_build.attach(b, c_module, target, std.builtin.OptimizeMode.ReleaseSafe);
+    const engine_object = b.addObject(.{ .name = "http2-roc-engine", .root_module = c_module });
+    compile_step.dependOn(&engine_object.step);
+    const run = b.addSystemCommand(&.{ "bash", "tests/http2-roc/run.sh", roc_target });
+    for ([_]bool{ false, true }) |tracking| {
+        const host_module = b.createModule(.{
+            .root_source_file = b.path("platform/host/host.zig"),
+            .target = target,
+            .optimize = std.builtin.OptimizeMode.ReleaseSafe,
+            .link_libc = true,
+            .pic = if (musl) true else null,
+            .stack_protector = if (std.mem.eql(u8, roc_target, "x64musl")) false else null,
+        });
+        host_module.addImport("nghttp2_c", c_module.import_table.get("nghttp2_c").?);
+        const tracker = b.createModule(.{ .root_source_file = b.path("tests/support/allocator/tracking_allocator.zig"), .target = target, .optimize = std.builtin.OptimizeMode.ReleaseSafe });
+        const environment = b.createModule(.{ .root_source_file = b.path("tests/support/allocator/tracking_environment.zig"), .target = target, .optimize = std.builtin.OptimizeMode.ReleaseSafe });
+        environment.addImport("host", host_module);
+        environment.addImport("tracking_allocator", tracker);
+        const root = b.createModule(.{
+            .root_source_file = b.path("tests/http2-roc/host.zig"),
+            .target = target,
+            .optimize = std.builtin.OptimizeMode.ReleaseSafe,
+            .link_libc = true,
+            .pic = if (musl) true else null,
+            .stack_protector = if (std.mem.eql(u8, roc_target, "x64musl")) false else null,
+        });
+        root.addImport("host", host_module);
+        root.addImport("tracking_environment", environment);
+        const options = b.addOptions();
+        options.addOption(bool, "tracking", tracking);
+        root.addOptions("options", options);
+        const object = b.addObject(.{ .name = if (tracking) "http2-roc-tracking" else "http2-roc-arena", .root_module = root });
+        if (musl) object.bundle_compiler_rt = true;
+        compile_step.dependOn(&object.step);
+        run.addFileArg(object.getEmittedBin());
+    }
+    run.addFileArg(engine_object.getEmittedBin());
+    return &run.step;
 }
