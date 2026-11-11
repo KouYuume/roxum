@@ -385,8 +385,16 @@ requests deliberately use bulk reclamation rather than normal decref checks;
 aggregate live request bytes must return to zero after all invocations finish.
 
 These are byte-driven integration checks, not a production listener or scheduler.
-Empty input records drain timer waits explicitly; no wait registry, cross-thread
-resumption, socket waits, or crash isolation is exercised. The cancellation checks
+Suspensions register with the production `scheduler.Waits` only after heap
+detachment. A real kqueue/epoll backend collects wakes and expired timers, removing
+wait registrations before resumption or destruction. Cancellation uses the installed
+`fiber_wait` registry rather than its unregistered-wait fallback. Checks count
+registrations, collections, and wake events, and require no jobs or waits at exit.
+Ordinary batch boundaries poll without blocking; empty records drain outstanding
+timers using the production blocking-wait deadline calculation. An immediate peer
+in the same batch still precedes the delayed response, but later batches need not
+precede a timer that has expired. No cross-thread resumption, socket waits, or
+crash isolation is exercised. The cancellation checks
 cover sleep and held concurrency permits, not interrupted TCP/file operations. The socket fixture continues to cover nonblocking transport and
 backpressure independently. Production scheduling and effect cancellation remain
 required before HTTP/2 is available to applications.

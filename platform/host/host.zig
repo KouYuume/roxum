@@ -1,3 +1,5 @@
+pub const scheduler = @import("scheduler.zig");
+pub const poller = @import("net/poller.zig");
 pub const fiber_wait = @import("fiber_wait.zig");
 pub const fiber = @import("fiber.zig");
 pub const bridge = @import("bridge.zig");

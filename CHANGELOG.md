@@ -14,6 +14,8 @@ Changes to the roxum platform and its integrations, newest first. The platform a
 
 ### Added
 
+- HTTP/2 real-Roc fixture integration with the production wait registry and kqueue/epoll, verifying timer collection and cancellation wakes before fiber cleanup. Production worker integration remains pending.
+
 - HTTP/2 real-Roc fixture coverage for stopping sleeping invocations on reset/disconnect, reclaiming their request heaps, and releasing held concurrency permits before peer dispatch. Production worker integration remains pending.
 
 - HTTP/2 real-Roc fixture coverage for request fibers, hosted sleep/resume, detached request heaps, peer progress, and late-response cleanup after reset or disconnect. Production scheduling and effect cancellation remain pending.
