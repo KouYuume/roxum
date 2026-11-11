@@ -214,3 +214,24 @@ checks copied metadata, fragmented body input, trailer exclusion, stream resets,
 and disconnect cleanup. A smaller fixture budget exercises input rejection,
 unrelated-stream progress, and capacity reuse after repeated cancellations. Production worker integration and application effect
 cancellation remain pending.
+
+## Input handoff to Roc ownership
+
+`bridge.requestFromHttp2Input` consumes a completed finite `Input`. It must run
+outside engine callbacks, with the caller's request allocation domain active.
+Conversion uses the connection input budget for normalized fields and joined
+Cookie scratch, while the resulting request uses the supplied Roc allocator.
+Engine input and bridge metadata share the same borrowed field representation;
+no intermediate field-array copy or C engine types are needed at this boundary.
+
+Before EOF, or after rejection/release, handoff returns `InvalidState` without
+changing input or allocating Roc values. Once EOF is present, the attempt consumes
+input on success or failure. It releases temporary scratch and buffered input,
+including on invalid metadata or allocation failure. A second handoff therefore
+fails. Other inputs sharing the budget remain owned by their respective streams.
+
+A successful result has no borrowed references to the connection input or request
+ID. The caller retains it until the consuming Roc invocation, or releases it with
+generated cleanup if dispatch is cancelled. Releasing connection input does not
+finish a request lease or cancel pending execution. Production queue integration,
+live Roc invocation, and streaming body handoff remain separate work.

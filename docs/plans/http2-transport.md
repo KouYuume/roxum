@@ -157,7 +157,9 @@ represent HTTP/2 as `Http.Version.Http20`. A separate adapter maps completed ini
 field sections into that bridge, including authority and split Cookie fields.
 A bounded input collector now retains callback bytes under per-stream limits and
 a shared connection allocation ceiling, and is exercised by the independent-client
-fixture. Production owner integration and stream body capabilities remain pending.
+fixture. A consuming bridge now converts completed input into independently
+owned Roc request values and releases input and conversion scratch. Production
+owner integration and stream body capabilities remain pending.
 Trailer/deadline APIs and their
 Roc integration can follow in focused changes within milestone 1; do not claim
 native gRPC support until the later integration gates pass.

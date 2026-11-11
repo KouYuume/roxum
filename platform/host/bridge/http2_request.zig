@@ -5,6 +5,7 @@ const target = @import("../http1/request_target.zig");
 const TargetForm = @import("../http1/types.zig").TargetForm;
 const syntax = @import("../http1/syntax.zig");
 
+pub const Input = @import("../http2/input.zig").Input;
 const Header = request.MetadataHeader;
 pub const Error = request.RequestError || error{InvalidHeaders};
 
@@ -110,4 +111,22 @@ pub fn requestFromHttp2(
     }
     const Version = @TypeOf(@as(request.Metadata, undefined).version);
     return request.requestFromMetadata(.{ .method = method, .target = request_path, .version = Version.http20, .headers = normalized[0..length] }, body, remote, id, host);
+}
+
+/// Consume completed, admitted input outside engine callbacks. The caller must
+/// supply an active request allocation domain through host. Initial fields and
+/// finite body bytes are copied into that domain before connection input is freed.
+/// A completed input is released even when conversion fails; earlier or already
+/// released input returns InvalidState without being modified. No borrowed input
+/// survives this call. The returned request still needs normal Roc cleanup.
+pub fn requestFromHttp2Input(
+    input: *Input,
+    remote: request.RemoteAddress,
+    id: []const u8,
+    host: request.RequestHost,
+) (Error || error{InvalidState})!request.HttpRequest {
+    const body = input.body() orelse return error.InvalidState;
+    const fields = input.headers() orelse return error.InvalidState;
+    defer input.deinit();
+    return requestFromHttp2(input.budget.allocator(), fields, body, remote, id, host);
 }

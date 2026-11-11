@@ -151,7 +151,7 @@ const BodySource = union(enum) {
 };
 
 /// Borrowed, validated transport metadata. Values are copied into Roc ownership.
-pub const MetadataHeader = struct { name: []const u8, value: []const u8 };
+pub const MetadataHeader = @import("../http_field.zig").Header;
 pub const Metadata = struct {
     method: abi.HttpMethod,
     target: []const u8,
