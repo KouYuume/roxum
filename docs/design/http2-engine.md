@@ -276,10 +276,12 @@ leases in sixteen fixed slots. The connection owner serializes all operations
 and keeps the table and its shared input budget at stable addresses. Only engine
 callbacks from admitted, validated streams may supply fields and data.
 
-Initial headers record the receipt timestamp once; finite execution becomes
-eligible only at body EOF. Between engine calls, `next` emits either one stream
-cancellation or one claimed execution containing its ticket, timestamp, and
-borrowed input. Input limit/allocation failures release storage and queue one
+Initial headers record the receipt timestamp once. `next` admits finite execution
+only at body EOF; the internal `nextMetadata` entry can claim it immediately after
+initial metadata completion. Both entries share the same one-shot claim, so body
+EOF cannot dispatch a metadata-claimed request again. Between engine calls, either
+entry emits one stream cancellation or one claimed execution containing its
+ticket, timestamp, and borrowed input. Input limit/allocation failures release storage and queue one
 cancellation without affecting peers. Invalid callback ordering is an error to
 the owner. Capacity or sequence exhaustion is an admission error; no callback
 resumes application code or enters the engine recursively.
@@ -290,12 +292,18 @@ and shared budget are not thread-safe. Closing a stream or disconnecting release
 input and invalidates unclaimed work; a claimed slot remains reserved until
 request cleanup calls `finish`. Finishing releases any remaining input, rejects
 stale or duplicate tickets, and cannot release a reused slot. Disconnect also
-prevents further admission. The registry does not itself cancel effects or retain
-Roc values, and it must outlive all claimed executions.
+prevents further admission. If execution finishes before input EOF, subsequent
+validated DATA and trailer callbacks are discarded without allocating. The engine
+still enforces cumulative input limits, and the lease slot stays reserved until
+protocol closure. The caller must enforce read/write deadlines while that stream
+remains open. The registry does not itself cancel effects or retain Roc values,
+and it must outlive all claimed executions.
 
-The independent-client fixture uses this registry for finite echo execution.
-Worker dispatch and completion use the same registry under the connection lock.
-Streaming receive credit remains separate work.
+The independent-client fixture checks both finite echo execution and metadata-only
+replies followed by late body/trailer input. Production worker dispatch still uses
+EOF-gated `next` under the connection lock. `nextMetadata` does not install a Roc
+body reader or wake suspended executions; connecting metadata dispatch to those
+capabilities remains separate work. Streaming receive credit also remains separate.
 
 ## Internal execution deadlines
 

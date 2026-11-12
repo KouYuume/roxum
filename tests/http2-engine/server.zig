@@ -81,6 +81,7 @@ const Connection = struct {
     owner: ?transport.Owner = null,
     deadline: net.Deadline = undefined,
     blocked_reported: bool = false,
+    metadata_only: bool = false,
 
     fn close(self: *Connection) void {
         const owner = &self.owner.?;
@@ -97,7 +98,7 @@ const Connection = struct {
         // Bound each turn even when a peer continuously sends or reads.
         for (0..32) |_| {
             if (self.state.failed) return false;
-            while (self.state.streams.next()) |work| {
+            while (if (self.metadata_only) self.state.streams.nextMetadata() else self.state.streams.next()) |work| {
                 const execution = switch (work) {
                     streams.Work.cancel => |id| {
                         try owner.cancel(id);
@@ -109,6 +110,11 @@ const Connection = struct {
                 var values = roc_values.Environment{ .allocator = std.heap.smp_allocator };
                 var host = values.rocHost();
                 defer std.debug.assert(values.live_allocations == 0);
+                if (self.metadata_only) {
+                    const response = roc_values.response(200, &.{}, "metadata", &host);
+                    try owner.respondOwned(&self.state.streams, execution.ticket, response, &host, bridge.ResponseRequestSemantics.regular);
+                    continue;
+                }
                 const request = owner.requestOwned(&self.state.streams, execution.ticket, self.remote, "fixture-request", roc_values.Environment.requestHost(&host)) catch {
                     try owner.cancel(execution.id);
                     continue;
@@ -236,6 +242,7 @@ pub fn main() !void {
                 };
                 errdefer net.closeSocket(accepted.socket);
                 connection.* = .{};
+                connection.metadata_only = std.c.getenv("ROXUM_TEST_HTTP2_METADATA") != null;
                 connection.remote = .{ .v4 = .{ .octets = accepted.remote_address.v4, .port = accepted.remote_port } };
                 connection.state.streams = streams.Streams.init(next_token, &connection.state.budget, .{ .header_bytes = 1024, .body_bytes = 4096 });
                 connection.state.budget.limit = input_budget;

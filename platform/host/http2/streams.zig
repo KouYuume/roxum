@@ -9,6 +9,7 @@ const Entry = struct {
     ticket: ?Ticket = null,
     buffer: ?input.Input = null,
     cancel_pending: bool = false,
+    finished: bool = false,
 };
 pub const Work = union(enum) {
     cancel: engine.StreamId,
@@ -33,6 +34,7 @@ pub const Streams = struct {
         const ticket = self.leases.find(id) orelse try self.leases.open(id);
         const entry = &self.entries[ticket.slot];
         if (entry.ticket == null) entry.* = .{ .ticket = ticket, .buffer = input.Input.init(self.budget, self.limits) };
+        if (entry.finished) return;
         const buffer = if (entry.buffer) |*buffer| buffer else return error.InvalidState;
         if (buffer.phase == input.Phase.rejected) return;
         buffer.header(field) catch |err| switch (err) {
@@ -51,6 +53,7 @@ pub const Streams = struct {
 
     pub fn data(self: *Streams, id: engine.StreamId, bytes: []const u8) Error!void {
         const entry = try self.lookup(id);
+        if (entry.finished) return;
         const buffer = if (entry.buffer) |*buffer| buffer else return error.InvalidState;
         if (buffer.phase == input.Phase.rejected) return;
         buffer.data(bytes) catch |err| switch (err) {
@@ -61,6 +64,7 @@ pub const Streams = struct {
 
     pub fn end(self: *Streams, id: engine.StreamId) Error!void {
         const entry = try self.lookup(id);
+        if (entry.finished) return;
         const buffer = if (entry.buffer) |*buffer| buffer else return error.InvalidState;
         if (buffer.phase == input.Phase.rejected) return;
         buffer.end() catch return error.InvalidState;
@@ -96,6 +100,18 @@ pub const Streams = struct {
     /// values. Every execute result must be finished after request cleanup, even
     /// if the protocol closes meanwhile. Cancellation work is emitted once.
     pub fn next(self: *Streams) ?Work {
+        return self.nextReady(false);
+    }
+
+    /// Claim after initial metadata. Input stays connection-owned; rejection,
+    /// expiry, closure, or finish releases its bytes. Recheck body availability
+    /// under the owner lock; no view may survive a yield. Every claim still
+    /// requires finish after cleanup. This entry does not install a body reader.
+    pub fn nextMetadata(self: *Streams) ?Work {
+        return self.nextReady(true);
+    }
+
+    fn nextReady(self: *Streams, metadata: bool) ?Work {
         for (&self.entries) |*entry_value| {
             const ticket = entry_value.ticket orelse continue;
             const id = self.leases.stream(ticket) orelse continue;
@@ -104,7 +120,7 @@ pub const Streams = struct {
                 return .{ .cancel = id };
             }
             const buffer = if (entry_value.buffer) |*buffer| buffer else continue;
-            if (buffer.body() == null) continue;
+            if (if (metadata) buffer.headers() == null else buffer.body() == null) continue;
             const anchor = self.leases.claim(ticket) orelse continue;
             return .{ .execute = .{ .ticket = ticket, .id = id, .headers_at = anchor, .buffer = buffer } };
         }
@@ -123,6 +139,9 @@ pub const Streams = struct {
         const entry_value = &self.entries[ticket.slot];
         if (entry_value.buffer) |*buffer| buffer.deinit();
         entry_value.buffer = null;
+        // Execution may finish before request EOF. The engine still validates
+        // and bounds subsequent input; do not retain it or reopen execution.
+        entry_value.finished = true;
         if (self.leases.stream(ticket) == null) entry_value.* = .{};
         return true;
     }
@@ -325,7 +344,7 @@ test "bounded callback and completion sequences release all input and leases" {
                 2 => table.data(id, "body") catch {},
                 3 => table.end(id) catch {},
                 4 => table.close(id),
-                5, 6 => if (table.next()) |work| {
+                5, 6 => if (if (random & 1 == 0) table.next() else table.nextMetadata()) |work| {
                     switch (work) {
                         Work.cancel => |cancelled| table.close(cancelled),
                         Work.execute => |execution| tickets[execution.ticket.slot] = execution.ticket,
@@ -374,5 +393,114 @@ test "expiry releases incomplete input and rejects queued or claimed work once" 
         try testReady(&table, testId(3));
         const peer = table.next().?.execute;
         try std.testing.expect(table.finish(peer.ticket));
+    }
+}
+
+test "metadata admission claims once before body EOF without changing finite admission" {
+    var budget = input.Budget{ .backing = std.testing.allocator, .limit = 8192 };
+    var table = Streams.init(8, &budget, .{ .header_bytes = 1024, .body_bytes = 16 });
+    defer table.disconnect();
+    const id = testId(1);
+    try table.header(id, .{ .name = ":method", .value = "POST" });
+    try std.testing.expect(table.nextMetadata() == null);
+    try table.headersComplete(id, 42);
+    try std.testing.expect(table.next() == null);
+    const work = table.nextMetadata().?.execute;
+    defer _ = table.finish(work.ticket);
+    try std.testing.expectEqual(@as(u64, 42), work.headers_at);
+    try std.testing.expectEqualStrings("POST", work.buffer.headers().?[0].value);
+    try std.testing.expect(work.buffer.body() == null);
+    try std.testing.expect(table.nextMetadata() == null);
+    try table.data(id, "bo");
+    try std.testing.expect(table.runningInput(work.ticket).?.body() == null);
+    try table.data(id, "dy");
+    try table.header(id, .{ .name = "trailer", .value = "ignored" });
+    try table.end(id);
+    try std.testing.expectEqualStrings("body", table.runningInput(work.ticket).?.body().?);
+    try std.testing.expectEqual(@as(usize, 1), work.buffer.headers().?.len);
+    try std.testing.expect(table.next() == null);
+    try std.testing.expect(table.nextMetadata() == null);
+}
+
+test "early completion discards input and reserves the slot until protocol closure" {
+    var budget = input.Budget{ .backing = std.testing.allocator, .limit = 8192 };
+    var table = Streams.init(9, &budget, .{ .header_bytes = 1024, .body_bytes = 16 });
+    defer table.disconnect();
+    const id = testId(1);
+    try table.header(id, .{ .name = "x", .value = "retained" });
+    try table.headersComplete(id, 42);
+    try table.data(id, "prefix");
+    const work = table.nextMetadata().?.execute;
+    try std.testing.expect(table.finish(work.ticket));
+    try std.testing.expect(!table.finish(work.ticket));
+    try std.testing.expect(table.runningInput(work.ticket) == null);
+    try std.testing.expectEqual(@as(usize, 0), budget.used);
+    // No allocation is possible: late validated callbacks must only discard.
+    budget.limit = 0;
+    try table.data(id, "suffix");
+    try table.header(id, .{ .name = "trailer", .value = "discarded" });
+    try table.end(id);
+    try std.testing.expect(table.nextMetadata() == null);
+    try std.testing.expect(table.next() == null);
+    try std.testing.expectEqual(@as(usize, 0), budget.used);
+    budget.limit = 8192;
+    try testReady(&table, testId(3));
+    const peer = table.nextMetadata().?.execute;
+    try std.testing.expect(peer.ticket.slot != work.ticket.slot);
+    try std.testing.expectEqualStrings("body", peer.buffer.body().?);
+    try std.testing.expect(table.finish(peer.ticket));
+    table.close(id);
+    try testReady(&table, testId(5));
+    const reused = table.next().?.execute;
+    try std.testing.expectEqual(work.ticket.slot, reused.ticket.slot);
+    try std.testing.expect(!table.finish(work.ticket));
+    try std.testing.expectEqualStrings("body", reused.buffer.body().?);
+    try std.testing.expect(table.finish(reused.ticket));
+}
+
+test "metadata executions retain cleanup leases across body failure reset and disconnect" {
+    const Failure = enum { body_limit, allocation, reset, disconnect, expiry };
+    for (std.enums.values(Failure)) |failure| {
+        var budget = input.Budget{ .backing = std.testing.allocator, .limit = 8192 };
+        var table = Streams.init(10, &budget, .{ .header_bytes = 1024, .body_bytes = 4 });
+        defer table.disconnect();
+        const id = testId(1);
+        try table.header(id, .{ .name = "x", .value = "value" });
+        try table.headersComplete(id, 100);
+        const work = table.nextMetadata().?.execute;
+        try std.testing.expect(table.leases.limitExecution(work.ticket, 10, 10));
+        switch (failure) {
+            Failure.body_limit => {
+                // Nearest valid sizes below/at the bound, then first excess byte.
+                try table.data(id, "123");
+                try std.testing.expectEqual(@as(usize, 3), work.buffer.bytes.items.len);
+                try table.data(id, "4");
+                try std.testing.expectEqual(@as(usize, 4), work.buffer.bytes.items.len);
+                try table.data(id, "5");
+            },
+            Failure.allocation => {
+                budget.limit = budget.used;
+                try table.data(id, "1");
+            },
+            Failure.reset => table.close(id),
+            Failure.disconnect => table.disconnect(),
+            Failure.expiry => {
+                try std.testing.expect(!table.expireExecutions(109));
+                try std.testing.expect(table.expireExecutions(110));
+                try std.testing.expect(!table.expireExecutions(111));
+                try std.testing.expect(table.runningInput(work.ticket) == null);
+            },
+        }
+        try std.testing.expectEqual(@as(usize, 0), budget.used);
+        if (failure == Failure.body_limit or failure == Failure.allocation or failure == Failure.expiry) {
+            try std.testing.expectEqual(id, table.nextMetadata().?.cancel);
+            try std.testing.expect(table.nextMetadata() == null);
+            table.close(id);
+        }
+        try std.testing.expect(table.leases.stream(work.ticket) != null);
+        try std.testing.expect(table.runningInput(work.ticket) == null);
+        try std.testing.expect(table.finish(work.ticket));
+        try std.testing.expect(table.leases.stream(work.ticket) == null);
+        try std.testing.expect(!table.finish(work.ticket));
     }
 }

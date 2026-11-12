@@ -71,3 +71,12 @@ Ownership tests cover duplicate handoff, stale/closed/unclaimed tickets, pending
 reset, completed response, failed session, reentrancy, and each scratch/Roc
 allocation failure. Requests survive protocol closure until generated cleanup;
 leases remain claimed until explicit finish, including on conversion failure.
+
+The fixture-only `ROXUM_TEST_HTTP2_METADATA` mode claims initial metadata before
+body EOF and returns a synthetic finite Roc ABI response. Independent-client
+checks complete sixteen replies with request input still open, send late DATA and
+trailers or reset, and reuse released slots. Late DATA still exercises the engine's
+4095/4096/4097-byte body boundary. Registry unit tests cover one-shot metadata
+admission, retained partial input, early-finish discard, reset/disconnect, expiry,
+and allocation/limit failures after claiming. Production Roc dispatch remains
+EOF-gated; this fixture does not exercise a suspended Roc body reader.

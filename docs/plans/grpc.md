@@ -129,9 +129,12 @@ budgets and stream-local expiry. `Server.Limits.http2_execution` installs an opt
 server cap before body waits. The [fixed-byte gRPC probe](../../tests/grpc-probe/README.md)
 checks successful and rejected Unary exchanges with an independent native gRPC
 client on TCP and Unix sockets. `RequestExecution` exposes elapsed time and
-per-request deadline tightening in finite handlers. Roc metadata-phase dispatch
-remains required to install integration deadlines before body waits, and therefore
-before this milestone is complete. Streaming response completion belongs
+per-request deadline tightening in finite handlers. The internal stream registry
+can claim metadata before EOF and discard late input after early execution
+completion, with independent-client checks. Production still uses EOF-gated
+dispatch; body-reader suspension and wakeup must be connected before enabling
+Roc metadata-phase dispatch. That dispatch remains required to install integration
+deadlines before body waits, and therefore before this milestone is complete. Streaming response completion belongs
 to the later streaming RPC milestones.
 
 Implement explicit opt-in HTTP/2 listeners and bounded stream execution, generic
