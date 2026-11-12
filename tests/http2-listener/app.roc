@@ -6,6 +6,8 @@ import pf.Concurrency
 import pf.Tcp
 import pf.Sleep
 import pf.RequestExecution
+import pf.BodyLimit
+import pf.Middleware
 import pf.Handler
 import pf.MethodRouter
 import pf.Reply
@@ -28,7 +30,7 @@ init! = |{}| {
 	if RequestExecution.elapsed_nanoseconds!({}) != Err(Unavailable) or RequestExecution.limit_nanoseconds!(0) != Err(Unavailable) {
 		return Err(StartupErr("execution controls must be unavailable in init"))
 	}
-	settings : { path : Str, execution_milliseconds : Try(U64, [Missing]), http1 : Try(Bool, [Missing]) }
+	settings : { path : Str, execution_milliseconds : Try(U64, [Missing]), http1 : Try(Bool, [Missing]), body_bytes : Try(U64, [Missing]), body_milliseconds : Try(U64, [Missing]), write_milliseconds : Try(U64, [Missing]) }
 	settings = Config.load!(base_text).map_err(|ConfigErr(message)| StartupErr(message))?
 	limiter = match Concurrency.new!({ max_keys: 1 }) {
 		Ok(value) => value
@@ -45,8 +47,8 @@ init! = |{}| {
 			endpoint: if Str.is_empty(settings.path) { Server.Endpoint.Tcp({ address: IpAddr.V4((127, 0, 0, 1)), port: 0 }) } else { Server.Endpoint.Unix({ path: settings.path }) },
 			protocol: if settings.http1 ?? Bool.False { Server.Protocol.Http1 } else { Server.Protocol.Http2 },
 			threads: Server.Threads.Fixed(2),
-			timeouts: { ..Server.Timeouts.defaults, request_head_milliseconds: 1_000, request_body_milliseconds: io_timeout, response_write_milliseconds: io_timeout },
-			limits: { maximum_body_bytes: 1024, http2_execution: execution },
+			timeouts: { ..Server.Timeouts.defaults, request_head_milliseconds: 1_000, request_body_milliseconds: settings.body_milliseconds ?? io_timeout, response_write_milliseconds: settings.write_milliseconds ?? io_timeout },
+			limits: { maximum_body_bytes: settings.body_bytes ?? 1024, maximum_streamed_body_bytes: Server.BodyLimit.Bytes(4), http2_execution: execution },
 			access_log: Server.AccessLog.JsonLines,
 			request_id: Server.RequestIdSource.TrustIncoming,
 		},
@@ -58,7 +60,60 @@ routes = {
 	handler = Handler.effectful(wait_and_answer!)
 	methods = MethodRouter.methods([MethodRouter.get(handler), MethodRouter.post(handler)])
 	Router.new.route("/trailers", methods).route("/empty-trailers", methods).route("/invalid-trailers", methods).route("/echo", methods).route("/reject", methods).route("/invalid-response", methods).route("/sleep", methods).route("/cancel", methods).route("/permit", methods).route("/tcp", methods).route("/tcp-cancel", methods).route("/id", methods).route("/debug", methods).route("/debug-many", methods).route("/crash", methods).route("/execution-elapsed", methods).route("/execution-zero", methods).route("/execution-stale", methods).route("/execution-limit", methods).route("/execution-cap", methods).route("/execution-unavailable", methods)
+		.route("/metadata-reject", MethodRouter.post(handler).layer([Middleware.Stage.BeforeBody(|_model, _head| Err(Reply.status(403)))]))
+		.route("/metadata-reject-body", MethodRouter.post(handler).layer([Middleware.Stage.BeforeBody(|_model, _head| Err(Reply.text("denied").with_status(403)))]))
+		.route("/metadata-reject-trailers", MethodRouter.post(handler).layer([Middleware.Stage.BeforeBody(|_model, _head| Err(Reply.text("denied").with_status(403).with_trailers([ResponseHeader.{ name: HeaderName.("x-result"), value: "done" }])))]))
+		.route("/metadata-limit", MethodRouter.post(handler).layer(BodyLimit.whole(4)))
+		.route("/metadata-stream", MethodRouter.post(collect).layer(BodyLimit.streamed(Server.BodyLimit.Bytes(4))))
+		.route("/metadata-stream-default", MethodRouter.post(collect))
+		.route("/metadata-stream-chunks", MethodRouter.post(collect).layer(BodyLimit.streamed(Server.BodyLimit.Unlimited)))
+		.route("/metadata-chunks", MethodRouter.post(handler).layer([Middleware.Stage.OnChunk(uppercase)]))
+		.route("/metadata-wait", MethodRouter.post(handler).layer([Middleware.Stage.BeforeBody(metadata_wait!)]))
+		.route("/metadata-deadline", MethodRouter.post(Handler.effectful(must_not_run!)).layer([Middleware.Stage.BeforeBody(metadata_wait!)]))
+		.route("/metadata-zero", MethodRouter.post(Handler.effectful(must_not_run!)).layer([Middleware.Stage.BeforeBody(metadata_wait!)]))
+
 }
+
+metadata_wait! = |Model.(state), head| {
+	if head.path == "/metadata-zero" {
+		RequestExecution.limit_nanoseconds!(0).map_err(|_| Reply.status(500))?
+		crash "expired metadata returned to middleware"
+	}
+	if head.path == "/metadata-deadline" {
+		RequestExecution.limit_nanoseconds!(500_000_000).map_err(|_| Reply.status(500))?
+	}
+	Concurrency.acquire!(state.limiter, "cancel-key", 1).map_err(|_| Reply.status(429))?
+	port = U16.from_str(Str.from_utf8_lossy(head.query)).map_err(|_| Reply.status(400))?
+	Tcp.with_origin!(
+		Tcp.Origin.{ host: "127.0.0.1", port, tls: Tcp.Tls.Off, reuse_idle: Bool.False },
+		1_000,
+		|connection| {
+			Tcp.write!(connection, "ready".to_utf8(), 1_000)?
+			Tcp.discard!(connection)
+			Ok({})
+		},
+	).map_err(|_| Reply.status(500))?
+	Ok(head)
+}
+
+must_not_run! = |_model, _context| {
+	Sleep.millis!(1)
+	crash "metadata deadline reached the body handler"
+}
+
+uppercase = Middleware.ChunkCheck.new(
+	{},
+	|state, bytes| Ok({ state, bytes: List.map(bytes, |byte| if byte == 'a' { 'A' } else { byte }) }),
+	|_state| Ok({}),
+)
+
+collect : Handler(Model, [], {})
+collect = Handler.streaming(Handler.Streaming.{
+	begin!: |_model, _head| Ok([]),
+	chunk!: |received, bytes| Ok(List.concat(received, bytes)),
+	done!: |_model, received| Ok(Reply.text(Str.from_utf8_lossy(received))),
+	abort!: |_received, _reason| {},
+})
 
 wait_and_answer! = |Model.(state), context| {
 	path = context.request.path

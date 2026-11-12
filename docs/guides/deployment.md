@@ -29,12 +29,12 @@ so both TCP and Unix listeners support it. Configure the proxy's upstream for
 cleartext HTTP/2 prior knowledge. HTTP/1 Upgrade and automatic protocol detection
 are not supported on this listener.
 
-This first HTTP/2 path accepts complete request bodies before dispatch and returns
-finite responses. Ordinary routing, middleware, request IDs and effectful handlers
-use the worker's existing request fibers. A reset cancels the affected suspended
-handler without closing its peers. Response streaming, SSE, file responses,
-early request-body processing, and native gRPC remain unsupported;
-attempting a streamed response resets that stream.
+HTTP/2 routing and `BeforeBody` middleware run after initial headers; ordinary
+handlers receive complete finite bodies. Request IDs and effects use the worker's
+existing request fibers. A reset cancels the affected suspended request without
+closing its peers. Responses are finite, optionally with trailers. Response
+streaming, SSE, file responses, incremental request-body processing, and native
+gRPC remain unsupported; attempting a streamed response resets that stream.
 
 To bound HTTP/2 execution, set a listener-wide cap:
 
@@ -66,10 +66,12 @@ expiry resets the stream rather than producing an HTTP response or gRPC status.
 The elapsed-time operation also checks expiry before returning. Duration addition
 saturates at `U64.highest`; a large value cannot remove an existing limit. These
 effects apply to the current request and expose no reusable resource handle.
-Early Roc metadata processing is not yet supported: handlers and middleware still
-run after the complete HTTP/2 body arrives, so an integration cannot yet install
-a parsed `grpc-timeout` before body waits. The listener cap remains the way to
-bound that earlier phase.
+HTTP/2 routing and `BeforeBody` middleware run after initial headers, before
+waiting for the finite body. An integration can parse its timeout in Roc and call
+`RequestExecution.limit_nanoseconds!` in that stage. The duration still starts at
+header receipt, so queueing and metadata effects cannot grant a fresh budget.
+Ordinary handlers and `AfterBody` middleware run after body EOF. The listener cap
+also bounds work before Roc begins and cannot be extended by the integration.
 
 The configured finite body limit applies. Each connection admits at most 16
 streams, with 16 KiB field sections and at most 2 MiB per finite response. Input

@@ -7,8 +7,8 @@ import RouteContext
 ## `effectful`, or `static` runs after the platform has received the whole
 ## body: its `RouteContext` holds the body as `Bytes`, and the
 ## extractors read that same body however many times they are run. A handler
-## made with `streaming` gets the body in parts instead, for bodies too large
-## to hold.
+## made with `streaming` gets the body in parts instead. HTTP/1 can receive
+## bodies too large to hold; HTTP/2 collects bounded input before delivering parts.
 Handler(model, tag, provided) := [
 	Pure((RouteContext(provided) -> Try(Reply, Reply))),
 	Stateful((model, RouteContext(provided) -> Try(Reply, Reply))),

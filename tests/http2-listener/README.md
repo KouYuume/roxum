@@ -51,3 +51,20 @@ connection, releases its permit, and preserves peers. With a listener cap, a Roc
 limit cannot widen it. Both controls report `Unavailable` in initialization and
 HTTP/1 requests. All checks use TCP and Unix sockets across the backend/allocator
 matrix; exact deadline boundaries remain covered by the internal lease tests.
+
+Metadata-phase checks use a TCP notification and a held permit to prove that Roc
+`BeforeBody` runs while the request body is still open. They verify successful
+body resumption, reset and deadline cleanup, immediate expiry without returning
+to Roc, and exact timeout access outcomes. A 10-second server/input cap distinguishes
+the middleware's 500 ms deadline from host defaults. Repeated EOF/parking races
+and 16383/16384/16385-byte chunk boundaries cover whole-body `OnChunk` and collected
+streamed reads. Early middleware/fallback replies accept late DATA/trailers, and
+an unfinished body still times out after response EOF. Whole/streamed route limits and the configured streamed-read default
+exercise 3/4/5 bytes and reject excess before EOF. The large streamed case explicitly
+replaces the default with `Unlimited` while retaining the finite server cap. This remains finite input
+collection, not incremental network streaming.
+
+Early-response deadline checks configure a 1-second write deadline and a
+3-second input deadline. Empty, finite-body, and trailer replies remain open
+after their output completes and the write deadline passes, then reset at the
+input deadline. Peer requests continue on both TCP and Unix connections.

@@ -1157,7 +1157,7 @@ pub const Loop = struct {
             protocol.recordCompleted();
             protocol.wakeClosed();
             if (progress == @import("http2/owner.zig").Progress.closed) return self.close(slot);
-            while (protocol.streams.next()) |work| {
+            while (protocol.streams.nextMetadata()) |work| {
                 switch (work) {
                     h2_streams.Work.cancel => |id| protocol.owner.cancel(id) catch return self.close(slot),
                     h2_streams.Work.execute => |execution| {
@@ -1179,7 +1179,6 @@ pub const Loop = struct {
                             _ = protocol.streams.finish(execution.ticket);
                             continue;
                         }
-                        protocol.deadlines[execution.ticket.slot] = 0;
                         protocol.executions[execution.ticket.slot] = .{ .ticket = execution.ticket };
                         self.queue(.{ .request = .{ .slot = slot, .generation = item.generation, .sequence = execution.ticket.sequence, .queued_at = self.now, .http2 = execution.ticket } });
                     },

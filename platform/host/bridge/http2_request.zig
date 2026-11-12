@@ -130,3 +130,21 @@ pub fn requestFromHttp2Input(
     defer input.deinit();
     return requestFromHttp2(input.budget.allocator(), fields, body, remote, id, host);
 }
+
+/// Copy admitted initial metadata while retaining finite input for a request
+/// reader. The token is a request-scoped capability, never a protocol identity.
+/// The owner must hold its input lock across conversion and install the reader.
+pub fn requestFromHttp2Metadata(
+    input: *Input,
+    token: u64,
+    remote: request.RemoteAddress,
+    id: []const u8,
+    host: request.RequestHost,
+) (Error || error{InvalidState})!request.HttpRequest {
+    const fields = input.headers() orelse return error.InvalidState;
+    var value = try requestFromHttp2(input.budget.allocator(), fields, &.{}, remote, id, host);
+    // An empty body has no Roc allocation to release when installing the token.
+    std.debug.assert(value.body.tag == request.HttpRequestBodyTag.Empty);
+    value.body = request.requestBodyFromStream(token);
+    return value;
+}

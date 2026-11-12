@@ -24,6 +24,8 @@ pub const Observer = struct {
     data: *const fn (*anyopaque, StreamId, []const u8) void,
     end: *const fn (*anyopaque, StreamId) void,
     closed: *const fn (*anyopaque, StreamId) void,
+    /// The transport consumed all bytes through response END_STREAM.
+    response_sent: ?*const fn (*anyopaque, StreamId) void = null,
 };
 const Slot = struct {
     id: i32 = 0,
@@ -49,6 +51,7 @@ pub const Engine = struct {
     session: ?*c.nghttp2_session = null,
     slots: [16]Slot = @splat(.{}),
     pending: []const u8 = &.{},
+    pending_response_end: ?StreamId = null,
     entered: bool = false,
     failed: bool = false,
     /// Valid during the closed observer callback.
@@ -66,6 +69,7 @@ pub const Engine = struct {
         c.nghttp2_session_callbacks_set_on_header_callback(callbacks, headerReceived);
         c.nghttp2_session_callbacks_set_on_data_chunk_recv_callback(callbacks, dataReceived);
         c.nghttp2_session_callbacks_set_on_frame_recv_callback(callbacks, frameReceived);
+        c.nghttp2_session_callbacks_set_on_frame_send_callback(callbacks, frameSent);
         c.nghttp2_session_callbacks_set_on_stream_close_callback(callbacks, streamClosed);
         var memory = c.nghttp2_mem{ .mem_user_data = &self.memory, .malloc = allocate, .calloc = calloc, .realloc = resize, .free = release };
         try check(c.nghttp2_session_server_new3(&self.session, callbacks, self, null, &memory));
@@ -131,7 +135,15 @@ pub const Engine = struct {
     pub fn consumeOutput(self: *Engine, count: usize) Error!void {
         if (self.entered) return error.ReentrantCall;
         if (count > self.pending.len) return error.InvalidState;
+        self.entered = true;
+        defer self.entered = false;
         self.pending = self.pending[count..];
+        if (self.pending.len == 0) {
+            if (self.pending_response_end) |id| {
+                self.pending_response_end = null;
+                if (self.observer.response_sent) |sent| sent(self.observer.context, id);
+            }
+        }
     }
 
     /// Check protocol admission immediately before handing input to execution.
@@ -394,6 +406,14 @@ fn frameReceived(_: ?*c.nghttp2_session, frame: [*c]const c.nghttp2_frame, user:
         if (self.find(frame.*.hd.stream_id)) |slot| {
             if (!slot.rejected) self.observer.end(self.observer.context, @fromBackingInt(@intCast(slot.id)));
         }
+    }
+    return 0;
+}
+fn frameSent(_: ?*c.nghttp2_session, frame: [*c]const c.nghttp2_frame, user: ?*anyopaque) callconv(std.builtin.CallingConvention.c) c_int {
+    // mem_send serializes before the transport writes. For HEADERS, nghttp2
+    // calls this only after the final CONTINUATION has been serialized.
+    if ((frame.*.hd.type == c.NGHTTP2_HEADERS or frame.*.hd.type == c.NGHTTP2_DATA) and frame.*.hd.flags & c.NGHTTP2_FLAG_END_STREAM != 0) {
+        engine(user).pending_response_end = @fromBackingInt(@intCast(frame.*.hd.stream_id));
     }
     return 0;
 }
@@ -944,4 +964,56 @@ test "finite trailers reject bodyless statuses before committing initial headers
         try self.checkDispatchable(id);
         try self.respond(id, status, &.{}, "");
     }
+}
+
+test "response completion follows the last CONTINUATION byte exactly once" {
+    const Context = struct {
+        sent: usize = 0,
+        fn responseSent(ptr: *anyopaque, id: StreamId) void {
+            const self: *@This() = @ptrCast(@alignCast(ptr));
+            std.debug.assert(@backingInt(id) == 1);
+            self.sent += 1;
+        }
+    };
+    var context = Context{};
+    var observer = TestObserver.observer(&context);
+    observer.response_sent = Context.responseSent;
+    const self = try Engine.create(std.testing.allocator, .{ .header_bytes = 65536 }, observer);
+    defer self.destroy();
+    try openTestStream(self);
+    // Incompressible enough to require HEADERS plus CONTINUATION, without
+    // relying on a particular HPACK table layout or encoded byte count.
+    var value: [32768]u8 = undefined;
+    var random: u32 = 42;
+    for (&value) |*byte| {
+        random = random *% 1664525 +% 1013904223;
+        byte.* = @intCast(33 + (random >> 16) % 93);
+    }
+    try self.respond(@fromBackingInt(1), 200, &.{.{ .name = "x-large", .value = &value }}, "");
+    var continuations: usize = 0;
+    while (true) {
+        const bytes = try self.output();
+        try std.testing.expect(bytes.len >= 9);
+        try std.testing.expectEqual(@as(usize, 0), context.sent);
+        if (bytes[3] == c.NGHTTP2_CONTINUATION) continuations += 1;
+        if (self.pending_response_end != null) {
+            try std.testing.expectEqual(@as(u8, c.NGHTTP2_CONTINUATION), bytes[3]);
+            try std.testing.expect(bytes[4] & c.NGHTTP2_FLAG_END_HEADERS != 0);
+            try self.consumeOutput(0);
+            try self.consumeOutput(bytes.len - 1);
+            try std.testing.expectEqual(@as(usize, 0), context.sent);
+            try self.consumeOutput(1);
+            break;
+        }
+        try self.consumeOutput(bytes.len);
+    }
+    try std.testing.expect(continuations > 0);
+    try std.testing.expectEqual(@as(usize, 1), context.sent);
+    try self.consumeOutput(0);
+    while (true) {
+        const bytes = try self.output();
+        if (bytes.len == 0) break;
+        try self.consumeOutput(bytes.len);
+    }
+    try std.testing.expectEqual(@as(usize, 1), context.sent);
 }

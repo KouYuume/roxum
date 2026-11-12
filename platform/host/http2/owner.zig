@@ -79,12 +79,26 @@ pub const Owner = struct {
     /// conversion starts, input is consumed on success or failure. The caller
     /// owns the returned request and must finish the lease after its cleanup.
     pub fn requestOwned(self: *Owner, registry: *streams.Streams, ticket: streams.Ticket, remote: bridge.RemoteAddress, request_id: []const u8, host: bridge.RequestHost) (Error || request.Error)!request_types.HttpRequest {
+        return self.requestOwnedWithBody(registry, ticket, null, remote, request_id, host);
+    }
+
+    /// Copy initial metadata without consuming input; the request-scoped reader
+    /// owns body access under the same connection lock until execution cleanup.
+    pub fn requestMetadataOwned(self: *Owner, registry: *streams.Streams, ticket: streams.Ticket, token: u64, remote: bridge.RemoteAddress, request_id: []const u8, host: bridge.RequestHost) (Error || request.Error)!request_types.HttpRequest {
+        return self.requestOwnedWithBody(registry, ticket, token, remote, request_id, host);
+    }
+
+    fn requestOwnedWithBody(self: *Owner, registry: *streams.Streams, ticket: streams.Ticket, token: ?u64, remote: bridge.RemoteAddress, request_id: []const u8, host: bridge.RequestHost) (Error || request.Error)!request_types.HttpRequest {
         if (self.terminal or registry.leases.connection != self.token) return error.Closed;
         try self.expireExecutions(registry);
         const id = registry.leases.runningStream(ticket) orelse return error.Closed;
         try self.engine.checkDispatchable(id);
         const buffer = registry.runningInput(ticket) orelse return error.Closed;
-        const value = request.requestFromHttp2Input(buffer, remote, request_id, host) catch |err| {
+        const converted = if (token) |reader|
+            request.requestFromHttp2Metadata(buffer, reader, remote, request_id, host)
+        else
+            request.requestFromHttp2Input(buffer, remote, request_id, host);
+        const value = converted catch |err| {
             try self.expireExecutions(registry);
             return err;
         };

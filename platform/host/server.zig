@@ -2,6 +2,8 @@ const std = @import("std");
 const allocator_context = @import("allocator/context.zig");
 const host_allocator_module = @import("allocator/host_allocator.zig");
 const bridge = @import("bridge.zig");
+const abi = @import("roc_platform_abi.zig");
+const body_effect = @import("effect/body.zig");
 const MemoryLimit = @import("bridge/model.zig").MemoryLimit;
 const connection = @import("connection.zig");
 const diagnostics = @import("diagnostics.zig");
@@ -481,6 +483,10 @@ fn RequestFiber(comptime Environment: type) type {
                 request.heap = null;
                 request.failure = null;
                 request.http2_stream_attempted = false;
+                request.http2_body = .{
+                    .whole_limit = shared.limits.maximum_body_bytes,
+                    .streamed_limit = shared.limits.maximum_streamed_body_bytes,
+                };
                 request.generation = thread.environment.generation;
                 request.host_allocator = thread.environment.hostAllocator();
                 request.roc_host = runtime.makeRocHost(@ptrCast(&request.host_allocator));
@@ -513,6 +519,12 @@ fn RequestFiber(comptime Environment: type) type {
         /// When the Roc thread took the request from the queue.
         started_at: u64 = 0,
         http2_stream_attempted: bool = false,
+        http2_body: struct {
+            offset: usize = 0,
+            whole_limit: u64 = 0,
+            streamed_limit: u64 = 0,
+            waiting_limit: ?u64 = null,
+        } = .{},
 
         fn create(limits: connection.Limits) !*Self {
             const self = try std.heap.smp_allocator.create(Self);
@@ -600,12 +612,16 @@ fn RequestFiber(comptime Environment: type) type {
             const protocol = item.http2 orelse unreachable;
             const ticket = self.dispatch.http2.?;
             const execution = protocol.execution(ticket) orelse unreachable;
-            execution.waiter = if (parked) .{ .target = target, .serial = target.wait_serial } else null;
+            execution.waiter = if (parked) .{ .target = target, .serial = target.wait_serial, .body_limit = self.http2_body.waiting_limit } else null;
             if (protocol.streams.leases.runningStream(ticket) == null) {
                 if (parked) {
                     fiber_wait.wakeStopped(target, target.wait_serial, fiber.Stop.client_gone);
                 } else {
                     target.stop.store(fiber.Stop.client_gone, std.builtin.AtomicOrder.release);
+                }
+            } else if (parked) {
+                if (self.http2_body.waiting_limit) |limit| {
+                    if (protocol.bodyReady(ticket, limit)) fiber_wait.wake(target, target.wait_serial);
                 }
             }
         }
@@ -640,6 +656,7 @@ fn RequestFiber(comptime Environment: type) type {
             const ticket = self.dispatch.http2 orelse return null;
             const now = net.monotonicNanoseconds() catch diagnostics.fatal("monotonic clock read failed");
             protocol.expire(now);
+            if (protocol.failed or protocol.closed) return null;
             _ = protocol.streams.leases.runningStream(ticket) orelse return null;
             if (duration) |nanoseconds| {
                 // The cap is already installed at HEADERS completion. Tightening
@@ -651,9 +668,74 @@ fn RequestFiber(comptime Environment: type) type {
             return protocol.streams.leases.headersElapsed(ticket, now);
         }
 
+        fn http2BodyLimit(ptr: *anyopaque, bytes: u64, whole: bool) void {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            if (whole) self.http2_body.whole_limit = bytes else self.http2_body.streamed_limit = bytes;
+        }
+
+        fn bodyResult(tag: abi.HostBodyRequestReadTag) abi.HostBodyRequestRead {
+            return .{ .tag = tag, .payload = std.mem.zeroes(abi.HostBodyRequestReadPayload) };
+        }
+
+        fn http2BodyRead(ptr: *anyopaque, maximum: u64, whole: bool) abi.HostBodyRequestRead {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            while (true) {
+                const result = blk: {
+                    const item = &self.shared.handoff.connections[self.dispatch.slot];
+                    item.lock.lock();
+                    defer item.lock.unlock();
+                    break :blk self.readHttp2BodyLocked(maximum, whole);
+                };
+                if (result) |value| {
+                    self.http2_body.waiting_limit = null;
+                    if (value.tag == abi.HostBodyRequestReadTag.Closed) {
+                        fiber.current().?.stop.store(fiber.Stop.client_gone, std.builtin.AtomicOrder.release);
+                        fiber_wait.cancelCurrent();
+                    }
+                    return value;
+                }
+                // No borrowed input or connection lock crosses this suspension.
+                // setHttp2Wait rechecks readiness after the fiber has parked.
+                _ = fiber_wait.waitSocket(-1, 0, std.math.maxInt(u64)) orelse unreachable;
+            }
+        }
+
+        fn readHttp2BodyLocked(self: *Self, maximum: u64, whole: bool) ?abi.HostBodyRequestRead {
+            const item = &self.shared.handoff.connections[self.dispatch.slot];
+            const protocol = item.http2 orelse return bodyResult(abi.HostBodyRequestReadTag.Closed);
+            const ticket = self.dispatch.http2.?;
+            protocol.expire(net.monotonicNanoseconds() catch diagnostics.fatal("monotonic clock read failed"));
+            if (protocol.failed or protocol.closed) return bodyResult(abi.HostBodyRequestReadTag.Closed);
+            const id = protocol.streams.leases.runningStream(ticket) orelse return bodyResult(abi.HostBodyRequestReadTag.Closed);
+            protocol.owner.engine.checkDispatchable(id) catch return bodyResult(abi.HostBodyRequestReadTag.Closed);
+            const input = protocol.streams.runningInput(ticket) orelse return bodyResult(abi.HostBodyRequestReadTag.Closed);
+            if (input.phase == @import("http2/input.zig").Phase.rejected) return bodyResult(abi.HostBodyRequestReadTag.Closed);
+            const limit = if (whole) self.http2_body.whole_limit else self.http2_body.streamed_limit;
+            if (input.bytes.items.len > limit) return bodyResult(abi.HostBodyRequestReadTag.TooLarge);
+            const bytes = input.body() orelse {
+                self.http2_body.waiting_limit = limit;
+                return null;
+            };
+            const offset = self.http2_body.offset;
+            if (offset == bytes.len) return bodyResult(abi.HostBodyRequestReadTag.End);
+            const requested = std.math.cast(usize, maximum) orelse std.math.maxInt(usize);
+            const count = @min(bytes.len - offset, if (whole) requested else @min(requested, body_effect.maximum_read_bytes));
+            const owned = @import("bridge/request.zig").rocByteListFromSliceChecked(bytes[offset..][0..count], .{
+                .roc_host = &self.roc_host,
+                .try_alloc = runtime.tryAllocWithHost,
+            }) catch return bodyResult(abi.HostBodyRequestReadTag.Failed);
+            self.http2_body.offset += count;
+            var result = bodyResult(abi.HostBodyRequestReadTag.Chunk);
+            const payload: *abi.RocListWith(u8, false) = @ptrCast(@alignCast(&result.payload));
+            payload.* = owned;
+            return result;
+        }
+
         fn invokeHttp2(self: *Self) !bool {
             const item = &self.shared.handoff.connections[self.dispatch.slot];
             const ticket = self.dispatch.http2.?;
+            const body_token = body_effect.activateReader(.{ .context = self, .read = http2BodyRead, .limit = http2BodyLimit });
+            defer body_effect.deactivate();
             const request = blk: {
                 item.lock.lock();
                 defer item.lock.unlock();
@@ -675,7 +757,7 @@ fn RequestFiber(comptime Environment: type) type {
                 }
                 request_debug.beginRequest(method, path, id.slice(), trace);
                 if (protocol.access[ticket.slot]) |*entry| entry.queue_nanoseconds = self.started_at -| self.dispatch.queued_at;
-                break :blk try protocol.owner.requestOwned(&protocol.streams, ticket, remote, id.slice(), .{ .roc_host = &self.roc_host, .try_alloc = runtime.tryAllocWithHost });
+                break :blk try protocol.owner.requestMetadataOwned(&protocol.streams, ticket, body_token, remote, id.slice(), .{ .roc_host = &self.roc_host, .try_alloc = runtime.tryAllocWithHost });
             };
             const semantics = if (request.method == bridge.HttpMethod.head) bridge.ResponseRequestSemantics.head else bridge.ResponseRequestSemantics.regular;
             const writer = @import("effect/response_writer.zig");

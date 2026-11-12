@@ -13,6 +13,10 @@ const Fixture = struct {
     }
 
     fn initWithAllocator(self: *Fixture, allocator: std.mem.Allocator) !void {
+        return self.initInput(allocator, true);
+    }
+
+    fn initInput(self: *Fixture, allocator: std.mem.Allocator, ended: bool) !void {
         self.budget.backing = allocator;
         self.registry = http2.streams.Streams.init(7, &self.budget, .{ .header_bytes = 1024, .body_bytes = 16 });
         const engine = try http2.engine.Engine.create(allocator, .{}, .{
@@ -26,10 +30,10 @@ const Fixture = struct {
         errdefer engine.destroy();
         // Submission is byte-in/byte-out and must never touch the socket/poller.
         self.owner = .{ .engine = engine, .socket = -1, .poller = undefined, .token = 7 };
-        const request = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" ++
-            "\x00\x00\x00\x04\x00\x00\x00\x00\x00" ++
-            "\x00\x00\x0e\x01\x05\x00\x00\x00\x01\x83\x86\x84\x01\x09localhost";
-        try engine.receive(request);
+        try engine.receive("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" ++ "\x00\x00\x00\x04\x00\x00\x00\x00\x00");
+        var frame = "\x00\x00\x0e\x01\x04\x00\x00\x00\x01\x83\x86\x84\x01\x09localhost".*;
+        if (ended) frame[4] = 5;
+        try engine.receive(&frame);
     }
 
     fn deinit(self: *Fixture) void {
@@ -446,4 +450,60 @@ test "reentrant expiry cannot mutate leases or invalidate callback input" {
     try std.testing.expectEqual(retained, fixture.budget.used);
     try std.testing.expect(fixture.registry.runningInput(work.ticket) != null);
     try std.testing.expect(!fixture.registry.leases.executionExpired(work.ticket));
+}
+
+test "metadata handoff owns fields before EOF and retains body input until cleanup" {
+    var fixture: Fixture = .{};
+    try fixture.initInput(std.testing.allocator, false);
+    defer fixture.deinit();
+    const work = fixture.registry.nextMetadata().?.execute;
+    defer _ = fixture.registry.finish(work.ticket);
+    var environment = values.Environment{ .allocator = std.testing.allocator };
+    var host = environment.rocHost();
+    const request = try fixture.owner.requestMetadataOwned(&fixture.registry, work.ticket, 123, bridge.RemoteAddress.unix, "metadata-id", values.Environment.requestHost(&host));
+    try std.testing.expectEqual(bridge.HttpRequestBodyTag.Stream, request.body.tag);
+    try std.testing.expectEqual(@as(u64, 123), request.body.payload_stream());
+    try std.testing.expect(fixture.registry.runningInput(work.ticket).?.body() == null);
+    try fixture.owner.engine.receive("\x00\x00\x04\x00\x01\x00\x00\x00\x01body");
+    try std.testing.expectEqualStrings("body", fixture.registry.runningInput(work.ticket).?.body().?);
+    fixture.registry.close(work.id);
+    try std.testing.expectEqual(@as(usize, 0), fixture.budget.used);
+    try std.testing.expectEqualStrings("/", request.path.asSlice());
+    try std.testing.expectEqualStrings("metadata-id", request.request_id.asSlice());
+    request.decref(&host);
+    try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
+}
+
+test "metadata conversion allocation failures preserve input and release partial Roc values" {
+    for ([_]bool{ false, true }) |fail_roc| {
+        var count: usize = 0;
+        var index: usize = 0;
+        while (index == 0 or index <= count) : (index += 1) {
+            var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+            var fixture: Fixture = .{};
+            try fixture.initInput(if (fail_roc) std.testing.allocator else failing.allocator(), false);
+            defer fixture.deinit();
+            const work = fixture.registry.nextMetadata().?.execute;
+            defer _ = fixture.registry.finish(work.ticket);
+            var environment = values.Environment{ .allocator = if (fail_roc) failing.allocator() else std.testing.allocator };
+            var host = environment.rocHost();
+            const retained = fixture.budget.used;
+            const start = failing.alloc_index;
+            if (index > 0) failing.fail_index = start + index - 1;
+            const result = fixture.owner.requestMetadataOwned(&fixture.registry, work.ticket, 123, bridge.RemoteAddress.unix, "metadata-owned-request-id", values.Environment.requestHost(&host));
+            if (index == 0) {
+                const request = try result;
+                count = failing.alloc_index - start;
+                try std.testing.expect(count > 0);
+                request.decref(&host);
+            } else {
+                try std.testing.expectError(error.OutOfMemory, result);
+                try std.testing.expect(failing.has_induced_failure);
+            }
+            try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
+            try std.testing.expectEqual(retained, fixture.budget.used);
+            try std.testing.expect(fixture.registry.runningInput(work.ticket).?.headers() != null);
+            try std.testing.expect(fixture.registry.runningInput(work.ticket).?.body() == null);
+        }
+    }
 }
