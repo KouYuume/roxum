@@ -229,6 +229,9 @@ Http :: [].{
 		## 304 response must have an empty body.
 		status : U16,
 		headers : List(Http.ResponseHeader),
+		## Final fields for finite HTTP/2 responses. Empty means no trailers.
+		## HTTP/1 and streamed/file responses reject nonempty trailers.
+		trailers : List(Http.ResponseHeader) ?? [],
 		body : Http.ResponseBody,
 	}
 }

@@ -15,7 +15,7 @@ import time
 from h2.settings import SettingCodes
 from h2.config import H2Configuration
 from h2.connection import H2Connection
-from h2.events import DataReceived, ResponseReceived, StreamEnded, StreamReset, ConnectionTerminated
+from h2.events import DataReceived, TrailersReceived, ResponseReceived, StreamEnded, StreamReset, ConnectionTerminated
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'support'))
 from roxum_process import stop
 
@@ -42,6 +42,7 @@ def verify(executable, unix, debug=False):
                     bodies = collections.defaultdict(bytes)
                     headers, ended, reset = {}, [], set()
                     raw_headers = {}
+                    trailers = {}
 
                     def request(stream, route='/echo', body=b'', method='POST', end=True):
                         client.send_headers(stream, [(':method', method), (':scheme', 'http'),
@@ -63,6 +64,9 @@ def verify(executable, unix, debug=False):
                                 elif isinstance(event, DataReceived):
                                     bodies[event.stream_id] += event.data
                                     client.acknowledge_received_data(event.flow_controlled_length, event.stream_id)
+                                elif isinstance(event, TrailersReceived):
+                                    assert event.stream_id not in ended
+                                    trailers[event.stream_id] = dict(event.headers)
                                 elif isinstance(event, StreamEnded):
                                     ended.append(event.stream_id)
                                 elif isinstance(event, StreamReset):
@@ -136,6 +140,30 @@ def verify(executable, unix, debug=False):
                     request(stream, body=b'after reset')
                     receive([stream])
                     assert bodies[stream] == b'42|h2|after reset'
+                    # Finite metadata follows the body; empty-body completion
+                    # also emits a final HEADERS block. Invalid metadata and HEAD
+                    # fail before a successful initial response is committed.
+                    for route, method, expected in (
+                        ('/trailers', 'GET', b'finite body'),
+                        ('/empty-trailers', 'GET', b''),
+                        ('/invalid-trailers', 'GET', None),
+                        ('/trailers', 'HEAD', None),
+                    ):
+                        stream += 2
+                        if route == '/empty-trailers':
+                            client.update_settings({SettingCodes.INITIAL_WINDOW_SIZE: 0})
+                        request(stream, route, method=method)
+                        if expected is None:
+                            receive([], [stream])
+                            assert stream not in headers
+                        else:
+                            receive([stream])
+                            assert bodies[stream] == expected
+                            assert trailers[stream] == {'grpc-status': '0'}
+                            assert 'grpc-status' not in headers[stream]
+                        if route == '/empty-trailers':
+                            client.update_settings({SettingCodes.INITIAL_WINDOW_SIZE: 65535})
+                            sock.sendall(client.data_to_send())
                     # Malformed transport input on another connection must not
                     # kill this worker or disturb its existing connection.
                     with socket.socket(socket.AF_UNIX if unix else socket.AF_INET) as invalid:

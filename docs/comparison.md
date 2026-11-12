@@ -30,7 +30,7 @@ Ratings describe each criterion, not overall quality; additional libraries can c
 | DDD layers and replaceable dependencies | ○ Functions | ○ Traits / functions | ○ Interfaces / functions |
 | Automatic memory cleanup | ◎ Reference counting + request arena | ◎ [Ownership / drop](https://doc.rust-lang.org/book/ch04-01-what-is-ownership.html) | ◎ [GC](https://go.dev/doc/gc-guide) |
 | Inbound TLS | △ [Reverse proxy](guides/reverse-proxy.md) | ○ rustls / axum-server | ◎ `ListenAndServeTLS` |
-| HTTP/2 | △ Opt-in cleartext, finite responses; no trailers/gRPC yet | ○ `http2` feature / transport setup | ◎ Automatic with HTTPS |
+| HTTP/2 | △ Opt-in cleartext, finite responses and trailers; no gRPC yet | ○ `http2` feature / transport setup | ◎ Automatic with HTTPS |
 | WebSocket | △ Not supported | ◎ `ws` feature / `extract::ws` | ○ `golang.org/x/net/websocket` or third-party packages |
 | IPv6 and Unix domain listeners | ○ IPv4/IPv6 TCP and filesystem Unix listeners | ◎ | ◎ |
 | HTTP tests without a server | △ No test harness; `Router.dispatch!` runs a request through the routes inside an app | ○ `tower::ServiceExt::oneshot` | ◎ `net/http/httptest` |

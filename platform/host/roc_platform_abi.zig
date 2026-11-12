@@ -803,12 +803,14 @@ comptime {
 pub const HttpResponse = if (@sizeOf(usize) == 4) extern struct {
     @"body": HttpResponseBody,
     @"headers": RocList(HttpResponseHeader),
+    @"trailers": RocList(HttpResponseHeader),
     @"status": u16,
     /// Recursively decrement Roc-owned fields.
     pub fn decref(self: @This(), roc_host: *RocHost) void {
         const value = self;
         value.@"body".decref(roc_host);
         decrefListOfHttpResponseHeader(value.@"headers", roc_host);
+        decrefListOfHttpResponseHeader(value.@"trailers", roc_host);
     }
 
     /// Increment Roc-owned fields.
@@ -816,16 +818,19 @@ pub const HttpResponse = if (@sizeOf(usize) == 4) extern struct {
         const value = self;
         value.@"body".incref(amount);
         value.@"headers".incref(amount);
+        value.@"trailers".incref(amount);
     }
 } else extern struct {
     @"body": HttpResponseBody,
     @"headers": RocList(HttpResponseHeader),
+    @"trailers": RocList(HttpResponseHeader),
     @"status": u16,
     /// Recursively decrement Roc-owned fields.
     pub fn decref(self: @This(), roc_host: *RocHost) void {
         const value = self;
         value.@"body".decref(roc_host);
         decrefListOfHttpResponseHeader(value.@"headers", roc_host);
+        decrefListOfHttpResponseHeader(value.@"trailers", roc_host);
     }
 
     /// Increment Roc-owned fields.
@@ -833,16 +838,17 @@ pub const HttpResponse = if (@sizeOf(usize) == 4) extern struct {
         const value = self;
         value.@"body".incref(amount);
         value.@"headers".incref(amount);
+        value.@"trailers".incref(amount);
     }
 };
 
 comptime {
     if (@sizeOf(usize) == 8) {
-        if (@sizeOf(HttpResponse) != 64) @compileError("HttpResponse size mismatch");
+        if (@sizeOf(HttpResponse) != 88) @compileError("HttpResponse size mismatch");
         if (@alignOf(HttpResponse) != 8) @compileError("HttpResponse alignment mismatch");
     }
     if (@sizeOf(usize) == 4) {
-        if (@sizeOf(HttpResponse) != 32) @compileError("HttpResponse size mismatch");
+        if (@sizeOf(HttpResponse) != 44) @compileError("HttpResponse size mismatch");
         if (@alignOf(HttpResponse) != 4) @compileError("HttpResponse alignment mismatch");
     }
 }
@@ -1094,11 +1100,11 @@ pub const HostResponse = if (@sizeOf(usize) == 4) extern struct {
 
 comptime {
     if (@sizeOf(usize) == 8) {
-        if (@sizeOf(HostResponse) != 88) @compileError("HostResponse size mismatch");
+        if (@sizeOf(HostResponse) != 112) @compileError("HostResponse size mismatch");
         if (@alignOf(HostResponse) != 8) @compileError("HostResponse alignment mismatch");
     }
     if (@sizeOf(usize) == 4) {
-        if (@sizeOf(HostResponse) != 44) @compileError("HostResponse size mismatch");
+        if (@sizeOf(HostResponse) != 56) @compileError("HostResponse size mismatch");
         if (@alignOf(HostResponse) != 4) @compileError("HostResponse alignment mismatch");
     }
 }
@@ -3875,6 +3881,7 @@ pub const HostTcpWrite_derivedArgs = extern struct {
 pub const HostFilesFileOpenedOpened = __AnonStruct_ffafd7a563bb9a6a;
 pub const HostRateCounterCountedCounted = __AnonStruct_8fa85c66081ab890;
 pub const HttpResponseHeaders = HttpResponseHeader;
+pub const HttpResponseTrailers = HttpResponseHeader;
 pub const HostTcpAcquire_originArg0 = __AnonStruct_7534307d805cbbcd;
 pub const HostTcpConfigure_originsArg0 = __AnonStruct_de1446c11164b88b;
 pub const HostTcpPoolArg0 = __AnonStruct_f35e5645cca1b32b;

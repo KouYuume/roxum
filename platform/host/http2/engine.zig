@@ -36,6 +36,9 @@ const Slot = struct {
     head_request: bool = false,
     response: ?[]u8 = null,
     offset: usize = 0,
+    final_fields: [64]Header = undefined,
+    final_count: usize = 0,
+    final_bytes: ?[]u8 = null,
 };
 
 pub const Engine = struct {
@@ -77,7 +80,10 @@ pub const Engine = struct {
     pub fn destroy(self: *Engine) void {
         std.debug.assert(!self.entered);
         c.nghttp2_session_del(self.session);
-        for (&self.slots) |*slot| if (slot.response) |bytes| self.memory.release(bytes.ptr);
+        for (&self.slots) |*slot| {
+            if (slot.response) |bytes| self.memory.release(bytes.ptr);
+            if (slot.final_bytes) |bytes| self.memory.allocator().free(bytes);
+        }
         std.debug.assert(self.memory.used == 0);
         self.allocator.destroy(self);
     }
@@ -99,6 +105,18 @@ pub const Engine = struct {
         try self.enter();
         defer self.entered = false;
         if (self.pending.len != 0) return self.pending;
+        // Complete finite responses only after DATA EOF. Validation and the
+        // retained copy were done before committing the initial response.
+        for (&self.slots) |*slot| {
+            if (slot.final_bytes != null and slot.body_done and !slot.rejected) {
+                self.submitTrailers(slot, slot.final_fields[0..slot.final_count]) catch |err| {
+                    self.failed = true;
+                    return err;
+                };
+                self.memory.allocator().free(slot.final_bytes.?);
+                slot.final_bytes = null;
+            }
+        }
         var data: [*c]const u8 = null;
         const length = c.nghttp2_session_mem_send2(self.session, &data);
         if (length < 0) {
@@ -135,6 +153,32 @@ pub const Engine = struct {
     /// Keep the response open for explicit trailers after the finite DATA provider ends.
     pub fn beginResponse(self: *Engine, id: StreamId, status: u16, headers: []const Header, body: []const u8) Error!void {
         return self.submitResponse(id, status, headers, body, true);
+    }
+
+    /// Copies a complete finite response, including final metadata, before the
+    /// caller releases its request. Final fields are emitted after DATA EOF.
+    pub fn respondWithTrailers(self: *Engine, id: StreamId, status: u16, headers: []const Header, body: []const u8, trailers: []const Header) Error!void {
+        if (trailers.len == 0) return self.respond(id, status, headers, body);
+        try self.checkDispatchable(id);
+        try self.validateTrailers(trailers);
+        var size: usize = 0;
+        for (trailers) |header| size += header.name.len + header.value.len;
+        const bytes = try self.memory.allocator().alloc(u8, size);
+        errdefer self.memory.allocator().free(bytes);
+        try self.beginResponse(id, status, headers, body);
+        const slot = self.find(@backingInt(id)).?;
+        var offset: usize = 0;
+        for (trailers, 0..) |header, index| {
+            const name = bytes[offset..][0..header.name.len];
+            @memcpy(name, header.name);
+            offset += name.len;
+            const value = bytes[offset..][0..header.value.len];
+            @memcpy(value, header.value);
+            offset += value.len;
+            slot.final_fields[index] = .{ .name = name, .value = value };
+        }
+        slot.final_count = trailers.len;
+        slot.final_bytes = bytes;
     }
 
     fn submitResponse(self: *Engine, id: StreamId, status: u16, headers: []const Header, body: []const u8, trailers: bool) Error!void {
@@ -200,10 +244,14 @@ pub const Engine = struct {
         const slot = self.find(@backingInt(id)) orelse return error.Closed;
         if (slot.rejected) return error.Closed;
         if (!slot.awaiting_trailers or !slot.body_done) return error.InvalidState;
+        if (slot.final_bytes != null) return error.InvalidState;
+        try self.submitTrailers(slot, trailers);
+    }
+
+    fn validateTrailers(self: *const Engine, trailers: []const Header) Error!void {
         if (trailers.len > 64) return error.LimitExceeded;
-        var fields: [64]c.nghttp2_nv = undefined;
         var total: usize = 0;
-        for (trailers, 0..) |header, index| {
+        for (trailers) |header| {
             if (!validHeader(header)) return error.InvalidHeaders;
             for ([_][]const u8{ "content-length", "host", "trailer", "content-type", "content-encoding", "content-range", "authorization", "proxy-authorization", "www-authenticate", "proxy-authenticate" }) |forbidden| {
                 if (std.mem.eql(u8, header.name, forbidden)) return error.InvalidHeaders;
@@ -211,9 +259,14 @@ pub const Engine = struct {
             total = std.math.add(usize, total, header.name.len) catch return error.LimitExceeded;
             total = std.math.add(usize, total, header.value.len) catch return error.LimitExceeded;
             total = std.math.add(usize, total, 32) catch return error.LimitExceeded;
-            fields[index] = field(header.name, header.value);
         }
         if (total > self.limits.header_bytes) return error.LimitExceeded;
+    }
+
+    fn submitTrailers(self: *Engine, slot: *Slot, trailers: []const Header) Error!void {
+        try self.validateTrailers(trailers);
+        var fields: [64]c.nghttp2_nv = undefined;
+        for (trailers, 0..) |header, index| fields[index] = field(header.name, header.value);
         try check(c.nghttp2_submit_trailer(self.session, slot.id, &fields, trailers.len));
         slot.awaiting_trailers = false;
     }
@@ -348,6 +401,7 @@ fn streamClosed(_: ?*c.nghttp2_session, id: i32, error_code: u32, user: ?*anyopa
     const self = engine(user);
     const slot = self.find(id) orelse return 0;
     if (slot.response) |bytes| self.memory.release(bytes.ptr);
+    if (slot.final_bytes) |bytes| self.memory.allocator().free(bytes);
     slot.* = .{};
     self.close_error = error_code;
     self.observer.closed(self.observer.context, @fromBackingInt(@intCast(id)));
@@ -843,5 +897,51 @@ test "trailer field count boundary and reset reject terminal reuse" {
             try self.cancel(id);
             try std.testing.expectError(error.Closed, self.finishResponse(id, &.{}));
         }
+    }
+}
+
+// A retained copy must survive caller mutation, cancellation, and each OOM site.
+test "finite trailers copy before commit and release on completion reset or destruction" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn run(allocator: std.mem.Allocator) !void {
+            for ([_]u8{ 0, 1, 2 }) |ending| {
+                var context: u8 = 0;
+                const self = try Engine.create(allocator, .{}, TestObserver.observer(&context));
+                defer self.destroy();
+                try openTestStream(self);
+                const id: StreamId = @fromBackingInt(1);
+                try std.testing.expectError(error.InvalidHeaders, self.respondWithTrailers(id, 200, &.{}, "body", &.{.{ .name = "content-length", .value = "4" }}));
+                try self.checkDispatchable(id);
+                var value = [_]u8{ 'o', 'k' };
+                try self.respondWithTrailers(id, 200, &.{}, "body", &.{.{ .name = "x-final", .value = &value }});
+                value[0] = 'X';
+                try std.testing.expectEqualStrings("ok", self.find(1).?.final_fields[0].value);
+                if (ending == 2) continue;
+                if (ending == 1) try self.receive("\x00\x00\x04\x03\x00\x00\x00\x00\x01\x00\x00\x00\x08");
+                var completed = false;
+                while (true) {
+                    const bytes = try self.output();
+                    if (bytes.len == 0) break;
+                    if (bytes[3] == 0) try std.testing.expect(bytes[4] & 1 == 0);
+                    if (bytes[3] == 1 and bytes[4] & 1 != 0) completed = true;
+                    try self.consumeOutput(bytes.len);
+                }
+                try std.testing.expectEqual(ending == 0, completed);
+                try std.testing.expectEqual(@as(usize, 0), self.activeStreams());
+            }
+        }
+    }.run, .{});
+}
+
+test "finite trailers reject bodyless statuses before committing initial headers" {
+    for ([_]u16{ 204, 205, 304 }) |status| {
+        var context: u8 = 0;
+        const self = try Engine.create(std.testing.allocator, .{}, TestObserver.observer(&context));
+        defer self.destroy();
+        try openTestStream(self);
+        const id: StreamId = @fromBackingInt(1);
+        try std.testing.expectError(error.InvalidState, self.respondWithTrailers(id, status, &.{}, "", &.{.{ .name = "x-final", .value = "done" }}));
+        try self.checkDispatchable(id);
+        try self.respond(id, status, &.{}, "");
     }
 }

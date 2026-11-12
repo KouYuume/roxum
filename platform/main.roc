@@ -213,6 +213,12 @@ handle_for_host! = |model, request| {
 		Ok(pattern) => pattern
 		Err(Unrouted) => ""
 	}
+	if !List.is_empty(answered.response.trailers) {
+		match (Reply.writer(answered.reply), Reply.file_target(answered.reply)) {
+			(Err(NotStreamed), Err(NotFile)) => {}
+			_ => crash "Response trailers require a finite response"
+		}
+	}
 	# A streamed body: send the head, then let the reply's function
 	# write the body here, on the request's fiber. The host ends the body
 	# once this returns; the response handed back is only its head.

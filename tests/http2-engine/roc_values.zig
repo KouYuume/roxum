@@ -143,5 +143,5 @@ pub fn response(status: u16, fields: []const Header, body: []const u8, host: *br
         .name = bridge.GeneratedRocStr.fromSlice(field.name, host),
         .value = bridge.GeneratedRocStr.fromSlice(field.value, host),
     };
-    return .{ .status = status, .headers = headers, .body = responseBody(body, host) };
+    return .{ .status = status, .headers = headers, .trailers = bridge.HttpResponseHeaderList.empty(), .body = responseBody(body, host) };
 }

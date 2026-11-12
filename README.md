@@ -61,7 +61,7 @@ Core and integrations are versioned independently. See [versioning](docs/design/
 ## Limitations
 
 - IPv4/IPv6 TCP and filesystem Unix sockets; HTTP/1.1 by default, with [opt-in cleartext HTTP/2 for finite responses](docs/guides/deployment.md#opt-in-http2). Use a [reverse proxy](docs/guides/reverse-proxy.md) for inbound TLS or HTTP/3. Native gRPC is not supported yet.
-- No WebSocket, CONNECT, TRACE, extension methods, or HTTP trailers.
+- [Finite HTTP/2 response trailers](docs/guides/responses.md#finite-http2-trailers) are supported. No HTTP/1 trailers, WebSocket, CONNECT, TRACE, or extension methods.
 - CONNECT, TRACE, and arbitrary extension methods are [non-goals](docs/design/non-goals.md) unless strong user demand justifies reconsideration.
 - Timeouts cannot forcibly interrupt arbitrary Roc computation.
 - Runtime compression is gzip; precompressed Brotli is supported, multipart byte ranges are not.

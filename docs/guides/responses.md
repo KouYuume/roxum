@@ -4,6 +4,32 @@ A handler returns a `Reply`. `Reply.text`, `Reply.json`, and `Reply.status` cove
 `Reply.with_headers` / `Reply.replace_headers` change any reply. A body written as it goes is
 [`Reply.stream`](streaming.md#writing-a-body), and a file is [`Reply.file`](files.md#serving-a-directory).
 
+## Finite HTTP/2 trailers
+
+`Reply.with_trailers` appends final fields after a finite response body. Repeated
+calls append in order; changing ordinary headers does not replace trailers.
+`Response.trailers` is also available on `Reply.full` and defaults to `[]`.
+
+```roc
+Reply.text("result").with_trailers([
+    ResponseHeader.{ name: HeaderName.("x-result"), value: "complete" },
+])
+```
+
+Use an HTTP/2 listener. Nonempty trailers on HTTP/1 fail with an encoding error
+and a 500 response; they are never silently discarded. On HTTP/2, invalid fields,
+HEAD requests, and statuses 204, 205, and 304 reset the stream before a successful
+response is sent. Trailers on `Reply.stream` or `Reply.file` fail the handler
+before the writer or file operation runs. An empty list keeps ordinary behavior.
+
+Names are normalized to lowercase. Final fields have a separate 64-field and
+16 KiB budget, counting name bytes, value bytes, and 32 bytes per field. The host
+rejects pseudo-fields, connection-specific fields, framing fields, `host`,
+`trailer`, `content-type`, `content-encoding`, `content-range`, and authentication
+fields. Values must satisfy HTTP field syntax and cannot have leading/trailing whitespace.
+The host transports metadata such as `grpc-status` without interpreting it;
+this API alone does not implement gRPC.
+
 ## JSON
 
 `Reply.json` encodes a value, as axum's `Json` does. A record or a list encodes as it is, and a nominal type opts in with
