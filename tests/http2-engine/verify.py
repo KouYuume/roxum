@@ -170,21 +170,73 @@ def verify(executable):
         request(113, b'after rejection')
         completed(113, b'after rejection')
 
+        # Metadata installs the execution budget before body EOF. The peer
+        # remains usable while an unfinished request expires without a response.
+        request(115, b'partial', end=False, path='/deadline')
+        request(117, b'peer')
+        completed(117, b'peer')
+        until(lambda: 115 in reset)
+        assert 115 not in status
+        request(119, b'after deadline')
+        completed(119, b'after deadline')
+
         # Disconnect with engine-owned response bytes still flow controlled.
-        request(115, b'x' * 4096)
-        until(lambda: len(body[115]) == 16)
+        request(121, b'x' * 4096)
+        until(lambda: len(body[121]) == 16)
         sock.close()
         sock = None
         _, stderr = process.communicate(timeout=10)
         assert process.returncode == 0, stderr
         print('PASS multiplexing/reset, partial output, owned responses, 15/16/17 output, '
-              'body/header bounds, 16 admitted streams, disconnect cleanup')
+              'body/header bounds, metadata deadline, 16 admitted streams, disconnect cleanup')
         print(stderr.strip())
     finally:
         if sock is not None:
             sock.close()
         if process.poll() is None:
             process.kill()
+        process.wait()
+
+
+def verify_header_budget(executable):
+    """A budget that cannot retain any header resets streams, not the connection."""
+    process = subprocess.Popen([executable], stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True,
+                               env=dict(os.environ, ROXUM_TEST_HTTP2_INPUT_BUDGET='0'))
+    try:
+        assert select.select([process.stdout], [], [], 5)[0], 'startup timeout'
+        with socket.create_connection(('127.0.0.1', int(process.stdout.readline())), timeout=5) as sock:
+            conn = H2Connection(config=H2Configuration(client_side=True))
+            conn.initiate_connection()
+            # Sequential attempts also prove rejected lease slots are reusable.
+            for stream in range(1, 39, 2):
+                conn.send_headers(stream, [(':method', 'POST'), (':scheme', 'http'),
+                                           (':authority', 'localhost'), (':path', '/')], end_stream=True)
+                probe = stream.to_bytes(8, 'big')
+                conn.ping(probe)
+                sock.sendall(conn.data_to_send())
+                reset, ack = False, False
+                deadline = time.monotonic() + 5
+                while not (reset and ack):
+                    sock.settimeout(max(.001, deadline - time.monotonic()))
+                    wire = sock.recv(65536)
+                    assert wire, 'header budget rejection closed connection'
+                    for event in conn.receive_data(wire):
+                        assert not isinstance(event, (ResponseReceived, ConnectionTerminated)), event
+                        if isinstance(event, StreamReset):
+                            assert event.stream_id == stream
+                            reset = True
+                        if isinstance(event, PingAckReceived):
+                            assert event.ping_data == probe
+                            ack = True
+                    pending = conn.data_to_send()
+                    if pending: sock.sendall(pending)
+                    assert time.monotonic() < deadline, 'header rejection progress timeout'
+        _, errors = process.communicate(timeout=10)
+        assert process.returncode == 0, errors
+        print('PASS header budget rejection, repeated stream reset and connection liveness')
+    finally:
+        if process.poll() is None: process.kill()
         process.wait()
 
 
@@ -525,6 +577,7 @@ if __name__ == '__main__':
     executable = parser.parse_args().server
     verify_trailers(executable)
     verify(executable)
+    verify_header_budget(executable)
     verify_input_budget(executable)
     for count in (15, 16, 17):
         verify_admission(executable, count)

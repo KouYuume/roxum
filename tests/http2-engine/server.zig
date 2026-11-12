@@ -42,7 +42,17 @@ const State = struct {
         };
         self.streams.headersComplete(id, now) catch {
             self.failed = true;
+            return;
         };
+        const ticket = self.streams.leases.find(id).?;
+        // Fixed fixture policy installs a generic cap before body EOF. No
+        // protocol-specific timeout header is interpreted by the host.
+        const fields = self.streams.entries[ticket.slot].buffer.?.headers() orelse return;
+        for (fields) |field| {
+            if (std.mem.eql(u8, field.name, ":path") and std.mem.eql(u8, field.value, "/deadline")) {
+                if (!self.streams.leases.limitExecution(ticket, 1000 * std.time.ns_per_ms, 100 * std.time.ns_per_ms)) self.failed = true;
+            }
+        }
     }
     fn data(ctx: *anyopaque, id: http2.StreamId, bytes: []const u8) void {
         const self = from(ctx);
@@ -83,6 +93,7 @@ const Connection = struct {
 
     fn run(self: *Connection) !bool {
         const owner = &self.owner.?;
+        if (self.state.streams.expireExecutions(try net.monotonicNanoseconds())) owner.runnable = true;
         // Bound each turn even when a peer continuously sends or reads.
         for (0..32) |_| {
             if (self.state.failed) return false;

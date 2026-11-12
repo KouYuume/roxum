@@ -150,8 +150,9 @@ checks exercise real Roc backends and allocator modes, socket-effect cancellatio
 input limits/timeouts, request IDs, observability and GOAWAY drain. Isolated fixtures
 retain framing, allocator-failure and controlled lifetime coverage.
 
-Milestone 1 is still incomplete. Metadata-time RPC deadlines and the fixed-byte
-gRPC interoperability probe remain required. Broader
+Milestone 1 is still incomplete. The internal deadline lifecycle is implemented;
+Roc metadata-phase dispatch and deadline installation, server execution caps, and
+the fixed-byte gRPC interoperability probe remain required. Broader
 cancellation/slow-consumer coverage and incremental streaming capabilities should
 be added in focused changes. Native gRPC is not supported until the later
 integration gates pass.
