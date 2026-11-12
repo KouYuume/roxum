@@ -858,6 +858,7 @@ fn applyLimits(base: connection.Limits, limits: bridge.ListenLimits, threads: us
         },
     }
     var applied = base;
+    applied.http2_execution_nanoseconds = try executionNanoseconds(limits.http2_execution_milliseconds);
     applied.maximum_streams = std.math.cast(usize, streams) orelse std.math.maxInt(usize);
     applied.maximum_queued_requests = std.math.cast(usize, queued) orelse std.math.maxInt(usize);
     applied.queue_timeout_milliseconds = limits.queue_timeout_milliseconds;
@@ -870,6 +871,26 @@ fn applyLimits(base: connection.Limits, limits: bridge.ListenLimits, threads: us
     applied.maximum_body_bytes = limits.maximum_body_bytes;
     applied.maximum_streamed_body_bytes = limits.maximum_streamed_body_bytes orelse std.math.maxInt(u64);
     return applied;
+}
+
+fn executionNanoseconds(milliseconds: ?u64) error{StartupFailed}!?u64 {
+    const value = milliseconds orelse return null;
+    if (value == 0 or value > std.math.maxInt(u64) / std.time.ns_per_ms) {
+        diagnostics.startupFailed("Server.ExecutionLimit.Milliseconds takes 1 to 18446744073709");
+        return error.StartupFailed;
+    }
+    return value * std.time.ns_per_ms;
+}
+
+test "HTTP/2 execution duration validates both millisecond boundaries" {
+    try std.testing.expectEqual(@as(?u64, null), try executionNanoseconds(null));
+    const maximum = std.math.maxInt(u64) / std.time.ns_per_ms;
+    for ([_]u64{ 1, 2, maximum - 1, maximum }) |value| {
+        try std.testing.expectEqual(@as(?u64, value * std.time.ns_per_ms), try executionNanoseconds(value));
+    }
+    for ([_]u64{ 0, maximum + 1, std.math.maxInt(u64) }) |value| {
+        try std.testing.expectError(error.StartupFailed, executionNanoseconds(value));
+    }
 }
 
 /// Replaces the connection timeouts with the application's choice. A zero

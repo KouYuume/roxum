@@ -24,20 +24,25 @@ program = { init!, routes: Router.build(routes, {}) }
 
 init! : {} => Try({ model : Model, listen : Server.ListenOptions }, [StartupErr(Str)])
 init! = |{}| {
-	settings : { path : Str }
+	settings : { path : Str, execution_milliseconds : Try(U64, [Missing]), http1 : Try(Bool, [Missing]) }
 	settings = Config.load!(base_text).map_err(|ConfigErr(message)| StartupErr(message))?
 	limiter = match Concurrency.new!({ max_keys: 1 }) {
 		Ok(value) => value
 		Err(_) => return Err(StartupErr("limiter initialization failed"))
 	}
+	execution = match settings.execution_milliseconds {
+		Ok(milliseconds) => Server.ExecutionLimit.Milliseconds(milliseconds)
+		Err(Missing) => Server.ExecutionLimit.Unlimited
+	}
+	io_timeout = if settings.execution_milliseconds.is_ok() { 10_000 } else { 1_000 }
 	Ok({
 		model: Model.({ number: 42, limiter }),
 		listen: {
 			endpoint: if Str.is_empty(settings.path) { Server.Endpoint.Tcp({ address: IpAddr.V4((127, 0, 0, 1)), port: 0 }) } else { Server.Endpoint.Unix({ path: settings.path }) },
-			protocol: Server.Protocol.Http2,
+			protocol: if settings.http1 ?? Bool.False { Server.Protocol.Http1 } else { Server.Protocol.Http2 },
 			threads: Server.Threads.Fixed(2),
-			timeouts: { ..Server.Timeouts.defaults, request_head_milliseconds: 1_000, request_body_milliseconds: 1_000, response_write_milliseconds: 1_000 },
-			limits: { maximum_body_bytes: 1024 },
+			timeouts: { ..Server.Timeouts.defaults, request_head_milliseconds: 1_000, request_body_milliseconds: io_timeout, response_write_milliseconds: io_timeout },
+			limits: { maximum_body_bytes: 1024, http2_execution: execution },
 			access_log: Server.AccessLog.JsonLines,
 			request_id: Server.RequestIdSource.TrustIncoming,
 		},

@@ -164,14 +164,16 @@ def verify(executable, unix, debug=False):
                         if route == '/empty-trailers':
                             client.update_settings({SettingCodes.INITIAL_WINDOW_SIZE: 65535})
                             sock.sendall(client.data_to_send())
-                    # Malformed transport input on another connection must not
-                    # kill this worker or disturb its existing connection.
-                    with socket.socket(socket.AF_UNIX if unix else socket.AF_INET) as invalid:
-                        invalid.settimeout(5)
-                        invalid.connect(path if unix else ('127.0.0.1', int(endpoint)))
-                        invalid.sendall(b'GET / HTTP/1.1\r\nHost: localhost\r\n\r\n')
-                        while invalid.recv(65536):
-                            pass
+                    # Repeated malformed connections race acceptor-side close
+                    # against the shared readiness poller. Each peer must see
+                    # EOF without another connection waking the poller first.
+                    for _ in range(256):
+                        with socket.socket(socket.AF_UNIX if unix else socket.AF_INET) as invalid:
+                            invalid.settimeout(5)
+                            invalid.connect(path if unix else ('127.0.0.1', int(endpoint)))
+                            invalid.sendall(b'GET / HTTP/1.1\r\nHost: localhost\r\n\r\n')
+                            while invalid.recv(65536):
+                                pass
                     # EOF of a different HTTP/2 connection also closes its
                     # borrowed TCP resource, while this connection stays live.
                     with socket.socket() as upstream:
@@ -325,9 +327,162 @@ def verify(executable, unix, debug=False):
     print('PASS production HTTP/2 ' + ('Unix' if unix else 'TCP') + (' debug' if debug else ' normal'))
 
 
+def verify_execution_limit(executable, unix):
+    with tempfile.TemporaryDirectory(prefix='roxum-h2-limit-', dir='/tmp') as directory:
+        path = str(pathlib.Path(directory) / 'http.sock') if unix else ''
+        config = pathlib.Path(directory) / 'config'
+        config.mkdir()
+        (config / 'local.toml').write_text('path = ' + json.dumps(path) + '\nexecution_milliseconds = 250\n')
+        with tempfile.TemporaryFile(mode='w+') as errors:
+            process = subprocess.Popen([executable], cwd=directory, stdout=subprocess.PIPE,
+                                       stderr=errors, text=True, start_new_session=True)
+            try:
+                assert select.select([process.stdout], [], [], 30)[0], 'startup timed out'
+                endpoint = process.stdout.readline().strip()
+                assert endpoint, 'startup failed'
+                with socket.socket(socket.AF_UNIX if unix else socket.AF_INET) as sock:
+                    sock.settimeout(3)  # Less than the fixture's 10-second body/write limits.
+                    sock.connect(path if unix else ('127.0.0.1', int(endpoint)))
+                    client = H2Connection(config=H2Configuration(client_side=True, header_encoding='utf-8'))
+                    client.initiate_connection()
+                    headers, bodies, ended, reset = {}, collections.defaultdict(bytes), set(), set()
+
+                    def flush():
+                        pending = client.data_to_send()
+                        if pending:
+                            sock.sendall(pending)
+
+                    def request(stream, route, end=True, body=b''):
+                        client.send_headers(stream, [(':method', 'GET'), (':scheme', 'http'),
+                                                     (':authority', 'localhost'), (':path', route),
+                                                     ('x-request-id', f'execution-limit-{stream}')], end_stream=end and not body)
+                        if body:
+                            client.send_data(stream, body, end_stream=end)
+                        flush()
+
+                    def receive(predicate):
+                        deadline = time.monotonic() + 3
+                        while not predicate():
+                            sock.settimeout(max(.001, deadline - time.monotonic()))
+                            wire = sock.recv(65536)
+                            assert wire, 'deadline closed peer connection'
+                            for event in client.receive_data(wire):
+                                assert not isinstance(event, ConnectionTerminated), event
+                                if isinstance(event, ResponseReceived):
+                                    headers[event.stream_id] = dict(event.headers)
+                                elif isinstance(event, DataReceived):
+                                    bodies[event.stream_id] += event.data
+                                    client.acknowledge_received_data(event.flow_controlled_length, event.stream_id)
+                                elif isinstance(event, StreamEnded):
+                                    ended.add(event.stream_id)
+                                elif isinstance(event, StreamReset):
+                                    reset.add(event.stream_id)
+                            flush()
+                            assert time.monotonic() < deadline, 'execution deadline made no progress'
+
+                    # Incomplete input must expire without entering the crashing handler.
+                    request(1, '/crash', end=False)
+                    request(3, '/echo')
+                    receive(lambda: 3 in ended and 1 in reset)
+                    assert 1 not in headers and headers[3][':status'] == '200'
+
+                    # Accept proves the handler acquired its permit before probing expiry.
+                    with socket.socket() as upstream:
+                        upstream.settimeout(3)
+                        upstream.bind(('127.0.0.1', 0))
+                        upstream.listen()
+                        request(5, '/tcp-cancel', body=str(upstream.getsockname()[1]).encode())
+                        borrowed, _ = upstream.accept()
+                        with borrowed:
+                            borrowed.settimeout(3)
+                            receive(lambda: 5 in reset)
+                            assert 5 not in headers
+                            assert borrowed.recv(1) == b'', 'expiry retained borrowed TCP'
+                    # Wait for request cleanup, not just the protocol reset.
+                    stream = 7
+                    deadline = time.monotonic() + 3
+                    while True:
+                        request(stream, '/permit')
+                        receive(lambda: stream in ended)
+                        if headers[stream][':status'] == '200':
+                            break
+                        assert headers[stream][':status'] == '429'
+                        assert time.monotonic() < deadline, 'expired handler leaked its permit'
+                        time.sleep(.01)
+                        stream += 2
+
+                    # Admission commits the response before its DATA is writable.
+                    client.update_settings({SettingCodes.INITIAL_WINDOW_SIZE: 0})
+                    flush()
+                    stream += 2
+                    request(stream, '/echo')
+                    receive(lambda: stream in headers)
+                    assert stream not in ended and not bodies[stream]
+                    time.sleep(.4)  # Cross the 250ms execution cap after response admission.
+                    client.increment_flow_control_window(1024, stream_id=stream)
+                    flush()
+                    receive(lambda: stream in ended or stream in reset)
+                    assert stream not in reset and bodies[stream] == b'42|h2|'
+                assert stop(process) == 0
+                errors.seek(0)
+                entries = [json.loads(line) for line in errors if line.startswith('{')]
+                assert sum(entry.get('request_id') == 'execution-limit-5' and entry.get('outcome') == 'timeout'
+                           for entry in entries) == 1, entries
+                assert not any(entry.get('outcome') == 'crashed' for entry in entries), entries
+            except BaseException:
+                stop(process)
+                errors.seek(0)
+                print(errors.read(), file=sys.stderr)
+                raise
+            finally:
+                process.stdout.close()
+    print('PASS configured HTTP/2 execution limit ' + ('Unix' if unix else 'TCP'))
+
+
+def verify_execution_config(executable):
+    with tempfile.TemporaryDirectory(prefix='roxum-h2-config-', dir='/tmp') as directory:
+        config = pathlib.Path(directory) / 'config'
+        config.mkdir()
+        # First invalid values immediately outside the accepted duration range.
+        for value in (0, 18_446_744_073_710):
+            (config / 'local.toml').write_text(f'execution_milliseconds = {value}\n')
+            process = subprocess.Popen([executable], cwd=directory, stdout=subprocess.PIPE,
+                                       stderr=subprocess.PIPE, text=True, start_new_session=True)
+            try:
+                stdout, stderr = process.communicate(timeout=10)
+                assert process.returncode != 0 and not stdout, (stdout, stderr)
+                assert 'Server.ExecutionLimit.Milliseconds takes 1 to 18446744073709' in stderr, stderr
+            finally:
+                stop(process)
+        # The setting must not impose an execution timeout on HTTP/1 handlers.
+        (config / 'local.toml').write_text('execution_milliseconds = 1\nhttp1 = true\n')
+        process = subprocess.Popen([executable], cwd=directory, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, text=True, start_new_session=True)
+        try:
+            assert select.select([process.stdout], [], [], 30)[0], 'startup timed out'
+            port = int(process.stdout.readline())
+            with socket.create_connection(('127.0.0.1', port), timeout=5) as sock:
+                sock.sendall(b'GET /sleep HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n')
+                response = b''
+                while chunk := sock.recv(65536):
+                    response += chunk
+            assert response.startswith(b'HTTP/1.1 200 '), response
+            assert b'42|wrong-version|' in response, response
+            assert stop(process) == 0
+        finally:
+            stop(process)
+            process.stdout.close()
+            process.stderr.close()
+    print('PASS execution limit startup validation and HTTP/1 isolation')
+
+
 if __name__ == '__main__':
     executable = str(pathlib.Path(sys.argv[1]).resolve())
     verify(executable, False)
     verify(executable, True)
     verify(executable, False, True)
     verify(executable, True, True)
+
+    verify_execution_config(executable)
+    verify_execution_limit(executable, False)
+    verify_execution_limit(executable, True)

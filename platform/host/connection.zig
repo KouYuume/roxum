@@ -38,6 +38,8 @@ pub const Error = request_reader.Error ||
     bridge.ResponseAdvanceError;
 
 pub const Limits = struct {
+    /// Metadata-anchored HTTP/2 execution cap; null preserves uncapped execution.
+    http2_execution_nanoseconds: ?u64 = null,
     initial_request_timeout_milliseconds: u64 = 5_000,
     keep_alive_idle_timeout_milliseconds: u64 = 15_000,
     request_head_timeout_milliseconds: u64 = 5_000,

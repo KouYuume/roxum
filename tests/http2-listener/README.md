@@ -24,9 +24,21 @@ an incomplete body times out while another stream completes. An unfinished heade
 block expires even before its first field arrives. A response blocked on stream
 flow control expires while a bodyless peer completes. Incoming request IDs and
 access records are checked. Malformed connections and disconnects must leave peers
-usable. Shutdown sends
+usable. Repeated malformed connections must each reach EOF before the next one
+connects, covering concurrent readiness scans and close without a later event
+masking delayed socket release. Shutdown sends
 GOAWAY while an upstream read is suspended; that admitted request must finish
 before the connection closes and the process terminates successfully.
 
 The test does not claim streaming response or gRPC support. Internal engine/wire
 fixtures retain detailed framing, flow-control and allocator fault coverage.
+
+Execution-cap checks run additional TCP and Unix listeners with a 250 ms cap and
+10-second body/write timeouts. They verify that an incomplete request never enters
+its crashing handler, an accepted upstream connection proves the handler holds its
+permit before expiry, cancellation closes that connection and releases the permit, peers
+continue, and a committed response can finish after the execution cap. Access
+logs retain one timeout for the cancelled handler. Startup rejects zero and the
+first duration beyond the nanosecond representation; a valid HTTP/2 cap leaves an
+HTTP/1 handler running past that cap unaffected. Existing cases omit the cap and
+exercise the default `Unlimited` branch in every backend and allocator mode.

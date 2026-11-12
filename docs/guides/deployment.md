@@ -36,6 +36,24 @@ handler without closing its peers. Response streaming, SSE, file responses,
 early request-body processing, and native gRPC remain unsupported;
 attempting a streamed response resets that stream.
 
+To bound HTTP/2 execution, set a listener-wide cap:
+
+```roc
+limits: { http2_execution: Server.ExecutionLimit.Milliseconds(5_000) },
+```
+
+The default is `Server.ExecutionLimit.Unlimited`. Finite values take 1 to
+18,446,744,073,709 milliseconds; zero or larger values stop startup. The duration
+starts when initial headers complete and includes body waits, queueing and
+handler execution. Expiry resets only that stream and cancels suspended effects;
+it cannot preempt arbitrary Roc computation. Detection follows scheduler ticks
+and checks at request conversion and response admission, not a real-time guarantee.
+Once a finite response has been admitted, its existing response-write timeout
+governs delivery even if the execution duration later elapses. A valid setting
+has no effect on HTTP/1. Per-request deadline operations and early Roc metadata
+processing are not yet exposed. Rebuild the host archives together with platform
+sources when adopting this setting; it extends the initialization ABI.
+
 The configured finite body limit applies. Each connection admits at most 16
 streams, with 16 KiB field sections and at most 2 MiB per finite response. Input
 and conversion storage have a 16 MiB connection budget; the protocol session and
@@ -271,6 +289,7 @@ each thread the number in the table; `Server.Count.Fixed(n)` sets the process's 
 | `request_memory` | `Server.MemoryLimit.Auto` | the memory the process's requests may hold; `Server.MemoryLimit.Bytes(n)` sets it |
 | `maximum_body_bytes` | 2 MiB (a plain number, not per thread) | a body received whole before the handler |
 | `maximum_streamed_body_bytes` | `Server.BodyLimit.Unlimited` | a body read by a `Handler.streaming` handler; `Server.BodyLimit.Bytes(n)` sets it |
+| `http2_execution` | `Server.ExecutionLimit.Unlimited` | per-request HTTP/2 duration from headers; `Server.ExecutionLimit.Milliseconds(n)` sets it, independent of thread count |
 
 ```roc
 limits: Server.Limits.{ maximum_requests_in_progress: Server.Count.Fixed(16_384), request_memory: Server.MemoryLimit.Bytes(4 * 1024 * 1024 * 1024) },

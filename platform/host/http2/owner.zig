@@ -35,10 +35,11 @@ pub const Owner = struct {
         return .{ .engine = engine, .socket = socket, .poller = poller, .token = token };
     }
 
-    /// Closing the exclusively owned descriptor removes its kernel watches.
+    /// Remove readiness interest before closing the exclusively owned descriptor.
     /// The caller must invalidate queued work and cancel application lifetimes
     /// before deinit; engine destruction does not issue observer notifications.
     pub fn deinit(self: *Owner) void {
+        self.poller.unwatchReadable(self.socket) catch {};
         net.closeSocket(self.socket);
         self.engine.destroy();
         self.* = undefined;

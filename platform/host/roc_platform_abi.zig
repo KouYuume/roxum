@@ -1436,11 +1436,11 @@ pub const __AnonStruct_8cf0b1000143cff5 = if (@sizeOf(usize) == 4) extern struct
 
 comptime {
     if (@sizeOf(usize) == 8) {
-        if (@sizeOf(__AnonStruct_8cf0b1000143cff5) != 280) @compileError("__AnonStruct_8cf0b1000143cff5 size mismatch");
+        if (@sizeOf(__AnonStruct_8cf0b1000143cff5) != 296) @compileError("__AnonStruct_8cf0b1000143cff5 size mismatch");
         if (@alignOf(__AnonStruct_8cf0b1000143cff5) != 8) @compileError("__AnonStruct_8cf0b1000143cff5 alignment mismatch");
     }
     if (@sizeOf(usize) == 4) {
-        if (@sizeOf(__AnonStruct_8cf0b1000143cff5) != 240) @compileError("__AnonStruct_8cf0b1000143cff5 size mismatch");
+        if (@sizeOf(__AnonStruct_8cf0b1000143cff5) != 256) @compileError("__AnonStruct_8cf0b1000143cff5 size mismatch");
         if (@alignOf(__AnonStruct_8cf0b1000143cff5) != 8) @compileError("__AnonStruct_8cf0b1000143cff5 alignment mismatch");
     }
 }
@@ -1522,11 +1522,11 @@ pub const ServerListenOptions = if (@sizeOf(usize) == 4) extern struct {
 
 comptime {
     if (@sizeOf(usize) == 8) {
-        if (@sizeOf(ServerListenOptions) != 248) @compileError("ServerListenOptions size mismatch");
+        if (@sizeOf(ServerListenOptions) != 264) @compileError("ServerListenOptions size mismatch");
         if (@alignOf(ServerListenOptions) != 8) @compileError("ServerListenOptions alignment mismatch");
     }
     if (@sizeOf(usize) == 4) {
-        if (@sizeOf(ServerListenOptions) != 224) @compileError("ServerListenOptions size mismatch");
+        if (@sizeOf(ServerListenOptions) != 240) @compileError("ServerListenOptions size mismatch");
         if (@alignOf(ServerListenOptions) != 8) @compileError("ServerListenOptions alignment mismatch");
     }
 }
@@ -1615,6 +1615,7 @@ comptime {
 
 /// Element type for Server.Limits
 pub const ServerLimits = if (@sizeOf(usize) == 4) extern struct {
+    @"http2_execution": ServerExecutionLimit,
     @"maximum_body_bytes": u64,
     @"maximum_connections": ServerCount,
     @"maximum_queued_requests": ServerCount,
@@ -1626,6 +1627,7 @@ pub const ServerLimits = if (@sizeOf(usize) == 4) extern struct {
     /// Recursively decrement Roc-owned fields.
     pub fn decref(self: @This(), roc_host: *RocHost) void {
         const value = self;
+        value.@"http2_execution".decref(roc_host);
         value.@"maximum_connections".decref(roc_host);
         value.@"maximum_queued_requests".decref(roc_host);
         value.@"maximum_requests_in_progress".decref(roc_host);
@@ -1637,6 +1639,7 @@ pub const ServerLimits = if (@sizeOf(usize) == 4) extern struct {
     /// Increment Roc-owned fields.
     pub fn incref(self: @This(), amount: isize) void {
         const value = self;
+        value.@"http2_execution".incref(amount);
         value.@"maximum_connections".incref(amount);
         value.@"maximum_queued_requests".incref(amount);
         value.@"maximum_requests_in_progress".incref(amount);
@@ -1645,6 +1648,7 @@ pub const ServerLimits = if (@sizeOf(usize) == 4) extern struct {
         value.@"request_memory".incref(amount);
     }
 } else extern struct {
+    @"http2_execution": ServerExecutionLimit,
     @"maximum_body_bytes": u64,
     @"maximum_connections": ServerCount,
     @"maximum_queued_requests": ServerCount,
@@ -1656,6 +1660,7 @@ pub const ServerLimits = if (@sizeOf(usize) == 4) extern struct {
     /// Recursively decrement Roc-owned fields.
     pub fn decref(self: @This(), roc_host: *RocHost) void {
         const value = self;
+        value.@"http2_execution".decref(roc_host);
         value.@"maximum_connections".decref(roc_host);
         value.@"maximum_queued_requests".decref(roc_host);
         value.@"maximum_requests_in_progress".decref(roc_host);
@@ -1667,6 +1672,7 @@ pub const ServerLimits = if (@sizeOf(usize) == 4) extern struct {
     /// Increment Roc-owned fields.
     pub fn incref(self: @This(), amount: isize) void {
         const value = self;
+        value.@"http2_execution".incref(amount);
         value.@"maximum_connections".incref(amount);
         value.@"maximum_queued_requests".incref(amount);
         value.@"maximum_requests_in_progress".incref(amount);
@@ -1678,11 +1684,11 @@ pub const ServerLimits = if (@sizeOf(usize) == 4) extern struct {
 
 comptime {
     if (@sizeOf(usize) == 8) {
-        if (@sizeOf(ServerLimits) != 112) @compileError("ServerLimits size mismatch");
+        if (@sizeOf(ServerLimits) != 128) @compileError("ServerLimits size mismatch");
         if (@alignOf(ServerLimits) != 8) @compileError("ServerLimits alignment mismatch");
     }
     if (@sizeOf(usize) == 4) {
-        if (@sizeOf(ServerLimits) != 112) @compileError("ServerLimits size mismatch");
+        if (@sizeOf(ServerLimits) != 128) @compileError("ServerLimits size mismatch");
         if (@alignOf(ServerLimits) != 8) @compileError("ServerLimits alignment mismatch");
     }
 }
@@ -2943,7 +2949,7 @@ pub const Init_for_hostResultPayload = extern union {
 
 /// Tag union: Try
 pub const Init_for_hostResult = if (@sizeOf(usize) == 4) extern struct {
-    payload: [240]u8 align(8),
+    payload: [256]u8 align(8),
     tag: Init_for_hostResultTag,
     pub fn payload_err(self: *const @This()) RocStr {
         const ptr: *const RocStr = @ptrCast(@alignCast(&self.payload));
@@ -2984,14 +2990,14 @@ pub const Init_for_hostResult = if (@sizeOf(usize) == 4) extern struct {
 
 comptime {
     if (@sizeOf(usize) == 8) {
-        if (@sizeOf(Init_for_hostResult) != 288) @compileError("Init_for_hostResult size mismatch");
+        if (@sizeOf(Init_for_hostResult) != 304) @compileError("Init_for_hostResult size mismatch");
         if (@alignOf(Init_for_hostResult) != 8) @compileError("Init_for_hostResult alignment mismatch");
-        if (@offsetOf(Init_for_hostResult, "tag") != 280) @compileError("Init_for_hostResult tag offset mismatch");
+        if (@offsetOf(Init_for_hostResult, "tag") != 296) @compileError("Init_for_hostResult tag offset mismatch");
     }
     if (@sizeOf(usize) == 4) {
-        if (@sizeOf(Init_for_hostResult) != 248) @compileError("Init_for_hostResult size mismatch");
+        if (@sizeOf(Init_for_hostResult) != 264) @compileError("Init_for_hostResult size mismatch");
         if (@alignOf(Init_for_hostResult) != 8) @compileError("Init_for_hostResult alignment mismatch");
-        if (@offsetOf(Init_for_hostResult, "tag") != 240) @compileError("Init_for_hostResult tag offset mismatch");
+        if (@offsetOf(Init_for_hostResult, "tag") != 256) @compileError("Init_for_hostResult tag offset mismatch");
     }
 }
 
@@ -3087,6 +3093,65 @@ comptime {
         if (@sizeOf(ServerEndpoint) != 24) @compileError("ServerEndpoint size mismatch");
         if (@alignOf(ServerEndpoint) != 4) @compileError("ServerEndpoint alignment mismatch");
         if (@offsetOf(ServerEndpoint, "tag") != 20) @compileError("ServerEndpoint tag offset mismatch");
+    }
+}
+
+/// Tag discriminant for Server.ExecutionLimit.
+pub const ServerExecutionLimitTag = enum(u8) {
+    @"Milliseconds" = 0,
+    @"Unlimited" = 1,
+};
+
+/// Payload union for Server.ExecutionLimit.
+pub const ServerExecutionLimitPayload = extern union {
+        @"milliseconds": u64,
+        @"unlimited": [0]u8,
+};
+
+/// Tag union: Server.ExecutionLimit
+pub const ServerExecutionLimit = if (@sizeOf(usize) == 4) extern struct {
+    payload: [8]u8 align(8),
+    tag: ServerExecutionLimitTag,
+    pub fn payload_milliseconds(self: *const @This()) u64 {
+        const ptr: *const u64 = @ptrCast(@alignCast(&self.payload));
+        return ptr.*;
+    }
+    /// Recursively decrement Roc-owned payloads.
+    pub fn decref(self: @This(), roc_host: *RocHost) void {
+        decrefServerExecutionLimit(self, roc_host);
+    }
+
+    /// Increment Roc-owned payloads.
+    pub fn incref(self: @This(), amount: isize) void {
+        increfServerExecutionLimit(self, amount);
+    }
+} else extern struct {
+    payload: ServerExecutionLimitPayload,
+    tag: ServerExecutionLimitTag,
+    pub fn payload_milliseconds(self: *const @This()) u64 {
+        return self.payload.@"milliseconds";
+    }
+    /// Recursively decrement Roc-owned payloads.
+    pub fn decref(self: @This(), roc_host: *RocHost) void {
+        decrefServerExecutionLimit(self, roc_host);
+    }
+
+    /// Increment Roc-owned payloads.
+    pub fn incref(self: @This(), amount: isize) void {
+        increfServerExecutionLimit(self, amount);
+    }
+};
+
+comptime {
+    if (@sizeOf(usize) == 8) {
+        if (@sizeOf(ServerExecutionLimit) != 16) @compileError("ServerExecutionLimit size mismatch");
+        if (@alignOf(ServerExecutionLimit) != 8) @compileError("ServerExecutionLimit alignment mismatch");
+        if (@offsetOf(ServerExecutionLimit, "tag") != 8) @compileError("ServerExecutionLimit tag offset mismatch");
+    }
+    if (@sizeOf(usize) == 4) {
+        if (@sizeOf(ServerExecutionLimit) != 16) @compileError("ServerExecutionLimit size mismatch");
+        if (@alignOf(ServerExecutionLimit) != 8) @compileError("ServerExecutionLimit alignment mismatch");
+        if (@offsetOf(ServerExecutionLimit, "tag") != 8) @compileError("ServerExecutionLimit tag offset mismatch");
     }
 }
 
@@ -4508,6 +4573,28 @@ pub const __AnonStruct_10282560bf9afa3bRelease = struct {
 
 pub const ServerLimitsRelease = struct {
     pub fn release(value: ServerLimits, roc_host: *RocHost) void {
+        value.decref(roc_host);
+    }
+};
+
+fn decrefServerExecutionLimit(value: ServerExecutionLimit, roc_host: *RocHost) void {
+    _ = roc_host;
+    switch (value.tag) {
+        .@"Milliseconds" => {},
+        .@"Unlimited" => {},
+    }
+}
+
+fn increfServerExecutionLimit(value: ServerExecutionLimit, amount: isize) void {
+    _ = amount;
+    switch (value.tag) {
+        .@"Milliseconds" => {},
+        .@"Unlimited" => {},
+    }
+}
+
+pub const ServerExecutionLimitRelease = struct {
+    pub fn release(value: ServerExecutionLimit, roc_host: *RocHost) void {
         value.decref(roc_host);
     }
 };

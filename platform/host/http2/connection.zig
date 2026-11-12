@@ -33,6 +33,7 @@ pub const Connection = struct {
     head_timeout: u64 = 0,
     body_timeout: u64 = 0,
     write_timeout: u64 = 0,
+    execution_limit: ?u64 = null,
     completed_access: [16]@import("../access_log.zig").Entry = undefined,
     completed_access_count: usize = 0,
     access: [16]?@import("../access_log.zig").Entry = @splat(null),
@@ -44,6 +45,7 @@ pub const Connection = struct {
             .head_timeout = limits.request_head_timeout_milliseconds * std.time.ns_per_ms,
             .body_timeout = limits.request_body_timeout_milliseconds * std.time.ns_per_ms,
             .write_timeout = limits.response_write_timeout_milliseconds * std.time.ns_per_ms,
+            .execution_limit = limits.http2_execution_nanoseconds,
         };
         self.budget.backing = worker_memory.allocator();
         const body_limit = std.math.cast(usize, limits.maximum_body_bytes) orelse std.math.maxInt(usize);
@@ -112,6 +114,9 @@ pub const Connection = struct {
         self.completed_access_count = 0;
         self.streams.disconnect();
         self.wakeClosed();
+        // Remove interest before close so a concurrent epoll scan cannot
+        // defer the socket's final release until its next userspace return.
+        self.owner.poller.unwatchReadable(self.owner.socket) catch {};
         net.closeSocket(self.owner.socket);
     }
 
@@ -174,11 +179,23 @@ pub const Connection = struct {
     }
     fn headersComplete(ptr: *anyopaque, id: engine.StreamId) void {
         const self = from(ptr);
-        self.streams.headersComplete(id, self.now) catch {
+        // Event-batch time can predate lock contention and frame decoding.
+        const completed_at = net.monotonicNanoseconds() catch {
             self.failed = true;
             return;
         };
-        if (self.streams.leases.find(id)) |ticket| self.deadlines[ticket.slot] = self.now +| self.body_timeout;
+        self.streams.headersComplete(id, completed_at) catch {
+            self.failed = true;
+            return;
+        };
+        if (self.streams.leases.find(id)) |ticket| {
+            self.deadlines[ticket.slot] = self.now +| self.body_timeout;
+            // Rejected input has no completed metadata and is already queued for reset.
+            if (self.streams.leases.headersElapsed(ticket, completed_at) == null) return;
+            if (self.execution_limit) |duration| {
+                if (!self.streams.leases.limitExecution(ticket, duration, duration)) self.failed = true;
+            }
+        }
     }
     fn data(ptr: *anyopaque, id: engine.StreamId, bytes: []const u8) void {
         const self = from(ptr);
@@ -225,7 +242,7 @@ test "execution expiry records timeout and preserves running cleanup" {
     try net.setListenerNonBlocking(pair[0]);
     var readiness = try poller.Poller.init();
     defer readiness.deinit();
-    const connection = try Connection.create(pair[0], &readiness, 1, .{});
+    const connection = try Connection.create(pair[0], &readiness, 1, .{ .http2_execution_nanoseconds = 10 });
     defer {
         connection.disconnect();
         connection.destroy();
@@ -235,12 +252,12 @@ test "execution expiry records timeout and preserves running cleanup" {
         "\x00\x00\x00\x04\x00\x00\x00\x00\x00" ++
         "\x00\x00\x0e\x01\x05\x00\x00\x00\x01\x83\x86\x84\x01\x09localhost");
     const work = connection.streams.next().?.execute;
-    try std.testing.expect(connection.streams.leases.limitExecution(work.ticket, 10, 10));
+    const anchor = work.headers_at;
     connection.access[work.ticket.slot] = .{};
     connection.owner.runnable = false;
-    connection.expire(109);
+    connection.expire(anchor + 9);
     try std.testing.expect(connection.streams.runningInput(work.ticket) != null);
-    connection.expire(110);
+    connection.expire(anchor + 10);
     try std.testing.expect(connection.owner.runnable);
     try std.testing.expect(connection.streams.runningInput(work.ticket) == null);
     try std.testing.expectEqual(@import("../access_log.zig").Outcome.timeout, connection.access[work.ticket.slot].?.outcome);
@@ -254,4 +271,48 @@ test "execution expiry records timeout and preserves running cleanup" {
     }
     try std.testing.expect(connection.streams.finish(work.ticket));
     try std.testing.expectEqual(@as(usize, 0), connection.budget.used);
+}
+
+test "configured execution cap starts before body completion and queue claim" {
+    for ([_]?u64{ null, 10 }) |limit| {
+        for ([_]bool{ false, true }) |body_complete| {
+            var pair: [2]c_int = undefined;
+            try std.testing.expectEqual(@as(c_int, 0), std.c.socketpair(std.c.AF.UNIX, std.c.SOCK.STREAM, 0, &pair));
+            defer net.closeSocket(pair[1]);
+            try net.setListenerNonBlocking(pair[0]);
+            var readiness = try poller.Poller.init();
+            defer readiness.deinit();
+            const connection = try Connection.create(pair[0], &readiness, 1, .{ .http2_execution_nanoseconds = limit });
+            defer {
+                connection.disconnect();
+                connection.destroy();
+            }
+            connection.now = 100;
+            const preface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" ++ "\x00\x00\x00\x04\x00\x00\x00\x00\x00";
+            try connection.owner.engine.receive(preface);
+            var frame = "\x00\x00\x0e\x01\x04\x00\x00\x00\x01\x83\x86\x84\x01\x09localhost".*;
+            if (body_complete) frame[4] = 5;
+            const before = try net.monotonicNanoseconds();
+            try connection.owner.engine.receive(&frame);
+            const after = try net.monotonicNanoseconds();
+            const ticket = connection.streams.leases.find(@fromBackingInt(1)).?;
+            const anchor = after - connection.streams.leases.headersElapsed(ticket, after).?;
+            try std.testing.expect(anchor >= before and anchor <= after);
+            try std.testing.expect(anchor > connection.now);
+            connection.expire(anchor + 9);
+            try std.testing.expect(!connection.streams.leases.executionExpired(ticket));
+            for ([_]u64{ anchor + 10, anchor + 11 }) |now| {
+                connection.expire(now);
+                try std.testing.expectEqual(limit != null, connection.streams.leases.executionExpired(ticket));
+            }
+            if (limit != null) {
+                try std.testing.expectEqual(@as(engine.StreamId, @fromBackingInt(1)), connection.streams.next().?.cancel);
+                try std.testing.expect(connection.streams.next() == null);
+                try std.testing.expectEqual(@as(usize, 0), connection.budget.used);
+            } else if (body_complete) {
+                const work = connection.streams.next().?.execute;
+                try std.testing.expect(connection.streams.finish(work.ticket));
+            } else try std.testing.expect(connection.streams.next() == null);
+        }
+    }
 }

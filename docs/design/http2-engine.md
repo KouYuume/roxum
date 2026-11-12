@@ -95,9 +95,13 @@ streaming completion and metadata-time RPC deadlines remain separate work.
 
 `Owner` owns one nonblocking accepted socket and its engine. Initialization takes
 socket ownership only on success; its caller closes the socket on failure.
-The poller is borrowed and must outlive the owner. Destruction closes the socket
-and releases the engine, including retained responses. Before destruction, the
-scheduler must cancel application lifetimes and invalidate queued work.
+The poller is borrowed and must outlive the owner. Disconnect and destruction
+remove the readable watch before closing the socket. On Linux this removes the
+entire epoll registration and synchronizes with
+concurrent epoll scans while the descriptor still owns a reference, so final
+socket release does not depend on the waiting thread returning to userspace.
+Destruction also releases the engine, including retained responses. Before
+destruction, the scheduler must cancel application lifetimes and invalidate queued work.
 
 A single serialized scheduler drives `step`, response submission, cancellation,
 and readiness delivery. Each step performs at most one write (up to 16 KiB by
@@ -315,10 +319,17 @@ response outcome. Later execution expiry cannot replace it; response-write
 limits continue to govern flow control and socket delivery, including trailers.
 Expired or closed leases cannot be revived by installing another duration.
 
-These operations are internal prerequisites, not an application timeout API.
-The production listener does not yet expose a Roc metadata-phase callback or a
-server execution-cap setting. Connecting those capabilities remains required
-before integrations can parse and apply `grpc-timeout` ahead of body waits.
+`Server.Limits.http2_execution` configures a listener-wide cap as
+`Server.ExecutionLimit.Unlimited` (default) or `Milliseconds(duration)`. Finite
+durations take 1 to 18,446,744,073,709 milliseconds; invalid values fail startup.
+The bridge converts them to checked nanoseconds, and the connection installs the
+cap when initial headers complete, before body EOF or execution admission.
+Rejected header input already awaiting cancellation does not acquire a budget.
+This setting applies only to HTTP/2 and does not change HTTP/1 timeouts.
+
+Per-request deadline operations remain internal. The production listener does not
+yet expose a Roc metadata-phase callback. Those capabilities remain required
+before integrations can parse and tighten deadlines using `grpc-timeout` ahead of body waits.
 The host does not interpret gRPC metadata or synthesize gRPC status fields.
 The independent socket fixture installs a fixed generic budget at metadata
 completion and verifies unfinished-body cancellation and unrelated-stream progress.
