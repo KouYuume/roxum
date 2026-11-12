@@ -40,7 +40,7 @@ pub const OwnedResponse = struct {
         const trailer_names = try allocator.alloc(u8, final_size);
         errdefer allocator.free(trailer_names);
         var final_offset: usize = 0;
-        for (final_fields, 0..) |field, index| {
+        for (final_fields, 0..) |*field, index| {
             const name = field.name.asSlice();
             const lower = trailer_names[final_offset..][0..name.len];
             for (name, lower) |byte, *output| output.* = std.ascii.toLower(byte);

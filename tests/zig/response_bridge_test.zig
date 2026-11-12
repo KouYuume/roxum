@@ -775,6 +775,32 @@ test "HTTP/2 response rolls back each scratch allocation failure and releases Ro
     }
 }
 
+test "HTTP/2 trailer values borrow retained Roc storage across the inline string boundary" {
+    var environment = TestEnvironment{ .allocator = std.testing.allocator };
+    var host = environment.rocHost();
+    const inline_capacity = @sizeOf(bridge.GeneratedRocStr) - 1;
+    const below: [inline_capacity - 1]u8 = @splat('a');
+    const at: [inline_capacity]u8 = @splat('b');
+    const above: [inline_capacity + 1]u8 = @splat('c');
+    const values = [_][]const u8{ "0", "complete", &below, &at, &above };
+    var value = makeResponse(200, "x", "y", "body", &host);
+    value.trailers = bridge.HttpResponseHeaderList.allocate(values.len, &host);
+    for (value.trailers.elements_ptr.?[0..values.len], values) |*field, text| {
+        field.* = .{ .name = bridge.GeneratedRocStr.fromSlice("X-Trailer", &host), .value = bridge.GeneratedRocStr.fromSlice(text, &host) };
+    }
+    {
+        var owned = try bridge.OwnedHttp2Response.init(value, &host, std.testing.allocator, bridge.ResponseRequestSemantics.regular, .{ .header_bytes = 1024, .body_bytes = 16 });
+        defer owned.deinit();
+        for (owned.trailers, owned.response.trailers.items(), values) |field, *retained, expected| {
+            // Inline strings must borrow the retained list element, not a loop-local copy.
+            try std.testing.expectEqual(retained.value.asSlice().ptr, field.value.ptr);
+            try std.testing.expectEqualStrings(expected, field.value);
+            try std.testing.expectEqualStrings("x-trailer", field.name);
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
+}
+
 test "HTTP/2 trailer sections have independent field and byte boundaries" {
     for ([_]usize{ 63, 64, 65 }) |count| {
         var environment = TestEnvironment{ .allocator = std.testing.allocator };

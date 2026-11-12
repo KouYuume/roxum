@@ -68,6 +68,10 @@ jobs:
         env:
           ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
         run: zig build test-http2-listener
+      - name: Verify fixed-byte gRPC interoperability on TCP and Unix listeners
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-grpc-probe
       - name: Verify platform-dependent package boundary
         env:
           ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
