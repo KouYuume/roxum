@@ -42,3 +42,12 @@ logs retain one timeout for the cancelled handler. Startup rejects zero and the
 first duration beyond the nanosecond representation; a valid HTTP/2 cap leaves an
 HTTP/1 handler running past that cap unaffected. Existing cases omit the cap and
 exercise the default `Unlimited` branch in every backend and allocator mode.
+
+Request-execution checks additionally run without a listener cap. They verify that
+elapsed time includes a delayed body and remains monotonic across effect suspension,
+zero/already-elapsed limits stop before the next application statement, and a later
+larger duration cannot extend a request limit. Expiry cancels a borrowed TCP
+connection, releases its permit, and preserves peers. With a listener cap, a Roc
+limit cannot widen it. Both controls report `Unavailable` in initialization and
+HTTP/1 requests. All checks use TCP and Unix sockets across the backend/allocator
+matrix; exact deadline boundaries remain covered by the internal lease tests.

@@ -50,9 +50,26 @@ it cannot preempt arbitrary Roc computation. Detection follows scheduler ticks
 and checks at request conversion and response admission, not a real-time guarantee.
 Once a finite response has been admitted, its existing response-write timeout
 governs delivery even if the execution duration later elapses. A valid setting
-has no effect on HTTP/1. Per-request deadline operations and early Roc metadata
-processing are not yet exposed. Rebuild the host archives together with platform
-sources when adopting this setting; it extends the initialization ABI.
+has no effect on HTTP/1. Rebuild host archives together with platform sources
+when adopting these APIs; the hosted ABI includes execution controls.
+
+Inside an HTTP/2 handler, `RequestExecution.elapsed_nanoseconds!({})` returns
+elapsed time from initial header completion, and
+`RequestExecution.limit_nanoseconds!(duration)` bounds execution from that same
+origin. These return `Err(Unavailable)` in `init!` and on HTTP/1. For example,
+`RequestExecution.limit_nanoseconds!(500_000_000)` sets a total 500 ms budget;
+time spent receiving the body or queueing is already charged. Repeated calls
+can only shorten the current deadline, including the listener's cap. Zero or an
+already-elapsed duration terminates the request without returning to Roc code;
+expiry resets the stream rather than producing an HTTP response or gRPC status.
+
+The elapsed-time operation also checks expiry before returning. Duration addition
+saturates at `U64.highest`; a large value cannot remove an existing limit. These
+effects apply to the current request and expose no reusable resource handle.
+Early Roc metadata processing is not yet supported: handlers and middleware still
+run after the complete HTTP/2 body arrives, so an integration cannot yet install
+a parsed `grpc-timeout` before body waits. The listener cap remains the way to
+bound that earlier phase.
 
 The configured finite body limit applies. Each connection admits at most 16
 streams, with 16 KiB field sections and at most 2 MiB per finite response. Input

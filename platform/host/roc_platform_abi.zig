@@ -2287,6 +2287,65 @@ comptime {
     }
 }
 
+/// Tag discriminant for HostRequestExecution.Elapsed.
+pub const HostRequestExecutionElapsedTag = enum(u8) {
+    @"Elapsed" = 0,
+    @"Unavailable" = 1,
+};
+
+/// Payload union for HostRequestExecution.Elapsed.
+pub const HostRequestExecutionElapsedPayload = extern union {
+        @"elapsed": u64,
+        @"unavailable": [0]u8,
+};
+
+/// Tag union: HostRequestExecution.Elapsed
+pub const HostRequestExecutionElapsed = if (@sizeOf(usize) == 4) extern struct {
+    payload: [8]u8 align(8),
+    tag: HostRequestExecutionElapsedTag,
+    pub fn payload_elapsed(self: *const @This()) u64 {
+        const ptr: *const u64 = @ptrCast(@alignCast(&self.payload));
+        return ptr.*;
+    }
+    /// Recursively decrement Roc-owned payloads.
+    pub fn decref(self: @This(), roc_host: *RocHost) void {
+        decrefHostRequestExecutionElapsed(self, roc_host);
+    }
+
+    /// Increment Roc-owned payloads.
+    pub fn incref(self: @This(), amount: isize) void {
+        increfHostRequestExecutionElapsed(self, amount);
+    }
+} else extern struct {
+    payload: HostRequestExecutionElapsedPayload,
+    tag: HostRequestExecutionElapsedTag,
+    pub fn payload_elapsed(self: *const @This()) u64 {
+        return self.payload.@"elapsed";
+    }
+    /// Recursively decrement Roc-owned payloads.
+    pub fn decref(self: @This(), roc_host: *RocHost) void {
+        decrefHostRequestExecutionElapsed(self, roc_host);
+    }
+
+    /// Increment Roc-owned payloads.
+    pub fn incref(self: @This(), amount: isize) void {
+        increfHostRequestExecutionElapsed(self, amount);
+    }
+};
+
+comptime {
+    if (@sizeOf(usize) == 8) {
+        if (@sizeOf(HostRequestExecutionElapsed) != 16) @compileError("HostRequestExecutionElapsed size mismatch");
+        if (@alignOf(HostRequestExecutionElapsed) != 8) @compileError("HostRequestExecutionElapsed alignment mismatch");
+        if (@offsetOf(HostRequestExecutionElapsed, "tag") != 8) @compileError("HostRequestExecutionElapsed tag offset mismatch");
+    }
+    if (@sizeOf(usize) == 4) {
+        if (@sizeOf(HostRequestExecutionElapsed) != 16) @compileError("HostRequestExecutionElapsed size mismatch");
+        if (@alignOf(HostRequestExecutionElapsed) != 8) @compileError("HostRequestExecutionElapsed alignment mismatch");
+        if (@offsetOf(HostRequestExecutionElapsed, "tag") != 8) @compileError("HostRequestExecutionElapsed tag offset mismatch");
+    }
+}
+
 /// Tag discriminant for HostSecret.Load.
 pub const HostSecretLoadTag = enum(u8) {
     @"Failed" = 0,
@@ -3603,6 +3662,13 @@ pub const HostLogWriteArgs = extern struct {
     arg1: RocStr,
 };
 
+/// Arguments for HostRequestExecution.limit_nanoseconds!
+/// Roc signature: U64 => Bool
+/// Refcounted fields are owned by the hosted function.
+pub const HostRequestExecutionLimit_nanosecondsArgs = extern struct {
+    arg0: u64,
+};
+
 /// Arguments for HostRateCounter.add!
 /// Roc signature: U64, Str, U64 => HostRateCounter.Counted
 /// Refcounted fields are owned by the hosted function.
@@ -4197,6 +4263,28 @@ pub const HostRateCounterCountedRelease = struct {
 
 pub const __AnonStruct_8fa85c66081ab890Release = struct {
     pub fn release(value: __AnonStruct_8fa85c66081ab890, roc_host: *RocHost) void {
+        value.decref(roc_host);
+    }
+};
+
+fn decrefHostRequestExecutionElapsed(value: HostRequestExecutionElapsed, roc_host: *RocHost) void {
+    _ = roc_host;
+    switch (value.tag) {
+        .@"Elapsed" => {},
+        .@"Unavailable" => {},
+    }
+}
+
+fn increfHostRequestExecutionElapsed(value: HostRequestExecutionElapsed, amount: isize) void {
+    _ = amount;
+    switch (value.tag) {
+        .@"Elapsed" => {},
+        .@"Unavailable" => {},
+    }
+}
+
+pub const HostRequestExecutionElapsedRelease = struct {
+    pub fn release(value: HostRequestExecutionElapsed, roc_host: *RocHost) void {
         value.decref(roc_host);
     }
 };
@@ -4877,6 +4965,14 @@ pub extern fn roxum_log_write(arg0: u8, arg1: RocStr) callconv(.c) void;
 /// Hosted symbol for HostRandom.u64!
 /// Roc signature: {} => U64
 pub extern fn roxum_random_u64() callconv(.c) u64;
+
+/// Hosted symbol for HostRequestExecution.elapsed_nanoseconds!
+/// Roc signature: {} => HostRequestExecution.Elapsed
+pub extern fn roxum_request_execution_elapsed() callconv(.c) HostRequestExecutionElapsed;
+
+/// Hosted symbol for HostRequestExecution.limit_nanoseconds!
+/// Roc signature: U64 => Bool
+pub extern fn roxum_request_execution_limit(arg0: u64) callconv(.c) bool;
 
 /// Hosted symbol for HostRateCounter.add!
 /// Roc signature: U64, Str, U64 => HostRateCounter.Counted

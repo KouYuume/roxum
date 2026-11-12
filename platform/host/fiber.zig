@@ -149,6 +149,7 @@ pub const Locals = struct {
     client_watch_replaced: ?*bool = null,
     allocator: ?allocator_context.Context = null,
     body: ?body_effect.Active = null,
+    request_execution: ?@import("effect/request_execution.zig").Active = null,
     response: ?response_writer.Active = null,
     /// Set while the request writes its response body: every wait
     /// of the fiber also watches the client.
@@ -268,6 +269,7 @@ pub const Fiber = struct {
         self.wait = .{};
         self.locals.allocator = null;
         self.locals.body = null;
+        self.locals.request_execution = null;
         self.locals.response = null;
         self.locals.stream_guard = null;
         std.debug.assert(self.locals.file == -1);
@@ -291,7 +293,6 @@ pub const Fiber = struct {
         }
         self.stack_pointer = frame_address;
     }
-
 };
 
 /// A socket a suspended fiber waits on, until it is ready or the deadline
@@ -540,8 +541,8 @@ test "two fibers interleave on one thread" {
     defer a.destroy();
     const b = try Fiber.create();
     defer b.destroy();
-    a.prepare(Probe.start, @constCast(@ptrCast(&a_name)));
-    b.prepare(Probe.start, @constCast(@ptrCast(&b_name)));
+    a.prepare(Probe.start, @ptrCast(@constCast(&a_name)));
+    b.prepare(Probe.start, @ptrCast(@constCast(&b_name)));
     resumeFiber(a);
     resumeFiber(b);
     resumeFiber(a);
