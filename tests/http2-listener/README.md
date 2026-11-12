@@ -63,3 +63,8 @@ an unfinished body still times out after response EOF. Whole/streamed route limi
 exercise 3/4/5 bytes and reject excess before EOF. The large streamed case explicitly
 replaces the default with `Unlimited` while retaining the finite server cap. This remains finite input
 collection, not incremental network streaming.
+
+Early-response deadline checks configure a 1-second write deadline and a
+3-second input deadline. Empty, finite-body, and trailer replies remain open
+after their output completes and the write deadline passes, then reset at the
+input deadline. Peer requests continue on both TCP and Unix connections.

@@ -64,6 +64,7 @@ pub const Connection = struct {
             .data = data,
             .end = end,
             .closed = streamClosed,
+            .response_sent = responseSent,
         });
         return self;
     }
@@ -235,6 +236,13 @@ pub const Connection = struct {
             self.failed = true;
         };
         if (self.streams.leases.find(id)) |ticket| self.body_deadlines[ticket.slot] = 0;
+    }
+    fn responseSent(ptr: *anyopaque, id: engine.StreamId) void {
+        const self = from(ptr);
+        if (self.streams.leases.find(id)) |ticket| {
+            self.deadlines[ticket.slot] = 0;
+            self.writing[ticket.slot] = false;
+        }
     }
     fn streamClosed(ptr: *anyopaque, id: engine.StreamId) void {
         const self = from(ptr);
@@ -450,5 +458,68 @@ test "timeout reset allocation failure schedules connection termination" {
         try std.testing.expectEqual(@as(u64, 0), connection.deadlines[work.ticket.slot]);
         connection.expire(111);
         try std.testing.expect(connection.failed);
+    }
+}
+
+test "early response write deadline ends only after the final output byte" {
+    const Form = enum { empty, body, trailers };
+    for ([_]Form{ Form.empty, Form.body, Form.trailers }) |form| {
+        for ([_]bool{ false, true }) |finish_output| {
+            var pair: [2]c_int = undefined;
+            try std.testing.expectEqual(@as(c_int, 0), std.c.socketpair(std.c.AF.UNIX, std.c.SOCK.STREAM, 0, &pair));
+            defer net.closeSocket(pair[1]);
+            try net.setListenerNonBlocking(pair[0]);
+            var readiness = try poller.Poller.init();
+            defer readiness.deinit();
+            const connection = try Connection.create(pair[0], &readiness, 1, .{});
+            defer {
+                connection.disconnect();
+                connection.destroy();
+            }
+            connection.now = 100;
+            connection.body_timeout = 100;
+            try connection.owner.engine.receive("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" ++
+                "\x00\x00\x00\x04\x00\x00\x00\x00\x00" ++
+                "\x00\x00\x0e\x01\x04\x00\x00\x00\x01\x83\x86\x84\x01\x09localhost");
+            const work = connection.streams.nextMetadata().?.execute;
+            const slot = work.ticket.slot;
+            try connection.owner.engine.respondWithTrailers(work.id, 403, &.{}, if (form == Form.empty) "" else "denied", if (form == Form.trailers) &.{.{ .name = "x-result", .value = "done" }} else &.{});
+            connection.deadlines[slot] = 110;
+            connection.writing[slot] = true;
+            try std.testing.expect(connection.streams.finish(work.ticket));
+            // One unsent byte still needs a write deadline, even after the
+            // terminal frame and any trailers have been serialized.
+            while (true) {
+                const bytes = try connection.owner.engine.output();
+                try std.testing.expect(bytes.len > 0);
+                try std.testing.expectEqual(@as(u64, 110), connection.deadlines[slot]);
+                if (connection.owner.engine.pending_response_end != null) {
+                    try connection.owner.engine.consumeOutput(bytes.len - 1);
+                    break;
+                }
+                try connection.owner.engine.consumeOutput(bytes.len);
+            }
+            connection.expire(109);
+            try std.testing.expectEqual(@as(u64, 110), connection.deadlines[slot]);
+            try std.testing.expect(connection.writing[slot]);
+            if (finish_output) {
+                try connection.owner.engine.consumeOutput(1);
+                try std.testing.expectEqual(@as(u64, 0), connection.deadlines[slot]);
+                try std.testing.expect(!connection.writing[slot]);
+            }
+            connection.expire(110);
+            connection.expire(111);
+            try std.testing.expectEqual(@as(u64, 200), connection.body_deadlines[slot]);
+            try std.testing.expect(!connection.failed);
+            try std.testing.expectError(if (finish_output) error.InvalidState else error.Closed, connection.owner.engine.checkDispatchable(work.id));
+            if (finish_output) {
+                connection.expire(199);
+                try std.testing.expectError(error.InvalidState, connection.owner.engine.checkDispatchable(work.id));
+                connection.expire(200);
+                connection.expire(201);
+                try std.testing.expectError(error.Closed, connection.owner.engine.checkDispatchable(work.id));
+                try std.testing.expectEqual(@as(u64, 0), connection.body_deadlines[slot]);
+            }
+        }
     }
 }

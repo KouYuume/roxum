@@ -361,6 +361,84 @@ def verify(executable, unix, debug=False):
     print('PASS production HTTP/2 ' + ('Unix' if unix else 'TCP') + (' debug' if debug else ' normal'))
 
 
+def verify_early_reply_timeouts(executable, unix):
+    with tempfile.TemporaryDirectory(prefix='roxum-h2-early-', dir='/tmp') as directory:
+        path = str(pathlib.Path(directory) / 'http.sock') if unix else ''
+        config = pathlib.Path(directory) / 'config'
+        config.mkdir()
+        (config / 'local.toml').write_text('path = ' + json.dumps(path) +
+                                         '\nwrite_milliseconds = 1000\nbody_milliseconds = 3000\n')
+        with tempfile.TemporaryFile(mode='w+') as errors:
+            process = subprocess.Popen([executable], cwd=directory, stdout=subprocess.PIPE,
+                                       stderr=errors, text=True, start_new_session=True)
+            try:
+                assert select.select([process.stdout], [], [], 30)[0], 'startup timed out'
+                endpoint = process.stdout.readline().strip()
+                assert endpoint, 'startup failed'
+                with socket.socket(socket.AF_UNIX if unix else socket.AF_INET) as sock:
+                    sock.settimeout(5)
+                    sock.connect(path if unix else ('127.0.0.1', int(endpoint)))
+                    client = H2Connection(config=H2Configuration(client_side=True, header_encoding='utf-8'))
+                    client.initiate_connection()
+                    ended, reset, headers, trailers = set(), set(), {}, {}
+                    bodies = collections.defaultdict(bytes)
+
+                    def receive():
+                        wire = sock.recv(65536)
+                        assert wire, 'connection closed while early input was open'
+                        for event in client.receive_data(wire):
+                            assert not isinstance(event, ConnectionTerminated), event
+                            if isinstance(event, ResponseReceived):
+                                headers[event.stream_id] = dict(event.headers)
+                            elif isinstance(event, DataReceived):
+                                bodies[event.stream_id] += event.data
+                                client.acknowledge_received_data(event.flow_controlled_length, event.stream_id)
+                            elif isinstance(event, TrailersReceived):
+                                trailers[event.stream_id] = dict(event.headers)
+                            elif isinstance(event, StreamEnded):
+                                ended.add(event.stream_id)
+                            elif isinstance(event, StreamReset):
+                                reset.add(event.stream_id)
+                        sock.sendall(client.data_to_send())
+
+                    for sid, route in ((1, '/metadata-reject'), (3, '/metadata-reject-body'),
+                                       (5, '/metadata-reject-trailers')):
+                        client.send_headers(sid, [(':method', 'POST'), (':scheme', 'http'),
+                                                  (':authority', 'localhost'), (':path', route)], end_stream=False)
+                    sock.sendall(client.data_to_send())
+                    while not {1, 3, 5}.issubset(ended):
+                        receive()
+                    assert all(headers[sid][':status'] == '403' for sid in (1, 3, 5))
+                    assert bodies[1] == b'' and bodies[3] == bodies[5] == b'denied'
+                    assert trailers[5] == {'x-result': 'done'}
+                    # All three END_STREAM forms have reached the client. The
+                    # shorter write timer must no longer reset these streams.
+                    until = time.monotonic() + 1.25
+                    while time.monotonic() < until:
+                        if select.select([sock], [], [], max(0, until - time.monotonic()))[0]:
+                            receive()
+                        assert not reset, ('completed response kept its write timer', reset)
+                    client.send_headers(7, [(':method', 'POST'), (':scheme', 'http'),
+                                            (':authority', 'localhost'), (':path', '/echo')], end_stream=True)
+                    sock.sendall(client.data_to_send())
+                    while 7 not in ended:
+                        receive()
+                    assert headers[7][':status'] == '200' and bodies[7] == b'42|h2|'
+                    # Leaving input open must still expire at the body deadline.
+                    while not {1, 3, 5}.issubset(reset):
+                        receive()
+                    assert reset == {1, 3, 5}
+                assert stop(process) == 0
+                errors.seek(0)
+                entries = [json.loads(line) for line in errors if line.startswith('{')]
+                assert sum(entry.get('outcome') == 'timeout' for entry in entries) == 3, entries
+                assert not any(entry.get('outcome') == 'crashed' for entry in entries), entries
+            finally:
+                stop(process)
+                process.stdout.close()
+    print('PASS early reply write completion and retained body timeout ' + ('Unix' if unix else 'TCP'))
+
+
 def verify_execution_limit(executable, unix, request_limits=False, metadata=False):
     with tempfile.TemporaryDirectory(prefix='roxum-h2-limit-', dir='/tmp') as directory:
         path = str(pathlib.Path(directory) / 'http.sock') if unix else ''
@@ -626,6 +704,8 @@ if __name__ == '__main__':
 
     verify_execution_limit(executable, False, metadata=True)
     verify_execution_limit(executable, True, metadata=True)
+    verify_early_reply_timeouts(executable, False)
+    verify_early_reply_timeouts(executable, True)
     verify_execution_config(executable)
     verify_execution_limit(executable, False)
     verify_execution_limit(executable, True)
