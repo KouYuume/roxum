@@ -78,5 +78,6 @@ checks complete sixteen replies with request input still open, send late DATA an
 trailers or reset, and reuse released slots. Late DATA still exercises the engine's
 4095/4096/4097-byte body boundary. Registry unit tests cover one-shot metadata
 admission, retained partial input, early-finish discard, reset/disconnect, expiry,
-and allocation/limit failures after claiming. Production Roc dispatch remains
-EOF-gated; this fixture does not exercise a suspended Roc body reader.
+and allocation/limit failures after claiming. Production Roc dispatch uses metadata admission;
+[listener checks](../http2-listener/README.md) exercise its suspended body reader.
+This isolated fixture does not execute Roc middleware or body effects.

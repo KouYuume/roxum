@@ -23,9 +23,11 @@ These documents describe the current implementation, its invariants, and the pro
 
 ## Implementation plans
 
-These documents describe planned work, not capabilities currently available.
+These documents describe implementation plans, acceptance evidence, and remaining
+gates. Completed evidence is distinguished from proposed capabilities.
 
 - [gRPC server support](plans/grpc.md): host/integration boundaries, Unary RPC first, and staged streaming support
+- [Finite HTTP/2 acceptance](plans/http2-finite-acceptance.md): milestone 1 evidence and limits before codec/generator work
 - [HTTP/2 transport decision](plans/http2-transport.md): milestone 0 evidence, engine choice, and proposed ownership/API contracts
 
 ## Performance
