@@ -42,5 +42,5 @@ Http :: [].{
 		remote_addr : Http.RemoteAddr,
 		request_id : Str,
 	}
-	Response := { status : U16, headers : List(Http.ResponseHeader), body : Http.ResponseBody }
+	Response := { status : U16, headers : List(Http.ResponseHeader), trailers : List(Http.ResponseHeader) ?? [], body : Http.ResponseBody }
 }
