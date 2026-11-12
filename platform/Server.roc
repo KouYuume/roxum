@@ -56,14 +56,23 @@ Server :: [].{
 	## `Unlimited`.
 	BodyLimit := [Unlimited, Bytes(U64)]
 
+	## Execution time from initial HTTP/2 headers, including body and queue waits.
+	## Milliseconds takes 1 to 18_446_744_073_709; Unlimited adds no execution cap.
+	ExecutionLimit := [Unlimited, Milliseconds(U64)]
+
 	## A limit for one process. `Auto` is the value given for each limit
 	## below times the process's threads; `Fixed(count)` is the process's
 	## own.
 	Count := [Auto, Fixed(U64)]
 
-	## What one process holds at once. Every value must be at least 1; the
-	## host refuses to start otherwise.
+	## Resource and execution limits. Count limits and finite execution durations
+	## must be at least 1; the host refuses to start otherwise.
 	Limits := {
+		## HTTP/2 only. Expiry resets the stream and cancels suspended effects;
+		## arbitrary Roc computation is not forcibly interrupted. A finite response
+		## admitted before expiry remains governed by the response write timeout.
+		http2_execution : Server.ExecutionLimit ?? Server.ExecutionLimit.Unlimited,
+
 		## Streamed responses the process writes at once (`Auto`: 64 for each
 		## thread). A handler that returns a stream past this limit is answered
 		## `503 Service Unavailable` instead, and its stream never runs. Each
@@ -105,7 +114,7 @@ Server :: [].{
 		maximum_streamed_body_bytes : Server.BodyLimit ?? Server.BodyLimit.Unlimited,
 	}.{
 
-		## Every limit `Auto`.
+		## Default count, memory, body, and execution limits.
 		defaults : Server.Limits
 		defaults = {}
 	}
@@ -159,7 +168,7 @@ Server :: [].{
 
 	## Explicit cleartext protocol selection. Http2 uses prior knowledge; no Upgrade.
 	## Http2 currently buffers request bodies and supports finite responses only.
-	## Response streaming, files, trailers, and native gRPC are not supported yet.
+	## Finite response trailers are supported; streaming, files and native gRPC are not.
 	Protocol := [Http1, Http2]
 
 	## Where the server listens, its connection timeouts, its limits, and how

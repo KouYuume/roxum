@@ -58,6 +58,7 @@ pub const Count = union(enum) {
 
 /// What one process holds at once, chosen by the application.
 pub const Limits = struct {
+    http2_execution_milliseconds: ?u64 = null,
     maximum_streams: Count,
     maximum_queued_requests: Count,
     queue_timeout_milliseconds: u64,
@@ -121,6 +122,10 @@ pub const Application = struct {
                     .response_write_milliseconds = value.listen.timeouts.response_write_milliseconds,
                 },
                 .limits = .{
+                    .http2_execution_milliseconds = switch (value.listen.limits.http2_execution.tag) {
+                        abi.ServerExecutionLimitTag.Unlimited => null,
+                        abi.ServerExecutionLimitTag.Milliseconds => value.listen.limits.http2_execution.payload_milliseconds(),
+                    },
                     .maximum_streams = Count.of(value.listen.limits.maximum_streams),
                     .maximum_queued_requests = Count.of(value.listen.limits.maximum_queued_requests),
                     .queue_timeout_milliseconds = value.listen.limits.queue_timeout_milliseconds,
