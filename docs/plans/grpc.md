@@ -1,7 +1,7 @@
 # gRPC server implementation plan
 
-Status: milestone 1 in progress. Finite HTTP/2 is implemented; concurrent-stream
-drain acceptance remains to be verified before milestone 2.
+Status: milestone 1 complete for finite HTTP/2, including concurrent-stream drain.
+Next: milestone 2 codec and generator assessment.
 A reusable gRPC integration is not implemented.
 See the [transport decision and evidence](http2-transport.md). The responsibility
 split is agreed; API names,
@@ -122,7 +122,7 @@ execution model cannot express the required lifetimes safely.
 
 ### 1. Build core HTTP/2 capabilities
 
-Acceptance audit: [finite transport evidence and remaining gate](http2-finite-acceptance.md), supported by the
+Completed: [finite transport acceptance](http2-finite-acceptance.md), supported by the
 [host dependency, internal engine, and nonblocking connection owner](../design/http2-engine.md).
 Opt-in TCP/Unix HTTP/2 listeners now dispatch finite requests through the production
 worker scheduler. Finite Roc responses expose final metadata through
@@ -138,8 +138,8 @@ retain bounded connection input, and resume on completion or cancel on stream
 failure. Early replies discard later input while retaining its timeout. Independent
 clients verify metadata-time expiry, body resumption, cancellation and peer progress.
 The [acceptance matrix](http2-finite-acceptance.md) maps this gate to production
-and isolated test evidence. The next step is to verify draining multiple active
-streams on one connection before starting the codec/generator inventory. Streaming response
+and isolated test evidence, including draining multiple active streams on one
+connection. The next step is the codec/generator inventory. Streaming response
 completion belongs to the later streaming RPC milestones.
 
 Implement explicit opt-in HTTP/2 listeners and bounded stream execution, generic

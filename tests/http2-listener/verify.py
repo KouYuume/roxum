@@ -306,17 +306,22 @@ def verify(executable, unix, debug=False):
                             pending = slow.data_to_send()
                             if pending:
                                 limited.sendall(pending)
-                    # Drain begins while a handler is waiting on upstream TCP.
+                    # Drain begins with two admitted streams on the same connection.
+                    # Each upstream accept proves admission; the handlers cannot
+                    # finish their reads before data is supplied after GOAWAY.
                     # Strip GOAWAY before hyper-h2 decoding: its client state
                     # closes immediately, although lower streams may finish.
                     with socket.socket() as upstream:
                         upstream.settimeout(5)
                         upstream.bind(('127.0.0.1', 0))
                         upstream.listen()
-                        stream += 2
-                        request(stream, '/tcp', str(upstream.getsockname()[1]).encode())
-                        drained, _ = upstream.accept()
-                        sockets.enter_context(drained)
+                        draining = {}
+                        for payload in (b'A', b'B'):
+                            stream += 2
+                            request(stream, '/tcp', str(upstream.getsockname()[1]).encode())
+                            drained, _ = upstream.accept()
+                            sockets.enter_context(drained)
+                            draining[stream] = (drained, payload)
                     os.killpg(process.pid, signal.SIGTERM)
                     pending = b''
                     retained = b''
@@ -337,14 +342,19 @@ def verify(executable, unix, debug=False):
                                 assert int.from_bytes(frame[13:17], 'big') == 0
                                 if not terminated:
                                     terminated = True
-                                    drained.sendall(b'D')
+                                    for drained, payload in draining.values():
+                                        drained.sendall(payload)
                             else:
                                 retained += frame
                     assert terminated and not pending, 'missing or truncated GOAWAY'
                     drain_events = client.receive_data(retained)
-                    assert any(isinstance(event, StreamEnded) and event.stream_id == stream for event in drain_events)
-                    assert b''.join(event.data for event in drain_events if isinstance(event, DataReceived) and event.stream_id == stream) == b'D'
-                    drained.close()
+                    assert not any(isinstance(event, StreamReset) for event in drain_events), drain_events
+                    for sid, (drained, payload) in draining.items():
+                        assert sum(isinstance(event, StreamEnded) and event.stream_id == sid for event in drain_events) == 1, (sid, drain_events)
+                        response = next(event for event in drain_events if isinstance(event, ResponseReceived) and event.stream_id == sid)
+                        assert dict(response.headers)[':status'] == '200'
+                        assert b''.join(event.data for event in drain_events if isinstance(event, DataReceived) and event.stream_id == sid) == payload
+                        drained.close()
                 assert stop(process) == 0
                 errors.seek(0)
                 entries = [json.loads(line) for line in errors if line.startswith('{')]
