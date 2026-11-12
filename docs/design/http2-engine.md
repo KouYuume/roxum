@@ -61,6 +61,30 @@ The DATA provider marks EOF on its last nonempty read, so completion does not
 require an extra byte of flow-control credit. Reset/closure releases the copied
 body; destroy also releases responses retained by slow readers.
 
+## Explicit finite response completion
+
+The internal engine also provides `beginResponse` and `finishResponse`. The first
+copies a finite body and leaves the stream open; the second copies final fields
+and submits terminal HEADERS exactly once. For a nonempty body, completion is
+allowed only after the DATA provider has reached EOF. Until then it returns
+`InvalidState`, including when the peer withholds stream credit. EOF uses
+NO_END_STREAM on the last nonempty read, so no extra DATA credit is required.
+Empty bodies use initial HEADERS without END_STREAM and can complete even with
+zero stream credit. Output ordering is retained when earlier bytes are only
+partially written. This is not an incremental response writer.
+
+Final fields have independent `header_bytes` and 64-field bounds. Pseudo-fields,
+connection-specific fields, content length, host, trailer declarations, content
+type/encoding/range, and authentication fields are rejected. Metadata names such
+as `grpc-status` have no special host interpretation. Invalid fields or allocation
+failure leave completion retryable; cancellation and closure make it unavailable.
+HEAD and status 204/205/304 cannot start this completion mode. Ordinary `respond`
+retains its existing one-call finite response behavior.
+
+This capability is internal: the production Roc response API does not yet expose
+trailers. Connecting it to request-scoped response completion, including failure
+and deadlines, remains required before native gRPC can be supported.
+
 ## Nonblocking connection owner
 
 `Owner` owns one nonblocking accepted socket and its engine. Initialization takes

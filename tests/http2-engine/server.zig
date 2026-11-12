@@ -65,6 +65,7 @@ const State = struct {
 };
 
 const Connection = struct {
+    trailers: [16]?http2.StreamId = @splat(null),
     state: State = .{},
     remote: bridge.RemoteAddress = bridge.RemoteAddress.unix,
     owner: ?transport.Owner = null,
@@ -104,6 +105,17 @@ const Connection = struct {
                 defer request.decref(&host);
                 const body = if (request.body.tag == bridge.HttpRequestBodyTag.Bytes) request.body.payload_bytes().items() else "";
                 const path = request.raw_target.items();
+                if (std.mem.eql(u8, path, "/trailers")) {
+                    try owner.engine.beginResponse(execution.id, 200, &.{}, body);
+                    owner.runnable = true;
+                    for (&self.trailers) |*pending| {
+                        if (pending.* == null) {
+                            pending.* = execution.id;
+                            break;
+                        }
+                    }
+                    continue;
+                }
                 var count_buffer: [20]u8 = undefined;
                 const field_count = try std.fmt.bufPrint(&count_buffer, "{d}", .{request.headers.items().len});
                 var path_length_buffer: [20]u8 = undefined;
@@ -121,6 +133,19 @@ const Connection = struct {
                 error.SendFailed, error.ReceiveFailed, error.Protocol => return false,
                 else => return err,
             };
+            for (&self.trailers) |*pending| {
+                const id = pending.* orelse continue;
+                owner.engine.finishResponse(id, &.{.{ .name = "x-result", .value = "done" }}) catch |err| switch (err) {
+                    error.InvalidState => continue,
+                    error.Closed => {
+                        pending.* = null;
+                        continue;
+                    },
+                    else => return err,
+                };
+                pending.* = null;
+                owner.runnable = true;
+            }
             if (owner.watching_writable and !self.blocked_reported) {
                 var buffer: [40]u8 = undefined;
                 const line = try std.fmt.bufPrint(&buffer, "blocked={d}\n", .{owner.token});
