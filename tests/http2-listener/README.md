@@ -27,8 +27,11 @@ access records are checked. Malformed connections and disconnects must leave pee
 usable. Repeated malformed connections must each reach EOF before the next one
 connects, covering concurrent readiness scans and close without a later event
 masking delayed socket release. Shutdown sends
-GOAWAY while an upstream read is suspended; that admitted request must finish
-before the connection closes and the process terminates successfully.
+GOAWAY while two admitted requests on the same connection await upstream data.
+Both upstream connections must be accepted before SIGTERM, and data is withheld
+until GOAWAY is observed. Both streams must return their distinct payloads, HTTP
+200 and exactly one EOF without a reset before the connection closes and the
+process terminates successfully.
 
 The test does not claim streaming response or gRPC support. Internal engine/wire
 fixtures retain detailed framing, flow-control and allocator fault coverage.
