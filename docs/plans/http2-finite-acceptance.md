@@ -1,8 +1,8 @@
 # Finite HTTP/2 acceptance
 
 Milestone 1 of the [gRPC plan](grpc.md) is complete for finite request and
-response capabilities, including concurrent-stream drain. Milestone 2 can begin
-with the codec/generator inventory. This does not establish a reusable gRPC
+response capabilities, including concurrent-stream drain. Milestone 2 follows the
+[codec/generator assessment](protobuf-codegen.md). This does not establish a reusable gRPC
 service API or streaming RPC support.
 
 ## Gate and evidence
@@ -72,8 +72,8 @@ The gRPC probe neither generates codecs nor implements grpc-timeout parsing,
 service registration, compression or single-HEADERS trailers-only replies.
 TLS/proxy interoperability belongs to the Unary integration gate, not this gate.
 
-Next, inventory reusable Roc Protobuf implementations and generator options against
-milestone 2's schema, ownership-independent pure codec and bounded decoding
-requirements. Record supported and rejected schema features before implementing a
-codec or choosing a generator dependency. Do not move Protobuf or gRPC status
-policy into the host to complete that work.
+The [codec/generator assessment](protobuf-codegen.md) records the reuse inventory,
+proposed schema target, and bounded decoding requirements for milestone 2.
+Its wire primitives and budgets are implemented; descriptor-to-Roc feasibility
+is the next slice.
+Protobuf and gRPC status policy remain outside the host.
