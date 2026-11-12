@@ -1203,9 +1203,16 @@ pub const Loop = struct {
         const protocol = item.http2 orelse return;
         const ticket = request.http2 orelse return;
         const execution = protocol.execution(ticket) orelse return;
+        // Cleanup may complete before the next scheduler expiry tick.
+        self.readClock();
+        protocol.expire(self.now);
         execution.waiter = null;
         if (failure) |outcome| {
-            if (protocol.access[ticket.slot]) |*entry| entry.outcome = outcome;
+            if (protocol.access[ticket.slot]) |*entry| {
+                if (protocol.streams.leases.executionExpired(ticket)) {
+                    entry.outcome = access_log.Outcome.timeout;
+                } else if (entry.outcome == access_log.Outcome.handled) entry.outcome = outcome;
+            }
             if (protocol.streams.leases.runningStream(ticket)) |id| protocol.owner.cancel(id) catch {};
         }
         _ = protocol.streams.finish(ticket);
@@ -2424,10 +2431,10 @@ test "dispatch sequence exhaustion never wraps into an older identity" {
     try std.testing.expect(!item.matchesRequest(below));
 }
 
-test "HTTP/2 admission rejections record one access entry and metric before Roc runs" {
+test "HTTP/2 admission and deadline rejections record one access entry and metric before Roc runs" {
     // Exercise both consumers together and metrics with access logging disabled.
     for ([_]bool{ true, false }) |logging| {
-        for ([_]access_log.Outcome{ access_log.Outcome.queue_full, access_log.Outcome.queue_timeout, access_log.Outcome.in_progress_full }) |outcome| {
+        for ([_]access_log.Outcome{ access_log.Outcome.queue_full, access_log.Outcome.queue_timeout, access_log.Outcome.in_progress_full, access_log.Outcome.timeout }) |outcome| {
             const region = try metrics.testRegion();
             defer metrics.endTestRegion(region);
             var capture: access_log.TestCapture = .{};
@@ -2481,9 +2488,17 @@ test "HTTP/2 admission rejections record one access entry and metric before Roc 
                     } else {
                         const request = handoff.work.next(0).?.request;
                         try std.testing.expect(handoff.claimRequest(request));
-                        loop.rejectTaken(request, .{ .expires_at_nanoseconds = 0 }, outcome, request_id.Source.generate);
-                        // A stale completion must not record the same request twice.
-                        loop.rejectTaken(request, .{ .expires_at_nanoseconds = 0 }, outcome, request_id.Source.generate);
+                        if (outcome == access_log.Outcome.timeout) {
+                            try std.testing.expect(protocol.streams.leases.limitExecution(request.http2.?, 0, 0));
+                            // Cleanup can win the race against the next expiry tick.
+                            try std.testing.expect(!protocol.streams.leases.executionExpired(request.http2.?));
+                            loop.finishHttp2Locked(request, access_log.Outcome.encode_failed);
+                            loop.finishHttp2Locked(request, access_log.Outcome.encode_failed);
+                        } else {
+                            loop.rejectTaken(request, .{ .expires_at_nanoseconds = 0 }, outcome, request_id.Source.generate);
+                            // A stale completion must not record the same request twice.
+                            loop.rejectTaken(request, .{ .expires_at_nanoseconds = 0 }, outcome, request_id.Source.generate);
+                        }
                     }
                 }
                 loop.advanceHttp2(0);

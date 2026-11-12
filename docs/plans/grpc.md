@@ -124,8 +124,10 @@ In progress: [host dependency, internal engine, and nonblocking connection owner
 Opt-in TCP/Unix HTTP/2 listeners now dispatch finite requests through the production
 worker scheduler. Finite Roc responses expose final metadata through
 `Reply.with_trailers` and `Response.trailers`, with owned copies and independent
-client verification. Metadata-time deadlines and the fixed-byte gRPC probe remain
-required before this milestone is complete. Streaming response completion belongs
+client verification. Internal execution leases now enforce metadata-anchored
+budgets and stream-local expiry. Public Roc metadata-phase dispatch, server caps
+and deadline operations, plus the fixed-byte gRPC probe, remain required before
+this milestone is complete. Streaming response completion belongs
 to the later streaming RPC milestones.
 
 Implement explicit opt-in HTTP/2 listeners and bounded stream execution, generic

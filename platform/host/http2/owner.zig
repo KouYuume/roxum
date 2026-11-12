@@ -56,16 +56,41 @@ pub const Owner = struct {
         self.runnable = true;
     }
 
+    /// Generic execution budget, independent of protocol-specific metadata.
+    /// The caller supplies its server cap; durations are relative to HEADERS.
+    pub fn limitExecution(self: *Owner, registry: *streams.Streams, ticket: streams.Ticket, duration_ns: u64, maximum_ns: u64) Error!void {
+        if (self.engine.entered) return error.ReentrantCall;
+        if (self.terminal or registry.leases.connection != self.token) return error.Closed;
+        const id = registry.leases.stream(ticket) orelse return error.Closed;
+        try self.engine.checkDispatchable(id);
+        if (!registry.leases.limitExecution(ticket, duration_ns, maximum_ns)) return error.InvalidState;
+        try self.expireExecutions(registry);
+        if (registry.leases.executionExpired(ticket)) return error.Closed;
+    }
+
+    fn expireExecutions(self: *Owner, registry: *streams.Streams) Error!void {
+        if (self.engine.entered) return error.ReentrantCall;
+        if (registry.expireExecutions(try net.monotonicNanoseconds())) self.runnable = true;
+    }
+
     /// Transfer finite input to the active Roc request domain outside callbacks.
     /// Reject invalid execution/protocol identities without touching input. Once
     /// conversion starts, input is consumed on success or failure. The caller
     /// owns the returned request and must finish the lease after its cleanup.
     pub fn requestOwned(self: *Owner, registry: *streams.Streams, ticket: streams.Ticket, remote: bridge.RemoteAddress, request_id: []const u8, host: bridge.RequestHost) (Error || request.Error)!request_types.HttpRequest {
         if (self.terminal or registry.leases.connection != self.token) return error.Closed;
+        try self.expireExecutions(registry);
         const id = registry.leases.runningStream(ticket) orelse return error.Closed;
         try self.engine.checkDispatchable(id);
         const buffer = registry.runningInput(ticket) orelse return error.Closed;
-        return request.requestFromHttp2Input(buffer, remote, request_id, host);
+        const value = request.requestFromHttp2Input(buffer, remote, request_id, host) catch |err| {
+            try self.expireExecutions(registry);
+            return err;
+        };
+        errdefer value.decref(host.roc_host);
+        try self.expireExecutions(registry);
+        if (registry.leases.runningStream(ticket) == null) return error.Closed;
+        return value;
     }
 
     /// Consumes one Roc response on every outcome. The serialized owner must
@@ -78,6 +103,12 @@ pub const Owner = struct {
     }
 
     pub fn respondOwnedWithDebug(self: *Owner, registry: *streams.Streams, ticket: streams.Ticket, value: bridge.HttpResponse, roc_host: *bridge.RocHost, semantics: bridge.ResponseRequestSemantics, debug: bool) (Error || response.Error)!void {
+        if (!self.terminal and registry.leases.connection == self.token) {
+            self.expireExecutions(registry) catch |err| {
+                value.decref(roc_host);
+                return err;
+            };
+        }
         const id = if (!self.terminal and registry.leases.connection == self.token)
             registry.leases.runningStream(ticket)
         else
@@ -86,10 +117,13 @@ pub const Owner = struct {
             value.decref(roc_host);
             return error.Closed;
         };
-        var owned = try response.OwnedResponse.init(value, roc_host, registry.budget.allocator(), semantics, .{
+        var owned = response.OwnedResponse.init(value, roc_host, registry.budget.allocator(), semantics, .{
             .header_bytes = self.engine.limits.header_bytes,
             .body_bytes = self.engine.limits.response_bytes,
-        });
+        }) catch |err| {
+            try self.expireExecutions(registry);
+            return err;
+        };
         defer owned.deinit();
         var headers: [64]protocol.Header = undefined;
         @memcpy(headers[0..owned.headers.len], owned.headers);
@@ -110,7 +144,10 @@ pub const Owner = struct {
                 count += 1;
             }
         }
+        try self.expireExecutions(registry);
+        if (registry.leases.runningStream(ticket) == null) return error.Closed;
         try self.engine.respondWithTrailers(live, owned.response.status, headers[0..count], owned.body, owned.trailers);
+        std.debug.assert(registry.leases.commitResponse(ticket));
         self.runnable = true;
     }
 

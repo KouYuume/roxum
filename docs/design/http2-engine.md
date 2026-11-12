@@ -293,6 +293,36 @@ The independent-client fixture uses this registry for finite echo execution.
 Worker dispatch and completion use the same registry under the connection lock.
 Streaming receive credit remains separate work.
 
+## Internal execution deadlines
+
+Request leases can install a generic nanosecond duration from initial HEADERS
+completion, clamped to a caller-supplied server maximum. `headersElapsed` reports
+time since that same monotonic anchor. Body waits and execution queueing do not
+restart it. Repeated installation can only tighten the deadline; zero expires
+immediately, and addition saturates at the clock's maximum value.
+
+The serialized owner checks expiry before and after Roc input conversion, and
+before finite response submission. Scheduler ticks also expire body-waiting, queued and running leases.
+Expiry invalidates dispatch and response admission immediately, releases retained
+input, and queues one stream cancellation. A running lease continues to pin its
+slot until request cleanup finishes. The production scheduler uses the existing
+cancellation path to wake suspended work and preserves a timeout outcome for an
+admitted execution, even if late response conversion subsequently fails. This
+does not preempt arbitrary Roc computation or promise real-time scheduling.
+
+Successful finite response admission under the connection lock commits the
+response outcome. Later execution expiry cannot replace it; response-write
+limits continue to govern flow control and socket delivery, including trailers.
+Expired or closed leases cannot be revived by installing another duration.
+
+These operations are internal prerequisites, not an application timeout API.
+The production listener does not yet expose a Roc metadata-phase callback or a
+server execution-cap setting. Connecting those capabilities remains required
+before integrations can parse and apply `grpc-timeout` ahead of body waits.
+The host does not interpret gRPC metadata or synthesize gRPC status fields.
+The independent socket fixture installs a fixed generic budget at metadata
+completion and verifies unfinished-body cancellation and unrelated-stream progress.
+
 ## Finite Roc response mapping
 
 `bridge.OwnedHttp2Response` consumes one Roc response reference and prepares the

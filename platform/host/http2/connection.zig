@@ -129,6 +129,14 @@ pub const Connection = struct {
 
     pub fn expire(self: *Connection, now: u64) void {
         self.now = now;
+        if (self.streams.expireExecutions(now)) self.owner.runnable = true;
+        for (self.streams.entries, 0..) |entry, index| {
+            const ticket = entry.ticket orelse continue;
+            if (!self.streams.leases.executionExpired(ticket)) continue;
+            if (self.access[index]) |*value| {
+                if (value.outcome == @import("../access_log.zig").Outcome.handled) value.outcome = @import("../access_log.zig").Outcome.timeout;
+            }
+        }
         if ((self.header_deadline != 0 and now >= self.header_deadline) or
             (self.terminal_write_deadline != 0 and now >= self.terminal_write_deadline))
         {
@@ -209,3 +217,41 @@ pub const Connection = struct {
         self.streams.close(id);
     }
 };
+
+test "execution expiry records timeout and preserves running cleanup" {
+    var pair: [2]c_int = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), std.c.socketpair(std.c.AF.UNIX, std.c.SOCK.STREAM, 0, &pair));
+    defer net.closeSocket(pair[1]);
+    try net.setListenerNonBlocking(pair[0]);
+    var readiness = try poller.Poller.init();
+    defer readiness.deinit();
+    const connection = try Connection.create(pair[0], &readiness, 1, .{});
+    defer {
+        connection.disconnect();
+        connection.destroy();
+    }
+    connection.now = 100;
+    try connection.owner.engine.receive("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" ++
+        "\x00\x00\x00\x04\x00\x00\x00\x00\x00" ++
+        "\x00\x00\x0e\x01\x05\x00\x00\x00\x01\x83\x86\x84\x01\x09localhost");
+    const work = connection.streams.next().?.execute;
+    try std.testing.expect(connection.streams.leases.limitExecution(work.ticket, 10, 10));
+    connection.access[work.ticket.slot] = .{};
+    connection.owner.runnable = false;
+    connection.expire(109);
+    try std.testing.expect(connection.streams.runningInput(work.ticket) != null);
+    connection.expire(110);
+    try std.testing.expect(connection.owner.runnable);
+    try std.testing.expect(connection.streams.runningInput(work.ticket) == null);
+    try std.testing.expectEqual(@import("../access_log.zig").Outcome.timeout, connection.access[work.ticket.slot].?.outcome);
+    try std.testing.expectEqual(work.id, connection.streams.next().?.cancel);
+    try std.testing.expect(connection.streams.next() == null);
+    try connection.owner.cancel(work.id);
+    while (true) {
+        const bytes = try connection.owner.engine.output();
+        if (bytes.len == 0) break;
+        try connection.owner.engine.consumeOutput(bytes.len);
+    }
+    try std.testing.expect(connection.streams.finish(work.ticket));
+    try std.testing.expectEqual(@as(usize, 0), connection.budget.used);
+}

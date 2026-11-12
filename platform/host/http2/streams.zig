@@ -76,6 +76,21 @@ pub const Streams = struct {
         entry_value.cancel_pending = true;
     }
 
+    /// Invalidate expired work immediately, before a queued RST is emitted.
+    /// Buffers are only borrowed under the same serialized owner; no callback
+    /// can retain them across this operation. Running leases remain pinned.
+    pub fn expireExecutions(self: *Streams, now: u64) bool {
+        var changed = false;
+        for (&self.entries) |*entry| {
+            const ticket = entry.ticket orelse continue;
+            if (!self.leases.expireExecution(ticket, now)) continue;
+            if (entry.buffer) |*buffer| buffer.deinit();
+            entry.cancel_pending = true;
+            changed = true;
+        }
+        return changed;
+    }
+
     /// Called only between engine calls. Returned input is borrowed until close,
     /// disconnect, or finish; consume it synchronously before queueing owned Roc
     /// values. Every execute result must be finished after request cleanup, even
@@ -330,5 +345,34 @@ test "bounded callback and completion sequences release all input and leases" {
         try std.testing.expectEqual(@as(usize, 0), budget.used);
         try std.testing.expect(table.next() == null);
         for (0..20) |index| try std.testing.expect(table.leases.find(testId(@intCast(index * 2 + 1))) == null);
+    }
+}
+
+test "expiry releases incomplete input and rejects queued or claimed work once" {
+    const State = enum { body, queued, claimed };
+    for ([_]State{ State.body, State.queued, State.claimed }) |state| {
+        var budget = input.Budget{ .backing = std.testing.allocator, .limit = 8192 };
+        var table = Streams.init(3, &budget, .{ .header_bytes = 1024, .body_bytes = 16 });
+        defer table.disconnect();
+        const id = testId(1);
+        try table.header(id, .{ .name = "x", .value = "value" });
+        try table.headersComplete(id, 100);
+        const ticket = table.leases.find(id).?;
+        try std.testing.expect(table.leases.limitExecution(ticket, 10, 10));
+        try table.data(id, "body");
+        if (state != State.body) try table.end(id);
+        if (state == State.claimed) _ = table.next().?.execute;
+        try std.testing.expect(!table.expireExecutions(109));
+        try std.testing.expect(table.expireExecutions(110));
+        try std.testing.expect(!table.expireExecutions(111));
+        try std.testing.expectEqual(@as(usize, 0), budget.used);
+        try std.testing.expectEqual(id, table.next().?.cancel);
+        try std.testing.expect(table.next() == null);
+        try std.testing.expect(table.runningInput(ticket) == null);
+        table.close(id);
+        if (state == State.claimed) try std.testing.expect(table.finish(ticket));
+        try testReady(&table, testId(3));
+        const peer = table.next().?.execute;
+        try std.testing.expect(table.finish(peer.ticket));
     }
 }
