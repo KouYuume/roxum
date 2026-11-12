@@ -540,3 +540,14 @@ TCP cancellation and permit recovery, body-limit boundaries, incomplete-body
 timeouts, request IDs/access records and GOAWAY. The internal fixture continues to
 provide more controlled allocator and wait-registration checks. This does not yet
 satisfy the gRPC milestone's trailer/deadline and interoperability gates.
+
+## Fixed-byte gRPC client probe
+
+The [production listener probe](../../tests/grpc-probe/README.md) uses a pinned
+native gRPC client to verify exact finite message bytes, empty messages, final
+status and error metadata on TCP and Unix sockets. Missing status and truncated
+message envelopes are negative controls. The Roc fixture supplies fixed bytes
+and generic HTTP trailers; the host has no gRPC-specific parsing or status policy.
+This verifies finite transport interoperability, not generated services or RPC
+deadline handling. Metadata-phase execution and per-request deadline APIs remain
+prerequisites for the planned gRPC integration.

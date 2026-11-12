@@ -126,9 +126,10 @@ worker scheduler. Finite Roc responses expose final metadata through
 `Reply.with_trailers` and `Response.trailers`, with owned copies and independent
 client verification. Internal execution leases now enforce metadata-anchored
 budgets and stream-local expiry. `Server.Limits.http2_execution` installs an optional
-server cap before body waits. Public Roc metadata-phase dispatch and per-request
-deadline operations, plus the fixed-byte gRPC probe, remain required before
-this milestone is complete. Streaming response completion belongs
+server cap before body waits. The [fixed-byte gRPC probe](../../tests/grpc-probe/README.md)
+checks successful and rejected Unary exchanges with an independent native gRPC
+client on TCP and Unix sockets. Public Roc metadata-phase dispatch and per-request
+deadline operations remain required before this milestone is complete. Streaming response completion belongs
 to the later streaming RPC milestones.
 
 Implement explicit opt-in HTTP/2 listeners and bounded stream execution, generic
