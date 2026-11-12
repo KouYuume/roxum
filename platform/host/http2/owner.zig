@@ -83,7 +83,10 @@ pub const Owner = struct {
         const id = registry.leases.runningStream(ticket) orelse return error.Closed;
         try self.engine.checkDispatchable(id);
         const buffer = registry.runningInput(ticket) orelse return error.Closed;
-        const value = try request.requestFromHttp2Input(buffer, remote, request_id, host);
+        const value = request.requestFromHttp2Input(buffer, remote, request_id, host) catch |err| {
+            try self.expireExecutions(registry);
+            return err;
+        };
         errdefer value.decref(host.roc_host);
         try self.expireExecutions(registry);
         if (registry.leases.runningStream(ticket) == null) return error.Closed;
@@ -114,10 +117,13 @@ pub const Owner = struct {
             value.decref(roc_host);
             return error.Closed;
         };
-        var owned = try response.OwnedResponse.init(value, roc_host, registry.budget.allocator(), semantics, .{
+        var owned = response.OwnedResponse.init(value, roc_host, registry.budget.allocator(), semantics, .{
             .header_bytes = self.engine.limits.header_bytes,
             .body_bytes = self.engine.limits.response_bytes,
-        });
+        }) catch |err| {
+            try self.expireExecutions(registry);
+            return err;
+        };
         defer owned.deinit();
         var headers: [64]protocol.Header = undefined;
         @memcpy(headers[0..owned.headers.len], owned.headers);

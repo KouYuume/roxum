@@ -1203,6 +1203,9 @@ pub const Loop = struct {
         const protocol = item.http2 orelse return;
         const ticket = request.http2 orelse return;
         const execution = protocol.execution(ticket) orelse return;
+        // Cleanup may complete before the next scheduler expiry tick.
+        self.readClock();
+        protocol.expire(self.now);
         execution.waiter = null;
         if (failure) |outcome| {
             if (protocol.access[ticket.slot]) |*entry| {
@@ -2487,8 +2490,8 @@ test "HTTP/2 admission and deadline rejections record one access entry and metri
                         try std.testing.expect(handoff.claimRequest(request));
                         if (outcome == access_log.Outcome.timeout) {
                             try std.testing.expect(protocol.streams.leases.limitExecution(request.http2.?, 0, 0));
-                            protocol.expire(loop.now);
-                            // A late failed conversion must not overwrite expiry.
+                            // Cleanup can win the race against the next expiry tick.
+                            try std.testing.expect(!protocol.streams.leases.executionExpired(request.http2.?));
                             loop.finishHttp2Locked(request, access_log.Outcome.encode_failed);
                             loop.finishHttp2Locked(request, access_log.Outcome.encode_failed);
                         } else {

@@ -361,6 +361,71 @@ test "a budget becoming due during conversion releases the completed Roc request
     try std.testing.expectEqual(@as(usize, 0), fixture.budget.used);
 }
 
+test "failed request conversion checks expiry without a scheduler tick" {
+    for ([_]bool{ false, true }) |expire| {
+        var fixture: Fixture = .{};
+        try fixture.init();
+        defer fixture.deinit();
+        const work = fixture.registry.next().?.execute;
+        defer _ = fixture.registry.finish(work.ticket);
+        const Context = struct {
+            environment: values.Environment = .{ .allocator = std.testing.allocator },
+            registry: *http2.streams.Streams,
+            ticket: http2.streams.Ticket,
+            expire: bool,
+            fn allocate(host: *bridge.RocHost, _: usize, _: usize) ?*anyopaque {
+                const environment: *values.Environment = @ptrCast(@alignCast(host.env));
+                const self: *@This() = @fieldParentPtr("environment", environment);
+                if (self.expire) std.debug.assert(self.registry.leases.limitExecution(self.ticket, 0, 0));
+                return null;
+            }
+        };
+        var context = Context{ .registry = &fixture.registry, .ticket = work.ticket, .expire = expire };
+        var host = context.environment.rocHost();
+        try std.testing.expectError(error.OutOfMemory, fixture.owner.requestOwned(&fixture.registry, work.ticket, bridge.RemoteAddress.unix, "failed-conversion", .{ .roc_host = &host, .try_alloc = Context.allocate }));
+        try std.testing.expectEqual(expire, fixture.registry.leases.executionExpired(work.ticket));
+        try std.testing.expectEqual(@as(usize, 0), context.environment.live_allocations);
+        try std.testing.expectEqual(@as(usize, 0), fixture.budget.used);
+        if (expire) try std.testing.expectEqual(work.id, fixture.registry.next().?.cancel);
+        try std.testing.expect(fixture.registry.next() == null);
+    }
+}
+
+test "failed response conversion checks expiry and consumes ownership" {
+    for ([_]bool{ false, true }) |expire| {
+        var fixture: Fixture = .{};
+        try fixture.init();
+        defer fixture.deinit();
+        const work = fixture.registry.next().?.execute;
+        defer _ = fixture.registry.finish(work.ticket);
+        const Context = struct {
+            registry: *http2.streams.Streams,
+            ticket: http2.streams.Ticket,
+            expire: bool,
+            fn allocate(ptr: *anyopaque, _: usize, _: std.mem.Alignment, _: usize) ?[*]u8 {
+                const self: *@This() = @ptrCast(@alignCast(ptr));
+                if (self.expire) std.debug.assert(self.registry.leases.limitExecution(self.ticket, 0, 0));
+                return null;
+            }
+            fn free(_: *anyopaque, bytes: []u8, alignment: std.mem.Alignment, address: usize) void {
+                std.testing.allocator.rawFree(bytes, alignment, address);
+            }
+        };
+        var context = Context{ .registry = &fixture.registry, .ticket = work.ticket, .expire = expire };
+        const retained = fixture.budget.used;
+        fixture.budget.backing = .{ .ptr = &context, .vtable = &.{ .alloc = Context.allocate, .resize = std.mem.Allocator.noResize, .remap = std.mem.Allocator.noRemap, .free = Context.free } };
+        defer fixture.budget.backing = std.testing.allocator;
+        var environment = values.Environment{ .allocator = std.testing.allocator };
+        var host = environment.rocHost();
+        try std.testing.expectError(error.OutOfMemory, fixture.owner.respondOwned(&fixture.registry, work.ticket, response(&host), &host, bridge.ResponseRequestSemantics.regular));
+        try std.testing.expectEqual(expire, fixture.registry.leases.executionExpired(work.ticket));
+        try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
+        try std.testing.expectEqual(if (expire) @as(usize, 0) else retained, fixture.budget.used);
+        if (expire) try std.testing.expectEqual(work.id, fixture.registry.next().?.cancel);
+        try std.testing.expect(fixture.registry.next() == null);
+    }
+}
+
 test "reentrant expiry cannot mutate leases or invalidate callback input" {
     var fixture: Fixture = .{};
     try fixture.init();
