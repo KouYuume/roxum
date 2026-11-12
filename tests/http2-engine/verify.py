@@ -571,10 +571,98 @@ def verify_trailers(executable):
         process.wait()
 
 
+def verify_metadata_admission(executable):
+    env = dict(os.environ, ROXUM_TEST_HTTP2_METADATA='1')
+    process = subprocess.Popen([executable], stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True, env=env)
+    try:
+        assert select.select([process.stdout], [], [], 5)[0], 'startup timeout'
+        port = int(process.stdout.readline())
+        with socket.create_connection(('127.0.0.1', port), timeout=5) as sock:
+            conn = H2Connection(config=H2Configuration(client_side=True, header_encoding='utf-8'))
+            conn.initiate_connection()
+            ended, reset, status, bodies, pings = set(), set(), {}, defaultdict(bytes), set()
+
+            def flush():
+                pending = conn.data_to_send()
+                if pending:
+                    sock.sendall(pending)
+
+            def until(predicate):
+                deadline = time.monotonic() + 5
+                while not predicate():
+                    sock.settimeout(max(.001, deadline - time.monotonic()))
+                    wire = sock.recv(65536)
+                    assert wire, 'unexpected EOF'
+                    for event in conn.receive_data(wire):
+                        assert not isinstance(event, ConnectionTerminated), event
+                        if isinstance(event, ResponseReceived):
+                            status[event.stream_id] = dict(event.headers)[':status']
+                        elif isinstance(event, DataReceived):
+                            bodies[event.stream_id] += event.data
+                            conn.acknowledge_received_data(event.flow_controlled_length, event.stream_id)
+                        elif isinstance(event, StreamEnded):
+                            ended.add(event.stream_id)
+                        elif isinstance(event, StreamReset):
+                            reset.add(event.stream_id)
+                        elif isinstance(event, PingAckReceived):
+                            pings.add(event.ping_data)
+                    flush()
+                    assert time.monotonic() < deadline, 'progress timeout'
+
+            def start(sid):
+                conn.send_headers(sid, [(':method', 'POST'), (':scheme', 'http'),
+                    (':authority', 'localhost'), (':path', '/early')], end_stream=False)
+                flush()
+                until(lambda: sid in ended or sid in reset)
+                assert sid not in reset, sid
+                assert status[sid] == '200' and bodies[sid] == b'metadata'
+
+            # All sixteen executions finish while request input remains open.
+            # No request EOF is needed for response EOF; protocol slots stay live.
+            for sid in range(1, 32, 2):
+                start(sid)
+            for sid in range(1, 32, 2):
+                if sid % 4 == 1:
+                    conn.send_data(sid, b'late body')
+                    conn.send_headers(sid, [('x-late-trailer', 'discarded')], end_stream=True)
+                else:
+                    conn.reset_stream(sid)
+            conn.ping(b'drained!')
+            flush()
+            until(lambda: b'drained!' in pings)
+            assert not reset, reset
+            # Finished execution must not disable the engine's cumulative body cap.
+            for sid, size in ((33, 4095), (35, 4096), (37, 4097)):
+                start(sid)
+                conn.send_data(sid, b'x' * size, end_stream=False)
+                marker = sid.to_bytes(8, 'big')
+                conn.ping(marker)
+                flush()
+                until(lambda: marker in pings)
+                if size > 4096:
+                    until(lambda: sid in reset)
+                else:
+                    assert sid not in reset, (sid, size)
+                    conn.end_stream(sid)
+                    flush()
+            start(39)
+            conn.end_stream(39)
+            flush()
+        _, errors = process.communicate(timeout=10)
+        assert process.returncode == 0, errors
+        print('PASS metadata admission: early completion, late input, bounds, and slot reuse')
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.wait()
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('server')
     executable = parser.parse_args().server
+    verify_metadata_admission(executable)
     verify_trailers(executable)
     verify(executable)
     verify_header_budget(executable)
