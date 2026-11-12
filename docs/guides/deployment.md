@@ -33,7 +33,7 @@ This first HTTP/2 path accepts complete request bodies before dispatch and retur
 finite responses. Ordinary routing, middleware, request IDs and effectful handlers
 use the worker's existing request fibers. A reset cancels the affected suspended
 handler without closing its peers. Response streaming, SSE, file responses,
-trailers, early request-body processing, and native gRPC remain unsupported;
+early request-body processing, and native gRPC remain unsupported;
 attempting a streamed response resets that stream.
 
 The configured finite body limit applies. Each connection admits at most 16
@@ -50,8 +50,9 @@ reset before its write timeout closes the connection.
 
 Shutdown sends GOAWAY, allows admitted streams to finish, and retains connection
 storage until queued/running handlers finish cleanup. The configured drain timeout
-still bounds the process shutdown. RPC execution deadlines and response trailers
-are later additions, described in the [gRPC plan](../plans/grpc.md).
+still bounds the process shutdown. [Finite response trailers](responses.md#finite-http2-trailers)
+are supported. RPC execution deadlines and streaming completion remain later
+additions, described in the [gRPC plan](../plans/grpc.md).
 
 ## Building for Linux
 

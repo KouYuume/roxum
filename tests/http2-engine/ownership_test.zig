@@ -72,7 +72,10 @@ test "owned submission copies output before Roc cleanup and does not finish exec
     var environment = values.Environment{ .allocator = std.testing.allocator };
     var host = environment.rocHost();
     const input_bytes = fixture.budget.used;
-    try fixture.owner.respondOwned(&fixture.registry, work.ticket, response(&host), &host, bridge.ResponseRequestSemantics.regular);
+    var with_trailers = response(&host);
+    with_trailers.trailers = bridge.HttpResponseHeaderList.allocate(1, &host);
+    with_trailers.trailers.elements_ptr.?[0] = .{ .name = bridge.GeneratedRocStr.fromSlice("X-Final-Ownership-Check", &host), .value = bridge.GeneratedRocStr.fromSlice("final-metadata-owned-beyond-the-request", &host) };
+    try fixture.owner.respondOwned(&fixture.registry, work.ticket, with_trailers, &host, bridge.ResponseRequestSemantics.regular);
     try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
     try std.testing.expectEqual(input_bytes, fixture.budget.used);
     try std.testing.expect(fixture.registry.leases.runningStream(work.ticket) != null);
@@ -87,6 +90,7 @@ test "owned submission copies output before Roc cleanup and does not finish exec
         try fixture.owner.engine.consumeOutput(bytes.len);
     }
     try std.testing.expect(std.mem.indexOf(u8, output.items, body) != null);
+    try std.testing.expectEqual(@as(usize, 0), fixture.owner.engine.activeStreams());
     try std.testing.expect(fixture.registry.finish(work.ticket));
     try std.testing.expectEqual(@as(usize, 0), fixture.budget.used);
 }

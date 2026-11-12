@@ -14,8 +14,8 @@ The host build pins the same version's Git source with a Zig content hash in
 [`build.zig.zon`](../../build.zig.zon).
 The spike establishes the initial transport evidence. The first milestone 1
 slice adds [host build integration and an internal engine adapter](../design/http2-engine.md);
-finite production listener and Roc scheduler integration are implemented;
-trailers, RPC deadlines and incremental streaming remain pending.
+finite production listeners, Roc scheduler integration and finite response
+trailers are implemented; RPC deadlines and incremental streaming remain pending.
 
 | Candidate | Fit and cost | Decision |
 |---|---|---|
@@ -150,8 +150,8 @@ checks exercise real Roc backends and allocator modes, socket-effect cancellatio
 input limits/timeouts, request IDs, observability and GOAWAY drain. Isolated fixtures
 retain framing, allocator-failure and controlled lifetime coverage.
 
-Milestone 1 is still incomplete. Generic response trailers, metadata-time RPC
-deadlines and the fixed-byte gRPC interoperability probe remain required. Broader
+Milestone 1 is still incomplete. Metadata-time RPC deadlines and the fixed-byte
+gRPC interoperability probe remain required. Broader
 cancellation/slow-consumer coverage and incremental streaming capabilities should
 be added in focused changes. Native gRPC is not supported until the later
 integration gates pass.

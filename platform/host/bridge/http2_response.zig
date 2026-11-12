@@ -14,6 +14,8 @@ pub const OwnedResponse = struct {
     allocator: std.mem.Allocator,
     headers: []Header,
     names: []u8,
+    trailers: []Header,
+    trailer_names: []u8,
     body: []const u8,
 
     /// Consumes one response reference, including on failure. Use a bounded
@@ -24,6 +26,27 @@ pub const OwnedResponse = struct {
     pub fn init(response: abi.HttpResponse, roc_host: *abi.RocHost, allocator: std.mem.Allocator, semantics: framing.RequestSemantics, limits: Limits) Error!OwnedResponse {
         errdefer response.decref(roc_host);
         if (response.status < 200 or response.status > 599) return error.InvalidStatus;
+        const final_fields = response.trailers.items();
+        if (final_fields.len > 64) return error.LimitExceeded;
+        var final_size: usize = 0;
+        for (final_fields) |field| {
+            const charged = std.math.add(usize, field.name.asSlice().len, field.value.asSlice().len) catch return error.LimitExceeded;
+            final_size = std.math.add(usize, final_size, charged) catch return error.LimitExceeded;
+            final_size = std.math.add(usize, final_size, 32) catch return error.LimitExceeded;
+        }
+        if (final_size > limits.header_bytes) return error.LimitExceeded;
+        const trailers = try allocator.alloc(Header, final_fields.len);
+        errdefer allocator.free(trailers);
+        const trailer_names = try allocator.alloc(u8, final_size);
+        errdefer allocator.free(trailer_names);
+        var final_offset: usize = 0;
+        for (final_fields, 0..) |field, index| {
+            const name = field.name.asSlice();
+            const lower = trailer_names[final_offset..][0..name.len];
+            for (name, lower) |byte, *output| output.* = std.ascii.toLower(byte);
+            trailers[index] = .{ .name = lower, .value = field.value.asSlice() };
+            final_offset += name.len;
+        }
         const body = switch (response.body.tag) {
             abi.HttpResponseBodyTag.Empty => &.{},
             abi.HttpResponseBodyTag.Bytes => response.body.payload_bytes().items(),
@@ -73,12 +96,14 @@ pub const OwnedResponse = struct {
             @memcpy(names[offset..], length);
             headers[fields.len] = .{ .name = "content-length", .value = names[offset..] };
         }
-        return .{ .response = response, .roc_host = roc_host, .allocator = allocator, .headers = headers, .names = names, .body = if (plan.transmit_body) body else &.{} };
+        return .{ .response = response, .roc_host = roc_host, .allocator = allocator, .headers = headers, .names = names, .trailers = trailers, .trailer_names = trailer_names, .body = if (plan.transmit_body) body else &.{} };
     }
 
     /// Call exactly once after engine submission succeeds or fails. The engine
     /// copies fields and body, so pending socket writes need no Roc references.
     pub fn deinit(self: *OwnedResponse) void {
+        self.allocator.free(self.trailers);
+        self.allocator.free(self.trailer_names);
         self.allocator.free(self.headers);
         self.allocator.free(self.names);
         self.response.decref(self.roc_host);

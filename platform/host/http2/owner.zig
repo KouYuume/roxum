@@ -110,7 +110,8 @@ pub const Owner = struct {
                 count += 1;
             }
         }
-        try self.respond(live, owned.response.status, headers[0..count], owned.body);
+        try self.engine.respondWithTrailers(live, owned.response.status, headers[0..count], owned.body, owned.trailers);
+        self.runnable = true;
     }
 
     pub fn cancel(self: *Owner, id: protocol.StreamId) Error!void {

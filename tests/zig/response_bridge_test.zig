@@ -182,6 +182,7 @@ fn makeResponse(
 
     return .{
         .headers = headers,
+        .trailers = bridge.HttpResponseHeaderList.empty(),
         .body = responseBody(body, roc_host),
         .status = status,
     };
@@ -514,6 +515,7 @@ test "response bridge uses generated decref for seamless slices" {
     body_payload.* = sliced_body;
     const response = bridge.HttpResponse{
         .headers = headers,
+        .trailers = bridge.HttpResponseHeaderList.empty(),
         .body = body,
         .status = 200,
     };
@@ -659,7 +661,7 @@ test "HTTP/2 response owns normalized fields and preserves duplicate values unti
         .name = bridge.GeneratedRocStr.fromSlice("Set-Cookie", &host),
         .value = bridge.GeneratedRocStr.fromSlice(if (index == 0) "a=1" else "second-cookie-with-a-value-longer-than-small-string", &host),
     };
-    var response = try bridge.OwnedHttp2Response.init(.{ .status = 200, .headers = headers, .body = responseBody("payload", &host) }, &host, std.testing.allocator, bridge.ResponseRequestSemantics.regular, .{ .header_bytes = 1024, .body_bytes = 16 });
+    var response = try bridge.OwnedHttp2Response.init(.{ .status = 200, .headers = headers, .trailers = bridge.HttpResponseHeaderList.empty(), .body = responseBody("payload", &host) }, &host, std.testing.allocator, bridge.ResponseRequestSemantics.regular, .{ .header_bytes = 1024, .body_bytes = 16 });
     // Moving the owner must not leave views into its previous stack location.
     var moved = response;
     response = undefined;
@@ -723,7 +725,7 @@ test "HTTP/2 response field count header bytes and body limits include synthetic
     for ([_]usize{ 62, 63, 64 }) |count| {
         const headers = bridge.HttpResponseHeaderList.allocate(count, &host);
         for (headers.elements_ptr.?[0..count]) |*field| field.* = .{ .name = bridge.GeneratedRocStr.fromSlice("x", &host), .value = bridge.GeneratedRocStr.fromSlice("y", &host) };
-        const result = bridge.OwnedHttp2Response.init(.{ .status = 200, .headers = headers, .body = responseBody("", &host) }, &host, std.testing.allocator, bridge.ResponseRequestSemantics.regular, .{ .header_bytes = 4096, .body_bytes = 16 });
+        const result = bridge.OwnedHttp2Response.init(.{ .status = 200, .headers = headers, .trailers = bridge.HttpResponseHeaderList.empty(), .body = responseBody("", &host) }, &host, std.testing.allocator, bridge.ResponseRequestSemantics.regular, .{ .header_bytes = 4096, .body_bytes = 16 });
         if (count == 64) {
             try std.testing.expectError(error.LimitExceeded, result);
         } else {
@@ -755,16 +757,56 @@ test "HTTP/2 response field count header bytes and body limits include synthetic
 }
 
 test "HTTP/2 response rolls back each scratch allocation failure and releases Roc values" {
-    for (0..3) |fail_index| {
+    for (0..5) |fail_index| {
         var environment = TestEnvironment{ .allocator = std.testing.allocator };
         var host = environment.rocHost();
         var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = fail_index });
-        const result = bridge.OwnedHttp2Response.init(makeResponse(200, "Long-Header-Name-For-Ownership", "long-value-to-exercise-Roc-ownership", "body", &host), &host, failing.allocator(), bridge.ResponseRequestSemantics.regular, .{ .header_bytes = 1024, .body_bytes = 16 });
-        if (fail_index < 2) {
+        var value = makeResponse(200, "Long-Header-Name-For-Ownership", "long-value-to-exercise-Roc-ownership", "body", &host);
+        value.trailers = bridge.HttpResponseHeaderList.allocate(1, &host);
+        value.trailers.elements_ptr.?[0] = .{ .name = bridge.GeneratedRocStr.fromSlice("Long-Trailer-Name-For-Ownership", &host), .value = bridge.GeneratedRocStr.fromSlice("long-trailer-value-to-exercise-Roc-ownership", &host) };
+        const result = bridge.OwnedHttp2Response.init(value, &host, failing.allocator(), bridge.ResponseRequestSemantics.regular, .{ .header_bytes = 1024, .body_bytes = 16 });
+        if (fail_index < 4) {
             try std.testing.expectError(error.OutOfMemory, result);
         } else {
             var response = try result;
             response.deinit();
+        }
+        try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
+    }
+}
+
+test "HTTP/2 trailer sections have independent field and byte boundaries" {
+    for ([_]usize{ 63, 64, 65 }) |count| {
+        var environment = TestEnvironment{ .allocator = std.testing.allocator };
+        var host = environment.rocHost();
+        var value = makeResponse(200, "x", "y", "", &host);
+        value.trailers = bridge.HttpResponseHeaderList.allocate(count, &host);
+        for (value.trailers.elements_ptr.?[0..count]) |*field| field.* = .{ .name = bridge.GeneratedRocStr.fromSlice("X", &host), .value = bridge.GeneratedRocStr.fromSlice("v", &host) };
+        const result = bridge.OwnedHttp2Response.init(value, &host, std.testing.allocator, bridge.ResponseRequestSemantics.regular, .{ .header_bytes = 4096, .body_bytes = 16 });
+        if (count > 64) {
+            try std.testing.expectError(error.LimitExceeded, result);
+        } else {
+            var owned = try result;
+            try std.testing.expectEqual(count, owned.trailers.len);
+            try std.testing.expectEqualStrings("x", owned.trailers[0].name);
+            owned.deinit();
+        }
+        try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
+    }
+    for ([_]usize{ 127, 128, 129 }) |charged| {
+        var environment = TestEnvironment{ .allocator = std.testing.allocator };
+        var host = environment.rocHost();
+        // Initial fields consume their own 128-byte budget, independently.
+        var value = makeResponse(200, "x", "y", "", &host);
+        value.trailers = bridge.HttpResponseHeaderList.allocate(1, &host);
+        const bytes: [96]u8 = @splat('a');
+        value.trailers.elements_ptr.?[0] = .{ .name = bridge.GeneratedRocStr.fromSlice("x", &host), .value = bridge.GeneratedRocStr.fromSlice(bytes[0 .. charged - 33], &host) };
+        const result = bridge.OwnedHttp2Response.init(value, &host, std.testing.allocator, bridge.ResponseRequestSemantics.regular, .{ .header_bytes = 128, .body_bytes = 16 });
+        if (charged > 128) {
+            try std.testing.expectError(error.LimitExceeded, result);
+        } else {
+            var owned = try result;
+            owned.deinit();
         }
         try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
     }

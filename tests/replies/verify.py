@@ -13,6 +13,8 @@ from roxum_process import read_port, ready_workers  # noqa: E402
 
 # (path, status, body or None, {header: value})
 CASES = [
+    ("/trailers", 500, None, {}),
+    ("/stream-trailers", 500, None, {}),
     ("/pdf", 200, b"%PDF", {"content-type": "application/pdf"}),
     ("/typed", 200, b"\x01", {"content-type": "text/csv; charset=utf-8"}),
     ("/computed", 200, b"\x01", {"content-type": "image/png"}),
@@ -77,8 +79,13 @@ def main():
         if server.wait(timeout=10) != 0:
             raise RuntimeError(f"server shutdown returned {server.returncode}")
         stderr = server.stderr.read()
-        if contract_alloc and stderr.count("roxum-contract-request-ok") != len(CASES):
-            raise RuntimeError(f"allocator markers for {len(CASES)} requests: {stderr!r}")
+        assert stderr.count("Response trailers require a finite response") == 1, stderr
+        assert "writer must not run" not in stderr, stderr
+        # The rejected stream reply fails the handler before its writer runs.
+        # The crash cleanup path does not emit a normal completion marker.
+        expected_completions = len(CASES) - 1
+        if contract_alloc and stderr.count("roxum-contract-request-ok") != expected_completions:
+            raise RuntimeError(f"allocator markers for {expected_completions} completed requests: {stderr!r}")
     finally:
         if server.poll() is None:
             os.killpg(server.pid, signal.SIGKILL)

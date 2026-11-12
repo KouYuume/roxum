@@ -81,9 +81,15 @@ failure leave completion retryable; cancellation and closure make it unavailable
 HEAD and status 204/205/304 cannot start this completion mode. Ordinary `respond`
 retains its existing one-call finite response behavior.
 
-This capability is internal: the production Roc response API does not yet expose
-trailers. Connecting it to request-scoped response completion, including failure
-and deadlines, remains required before native gRPC can be supported.
+`respondWithTrailers` connects finite Roc responses to this completion mode. It
+validates final fields and copies their names and values into session-budgeted
+storage before committing initial HEADERS. `output` submits terminal HEADERS
+after DATA EOF, respecting pending partial writes. Reset, destruction, and
+successful submission release the retained copy; a submission allocation failure
+terminates the connection. No request-owned reference survives response cleanup.
+The existing response-write deadline remains active through terminal output.
+Public `Reply.with_trailers` / `Response.trailers` support finite replies only;
+streaming completion and metadata-time RPC deadlines remain separate work.
 
 ## Nonblocking connection owner
 
@@ -311,8 +317,9 @@ limits matching the connection; the body bound also applies to a HEAD response's
 retained representation. Allocation and validation failures consume the response
 and release partial scratch. Engine submission still performs its own validation
 and copies output before Roc cleanup; an error there remains the caller's
-responsibility. This adapter adds no production dispatch, Date/access-log fields,
-response trailers, or streaming writer support.
+responsibility. Trailers have separate normalized views and field/byte limits;
+the engine validates their semantics before committing the response. The adapter
+does not provide a streaming writer.
 
 ## Owned response submission
 
@@ -439,7 +446,8 @@ prior-knowledge `Http2`, independently of TCP/Unix addressing. One initialized
 model and the existing worker threads serve both protocols. The HTTP/2 path buffers
 input through EOF and accepts finite responses; attempted response writers/file
 streams reset their stream instead of silently returning an empty successful body.
-Trailers, metadata-time RPC deadlines and incremental body capabilities are pending.
+Finite response trailers are supported. Metadata-time RPC deadlines and incremental
+body capabilities remain pending.
 
 Each connection table slot optionally owns `http2/connection.zig`. Its connection
 lock serializes every engine call, input conversion and response submission.

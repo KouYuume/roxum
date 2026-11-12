@@ -20,6 +20,7 @@ Reply := [
 	StatusOnly(Status),
 	WithStatus(Status, Reply),
 	WithHeaders(List(Http.ResponseHeader), Reply),
+	WithTrailers(List(Http.ResponseHeader), Reply),
 	ReplaceHeaders(List(Http.ResponseHeader), Reply),
 	Full(Http.Response),
 	Err(HttpError),
@@ -59,7 +60,7 @@ Reply := [
 	writer = |reply|
 		match reply {
 			Writes(options, write!) => Ok({ options, write! })
-			WithStatus(_, inner) | WithHeaders(_, inner) | ReplaceHeaders(_, inner) | Routed(_, inner) | Compressible(_, inner) => Reply.writer(inner)
+			WithStatus(_, inner) | WithHeaders(_, inner) | WithTrailers(_, inner) | ReplaceHeaders(_, inner) | Routed(_, inner) | Compressible(_, inner) => Reply.writer(inner)
 			Text(_) | Json(_) | Bytes(_, _) | Empty | StatusOnly(_) | Full(_) | Err(_) | File(_, _) => Err(NotStreamed)
 		}
 
@@ -84,7 +85,7 @@ Reply := [
 					Ok(nearer) => Ok(nearer)
 					Err(NotCompressible) => Ok(options)
 				}
-			WithStatus(_, inner) | WithHeaders(_, inner) | ReplaceHeaders(_, inner) | Routed(_, inner) => Reply.compression(inner)
+			WithStatus(_, inner) | WithHeaders(_, inner) | WithTrailers(_, inner) | ReplaceHeaders(_, inner) | Routed(_, inner) => Reply.compression(inner)
 			Text(_) | Json(_) | Bytes(_, _) | Empty | StatusOnly(_) | Full(_) | Err(_) | Writes(_, _) | File(_, _) => Err(NotCompressible)
 		}
 
@@ -94,7 +95,7 @@ Reply := [
 	file_target = |reply|
 		match reply {
 			File(root, path) => Ok({ root, path })
-			WithStatus(_, inner) | WithHeaders(_, inner) | ReplaceHeaders(_, inner) | Routed(_, inner) | Compressible(_, inner) => Reply.file_target(inner)
+			WithStatus(_, inner) | WithHeaders(_, inner) | WithTrailers(_, inner) | ReplaceHeaders(_, inner) | Routed(_, inner) | Compressible(_, inner) => Reply.file_target(inner)
 			Text(_) | Json(_) | Bytes(_, _) | Empty | StatusOnly(_) | Full(_) | Err(_) | Writes(_, _) => Err(NotFile)
 		}
 	## For a field typed `[Ok(_), Err(Reply)]` in `Handler.typed`: the reply that
@@ -156,6 +157,10 @@ Reply := [
 	## `content-type`, are not replaced or removed, so adding a second
 	## `content-type` sends both.
 	with_headers = |reply, headers| Reply.(WithHeaders(headers, reply))
+	## Append final fields to a finite HTTP/2 response. The host validates names,
+	## values and limits. HTTP/1, HEAD, no-content statuses and streaming/file
+	## responses cannot carry trailers and fail rather than silently dropping them.
+	with_trailers = |reply, trailers| Reply.(WithTrailers(trailers, reply))
 	## Sets `headers` on `reply`, first removing any header of `reply` with the
 	## same name (compared without regard to ASCII case). Use it for fields
 	## that must appear once, such as `access-control-allow-origin` or
@@ -177,7 +182,7 @@ Reply := [
 	route = |reply|
 		match reply {
 			Routed(value, _) => Ok(value)
-			WithStatus(_, inner) | WithHeaders(_, inner) | ReplaceHeaders(_, inner) | Compressible(_, inner) => Reply.route(inner)
+			WithStatus(_, inner) | WithHeaders(_, inner) | WithTrailers(_, inner) | ReplaceHeaders(_, inner) | Compressible(_, inner) => Reply.route(inner)
 			Text(_) | Json(_) | Bytes(_, _) | Empty | StatusOnly(_) | Full(_) | Err(_) | Writes(_, _) | File(_, _) => Err(Unrouted)
 		}
 	## The status the reply's response will have, without building the
@@ -189,7 +194,7 @@ Reply := [
 			# A file's 404 is decided only when the platform opens it.
 			Text(_) | Json(_) | Bytes(_, _) | Empty | Writes(_, _) | File(_, _) => 200
 			StatusOnly(value) | WithStatus(value, _) => Status.code(value)
-			WithHeaders(_, inner) | ReplaceHeaders(_, inner) | Routed(_, inner) | Compressible(_, inner) => Reply.status_code(inner)
+			WithHeaders(_, inner) | WithTrailers(_, inner) | ReplaceHeaders(_, inner) | Routed(_, inner) | Compressible(_, inner) => Reply.status_code(inner)
 			Full(response) => response.status
 			Err(http_error) => Status.code(HttpError.status(http_error))
 		}
