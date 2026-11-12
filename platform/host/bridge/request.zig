@@ -260,7 +260,7 @@ fn buildRequest(parsed_head: ParsedHead, version: abi.HttpVersion, headers: anyt
     };
 }
 
-fn requestBodyFromStream(token: u64) abi.HttpRequestBody {
+pub fn requestBodyFromStream(token: u64) abi.HttpRequestBody {
     var result: abi.HttpRequestBody = undefined;
     result.tag = abi.HttpRequestBodyTag.Stream;
     const payload: *u64 = @ptrCast(@alignCast(&result.payload));

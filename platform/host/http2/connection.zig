@@ -14,7 +14,7 @@ var worker_memory = @import("worker_memory.zig").Budget{};
 pub const Execution = struct {
     ticket: ?streams.Ticket = null,
     claimed: bool = false,
-    waiter: ?struct { target: *fiber.Fiber, serial: u64 } = null,
+    waiter: ?struct { target: *fiber.Fiber, serial: u64, body_limit: ?u64 = null } = null,
 };
 
 pub const Connection = struct {
@@ -27,6 +27,7 @@ pub const Connection = struct {
     draining: bool = false,
     now: u64 = 0,
     deadlines: [16]u64 = @splat(0),
+    body_deadlines: [16]u64 = @splat(0),
     writing: [16]bool = @splat(false),
     terminal_write_deadline: u64 = 0,
     header_deadline: u64 = 0,
@@ -91,9 +92,20 @@ pub const Connection = struct {
     pub fn wakeClosed(self: *Connection) void {
         for (self.executions) |execution_value| {
             const ticket = execution_value.ticket orelse continue;
-            if (self.streams.leases.runningStream(ticket) != null) continue;
-            if (execution_value.waiter) |waiter| fiber_wait.wakeStopped(waiter.target, waiter.serial, fiber.Stop.client_gone);
+            const waiter = execution_value.waiter orelse continue;
+            if (self.streams.leases.runningStream(ticket) == null) {
+                fiber_wait.wakeStopped(waiter.target, waiter.serial, fiber.Stop.client_gone);
+            } else if (waiter.body_limit) |limit| {
+                if (self.bodyReady(ticket, limit)) fiber_wait.wake(waiter.target, waiter.serial);
+            }
         }
+    }
+
+    /// Called under the owner lock both after input callbacks and when parking
+    /// a reader. The second check closes the input-completion/parking race.
+    pub fn bodyReady(self: *Connection, ticket: streams.Ticket, limit: u64) bool {
+        const buffer = self.streams.runningInput(ticket) orelse return true;
+        return buffer.phase == input.Phase.rejected or buffer.body() != null or buffer.bytes.items.len > limit;
     }
 
     pub fn disconnect(self: *Connection) void {
@@ -148,13 +160,30 @@ pub const Connection = struct {
             self.failed = true;
             self.owner.runnable = true;
         }
-        for (&self.deadlines, 0..) |*deadline, slot| {
+        for (0..self.deadlines.len) |slot| {
+            const body_deadline = &self.body_deadlines[slot];
+            if (body_deadline.* != 0 and now >= body_deadline.*) {
+                body_deadline.* = 0;
+                if (self.streams.entries[slot].ticket) |ticket| {
+                    if (self.access[slot]) |*entry| entry.outcome = @import("../access_log.zig").Outcome.timeout;
+                    if (self.streams.leases.stream(ticket)) |id| self.cancelTimedOut(id);
+                }
+            }
+            const deadline = &self.deadlines[slot];
             if (deadline.* == 0 or now < deadline.*) continue;
             deadline.* = 0;
             if (self.owner.watching_writable) self.failed = true;
             const ticket = self.streams.entries[slot].ticket orelse continue;
-            if (self.streams.leases.stream(ticket)) |id| self.owner.cancel(id) catch {};
+            if (self.streams.leases.stream(ticket)) |id| self.cancelTimedOut(id);
         }
+    }
+
+    fn cancelTimedOut(self: *Connection, id: engine.StreamId) void {
+        self.owner.cancel(id) catch {
+            // A failed reset must not strand a waiter after its timer is cleared.
+            self.failed = true;
+            self.owner.runnable = true;
+        };
     }
 
     fn from(ptr: *anyopaque) *Connection {
@@ -173,9 +202,6 @@ pub const Connection = struct {
             self.failed = true;
             return;
         };
-        if (self.streams.leases.find(id)) |ticket| {
-            if (self.deadlines[ticket.slot] == 0) self.deadlines[ticket.slot] = self.now +| self.head_timeout;
-        }
     }
     fn headersComplete(ptr: *anyopaque, id: engine.StreamId) void {
         const self = from(ptr);
@@ -189,7 +215,7 @@ pub const Connection = struct {
             return;
         };
         if (self.streams.leases.find(id)) |ticket| {
-            self.deadlines[ticket.slot] = self.now +| self.body_timeout;
+            self.body_deadlines[ticket.slot] = self.now +| self.body_timeout;
             // Rejected input has no completed metadata and is already queued for reset.
             if (self.streams.leases.headersElapsed(ticket, completed_at) == null) return;
             if (self.execution_limit) |duration| {
@@ -208,6 +234,7 @@ pub const Connection = struct {
         self.streams.end(id) catch {
             self.failed = true;
         };
+        if (self.streams.leases.find(id)) |ticket| self.body_deadlines[ticket.slot] = 0;
     }
     fn streamClosed(ptr: *anyopaque, id: engine.StreamId) void {
         const self = from(ptr);
@@ -216,6 +243,7 @@ pub const Connection = struct {
             if (self.writing[ticket.slot] and self.owner.engine.close_error == 0 and deadline != 0) {
                 if (self.terminal_write_deadline == 0 or deadline < self.terminal_write_deadline) self.terminal_write_deadline = deadline;
             }
+            self.body_deadlines[ticket.slot] = 0;
             self.writing[ticket.slot] = false;
             self.deadlines[ticket.slot] = 0;
             if (self.access[ticket.slot]) |*entry| {
@@ -314,5 +342,113 @@ test "configured execution cap starts before body completion and queue claim" {
                 try std.testing.expect(connection.streams.finish(work.ticket));
             } else try std.testing.expect(connection.streams.next() == null);
         }
+    }
+}
+
+test "body wait readiness covers EOF rejection and route-limit boundaries" {
+    var connection = Connection{};
+    connection.budget.backing = std.testing.allocator;
+    connection.streams = streams.Streams.init(1, &connection.budget, .{ .header_bytes = 1024, .body_bytes = 8 });
+    defer connection.streams.disconnect();
+    const id: engine.StreamId = @fromBackingInt(1);
+    try connection.streams.header(id, .{ .name = ":method", .value = "POST" });
+    try connection.streams.headersComplete(id, 0);
+    const work = connection.streams.nextMetadata().?.execute;
+    defer _ = connection.streams.finish(work.ticket);
+    try std.testing.expect(!connection.bodyReady(work.ticket, 4));
+    try connection.streams.data(id, "123");
+    try std.testing.expect(!connection.bodyReady(work.ticket, 4));
+    try connection.streams.data(id, "4");
+    try std.testing.expect(!connection.bodyReady(work.ticket, 4));
+    try connection.streams.data(id, "5");
+    try std.testing.expect(connection.bodyReady(work.ticket, 4));
+    try std.testing.expect(!connection.bodyReady(work.ticket, 8));
+    try connection.streams.end(id);
+    try std.testing.expect(connection.bodyReady(work.ticket, 8));
+    // A waiter installed after EOF observes the same ready state as a waiter
+    // already present when input completes. Expiry also cannot leave it asleep.
+    try std.testing.expect(connection.streams.leases.limitExecution(work.ticket, 0, 0));
+    try std.testing.expect(connection.streams.expireExecutions(0));
+    try std.testing.expect(connection.bodyReady(work.ticket, 8));
+    connection.streams.close(id);
+    try std.testing.expect(connection.bodyReady(work.ticket, 8));
+}
+
+test "input and response deadlines remain independent after metadata dispatch" {
+    for ([_]bool{ false, true }) |end_input| {
+        var pair: [2]c_int = undefined;
+        try std.testing.expectEqual(@as(c_int, 0), std.c.socketpair(std.c.AF.UNIX, std.c.SOCK.STREAM, 0, &pair));
+        defer net.closeSocket(pair[1]);
+        try net.setListenerNonBlocking(pair[0]);
+        var readiness = try poller.Poller.init();
+        defer readiness.deinit();
+        const connection = try Connection.create(pair[0], &readiness, 1, .{});
+        defer {
+            connection.disconnect();
+            connection.destroy();
+        }
+        connection.now = 100;
+        connection.body_timeout = 10;
+        try connection.owner.engine.receive("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" ++
+            "\x00\x00\x00\x04\x00\x00\x00\x00\x00" ++
+            "\x00\x00\x0e\x01\x04\x00\x00\x00\x01\x83\x86\x84\x01\x09localhost");
+        const work = connection.streams.nextMetadata().?.execute;
+        defer _ = connection.streams.finish(work.ticket);
+        const slot = work.ticket.slot;
+        connection.deadlines[slot] = 200;
+        connection.writing[slot] = true;
+        try std.testing.expectEqual(@as(u64, 110), connection.body_deadlines[slot]);
+        if (end_input) {
+            try connection.owner.engine.receive("\x00\x00\x00\x00\x01\x00\x00\x00\x01");
+            try std.testing.expectEqual(@as(u64, 0), connection.body_deadlines[slot]);
+        }
+        connection.expire(109);
+        try connection.owner.engine.checkDispatchable(work.id);
+        connection.expire(110);
+        connection.expire(111);
+        try std.testing.expectEqual(@as(u64, 200), connection.deadlines[slot]);
+        if (end_input) {
+            try connection.owner.engine.checkDispatchable(work.id);
+        } else {
+            try std.testing.expectError(error.Closed, connection.owner.engine.checkDispatchable(work.id));
+        }
+    }
+}
+
+test "timeout reset allocation failure schedules connection termination" {
+    for ([_]bool{ false, true }) |body_timeout| {
+        var pair: [2]c_int = undefined;
+        try std.testing.expectEqual(@as(c_int, 0), std.c.socketpair(std.c.AF.UNIX, std.c.SOCK.STREAM, 0, &pair));
+        defer net.closeSocket(pair[1]);
+        try net.setListenerNonBlocking(pair[0]);
+        var readiness = try poller.Poller.init();
+        defer readiness.deinit();
+        const connection = try Connection.create(pair[0], &readiness, 1, .{});
+        defer {
+            connection.disconnect();
+            connection.destroy();
+        }
+        connection.now = 100;
+        connection.body_timeout = 10;
+        try connection.owner.engine.receive("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" ++
+            "\x00\x00\x00\x04\x00\x00\x00\x00\x00" ++
+            "\x00\x00\x0e\x01\x04\x00\x00\x00\x01\x83\x86\x84\x01\x09localhost");
+        const work = connection.streams.nextMetadata().?.execute;
+        defer _ = connection.streams.finish(work.ticket);
+        if (!body_timeout) {
+            connection.body_deadlines[work.ticket.slot] = 0;
+            connection.deadlines[work.ticket.slot] = 110;
+        }
+        connection.owner.engine.memory.limit = connection.owner.engine.memory.used;
+        connection.owner.runnable = false;
+        connection.expire(109);
+        try std.testing.expect(!connection.failed);
+        connection.expire(110);
+        try std.testing.expect(connection.failed);
+        try std.testing.expect(connection.owner.runnable);
+        try std.testing.expectEqual(@as(u64, 0), connection.body_deadlines[work.ticket.slot]);
+        try std.testing.expectEqual(@as(u64, 0), connection.deadlines[work.ticket.slot]);
+        connection.expire(111);
+        try std.testing.expect(connection.failed);
     }
 }

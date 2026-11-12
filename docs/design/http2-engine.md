@@ -89,7 +89,8 @@ successful submission release the retained copy; a submission allocation failure
 terminates the connection. No request-owned reference survives response cleanup.
 The existing response-write deadline remains active through terminal output.
 Public `Reply.with_trailers` / `Response.trailers` support finite replies only;
-streaming completion and metadata-time RPC deadlines remain separate work.
+streaming completion remains separate work. Metadata stages can install generic
+request deadlines before body reads.
 
 ## Nonblocking connection owner
 
@@ -154,8 +155,8 @@ allocations are outside this domain and require separate bounded admission.
 Request input currently uses automatic receive-window replenishment with bounded
 finite request sizes. A streaming request reader must replace that with explicit
 consumption accounting and aggregate backpressure before this adapter can serve
-unbounded or full-duplex requests. Trailers and generic RPC execution deadlines
-remain pending. Finite worker scheduling, GOAWAY drain and observability are
+unbounded or full-duplex requests. Finite response trailers and generic execution
+deadlines are supported. Finite worker scheduling, GOAWAY drain and observability are
 described below. The [transport design](../plans/http2-transport.md) describes
 those proposed contracts, not capabilities of this adapter.
 
@@ -269,6 +270,23 @@ generated cleanup if dispatch is cancelled. Releasing connection input does not
 finish a request lease or cancel pending execution. Production queue integration preserves that contract; incremental streaming body
 handoff remains separate work.
 
+## Metadata handoff and finite body reads
+
+`Owner.requestMetadataOwned` checks the lease and engine before and after copying
+initial fields through `requestFromHttp2Metadata`. Unlike the finite handoff, this
+leaves connection input owned by its registry on success or conversion failure.
+The resulting request owns its metadata and carries a process-unique body token;
+it contains no borrowed connection bytes or HTTP/2 identity.
+
+The request fiber installs a body-reader callback in its own locals. A read checks
+fresh expiry and engine admission under the connection lock, then either copies
+owned body bytes or suspends without holding the lock. Reads wait for finite EOF;
+a stricter route limit can fail earlier. Input remains bounded by server and
+connection limits until finish/reset/disconnect releases it. No borrowed view
+survives suspension, and the callback follows the fiber across worker threads.
+Completion clears the binding; abandonment releases the request heap and the
+next fiber preparation clears all request-local capabilities.
+
 ## Finite stream registry
 
 `http2.streams.Streams` combines bounded input and generation-checked request
@@ -300,10 +318,10 @@ remains open. The registry does not itself cancel effects or retain Roc values,
 and it must outlive all claimed executions.
 
 The independent-client fixture checks both finite echo execution and metadata-only
-replies followed by late body/trailer input. Production worker dispatch still uses
-EOF-gated `next` under the connection lock. `nextMetadata` does not install a Roc
-body reader or wake suspended executions; connecting metadata dispatch to those
-capabilities remains separate work. Streaming receive credit also remains separate.
+replies followed by late body/trailer input. Production worker dispatch uses
+`nextMetadata` under the connection lock and installs the finite body reader
+described below. The independent echo fixture retains EOF-gated `next` by default.
+Streaming receive credit remains separate work.
 
 ## Internal execution deadlines
 
@@ -335,9 +353,9 @@ cap when initial headers complete, before body EOF or execution admission.
 Rejected header input already awaiting cancellation does not acquire a budget.
 This setting applies only to HTTP/2 and does not change HTTP/1 timeouts.
 
-Per-request deadline operations remain internal. The production listener does not
-yet expose a Roc metadata-phase callback. Those capabilities remain required
-before integrations can parse and tighten deadlines using `grpc-timeout` ahead of body waits.
+`RequestExecution` lets Roc `BeforeBody` stages install tighter per-request
+budgets before body waits. Integrations remain responsible for parsing protocol
+metadata and selecting the duration.
 The host does not interpret gRPC metadata or synthesize gRPC status fields.
 The independent socket fixture installs a fixed generic budget at metadata
 completion and verifies unfinished-body cancellation and unrelated-stream progress.
@@ -492,11 +510,12 @@ exercise the worker integration.
 
 `Server.ListenOptions.protocol` selects `Http1` (the default) or explicit cleartext
 prior-knowledge `Http2`, independently of TCP/Unix addressing. One initialized
-model and the existing worker threads serve both protocols. The HTTP/2 path buffers
-input through EOF and accepts finite responses; attempted response writers/file
-streams reset their stream instead of silently returning an empty successful body.
-Finite response trailers are supported. Metadata-time RPC deadlines and incremental
-body capabilities remain pending.
+model and the existing worker threads serve both protocols. The HTTP/2 path
+executes routing and `BeforeBody` stages after initial headers. Ordinary handlers
+wait for finite input EOF. It accepts finite responses and response trailers;
+attempted response writers/file streams reset their stream instead of silently
+returning an empty successful body. Incremental network body delivery remains
+unsupported.
 
 Each connection table slot optionally owns `http2/connection.zig`. Its connection
 lock serializes every engine call, input conversion and response submission.
@@ -507,7 +526,11 @@ until executor cleanup. Stale events and completions cannot address a reused slo
 
 Request fibers share the production wait registry and may resume on another Roc
 thread. Parking records the fiber and wait serial under the connection lock;
-closure signals that wait, including a wake before registry insertion. Resumption
+closure signals that wait, including a wake before registry insertion. Body waits
+also record their active read limit: EOF, rejection, or exceeding that limit wakes
+the reader. Parking rechecks that condition under the same lock to avoid losing
+completion between observing incomplete input and registering the wait. Other
+hosted I/O waits are not woken merely because body input arrives. Resumption
 removes the parked pointer before running Roc. Normal completion consumes Roc
 values before heap release; cancellation/crash closes borrowed resources and
 abandons the heap before finishing the lease. No connection lock is held while
@@ -523,11 +546,16 @@ body limit, and responses up to 2 MiB. Input/conversion storage and session/outp
 storage each have 16 MiB ceilings. A thread-safe 128 MiB worker budget bounds all
 HTTP/2 connection, input and session allocations; this is separate from the Roc
 request heap accounting. Admission limits and queue expiry apply to stream jobs.
-Whole-input limit failures reset streams; allocation/transport failure can close
-the connection. Queued jobs still finish their leases after a disconnect.
+Server input-limit failures reset streams; allocation/transport failure can close
+the connection. A route's tighter `BodyLimit` produces `TooLarge` and the normal
+413 reply, including before EOF. Route limits cannot increase the finite server
+cap. `Handler.streaming` consumes the collected body in bounded parts, not as
+network input arrives. Queued jobs still finish their leases after a disconnect.
 
 Initial/idle connection timeouts cover empty connections. Header/body deadlines
-cover incomplete streams, and submitted responses retain their write deadline
+cover incomplete streams. Body and response-write deadlines are independent:
+early replies retain the input deadline until EOF, and EOF does not clear a
+pending response-write deadline. Submitted responses retain their write deadline
 through flow-control or socket stalls. An unfinished header block closes the connection because decoding spans the
 connection; body/write timeouts reset the stream. A blocked socket that cannot
 deliver that reset closes. These are I/O deadlines, not generic
@@ -546,8 +574,8 @@ two worker threads, and independent clients on TCP and Unix listeners. Checks co
 fragmented input, slot reuse, HEAD, application/adapter errors, effect suspension,
 TCP cancellation and permit recovery, body-limit boundaries, incomplete-body
 timeouts, request IDs/access records and GOAWAY. The internal fixture continues to
-provide more controlled allocator and wait-registration checks. This does not yet
-satisfy the gRPC milestone's trailer/deadline and interoperability gates.
+provide more controlled allocator and wait-registration checks. These checks cover finite core transport capabilities; they do not claim generated
+gRPC services or streaming RPC support.
 
 ## Fixed-byte gRPC client probe
 
@@ -557,7 +585,7 @@ status and error metadata on TCP and Unix sockets. Missing status and truncated
 message envelopes are negative controls. The Roc fixture supplies fixed bytes
 and generic HTTP trailers; the host has no gRPC-specific parsing or status policy.
 This verifies finite transport interoperability, not generated services or RPC
-deadline handling. Metadata-phase execution remains a prerequisite for the planned gRPC integration.
+deadline handling. Protocol-specific timeout parsing belongs to the planned gRPC integration.
 
 ## Request execution controls
 
@@ -575,7 +603,8 @@ Otherwise the elapsed operation returns the nanoseconds since initial headers.
 Outside an HTTP/2 request, both operations report `Unavailable`. The effect binding
 lasts through the Roc invocation and follows fiber suspension/resumption.
 
-This exposes deadline control for finite handlers only. Initial dispatch still
-waits for request EOF, so installing a deadline before body collection requires
-the separately planned metadata-phase execution. Protocol timeout parsing stays
-in Roc integrations; the host neither parses `grpc-timeout` nor creates gRPC statuses.
+`BeforeBody` stages can install a deadline before any body wait. A duration already
+elapsed during queueing or another metadata effect stops execution before the next
+Roc statement. Ordinary handlers still receive a complete body. Protocol timeout
+parsing stays in Roc integrations; the host neither parses `grpc-timeout` nor creates
+gRPC statuses.

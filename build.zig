@@ -910,7 +910,7 @@ const unit_tests = [_]ZigTest{
 const tsan_tests = [_]ZigTest{
     .{ .root = "platform/host/fiber.zig", .link_libc = true },
     .{ .root = "platform/host/scheduler.zig", .link_libc = true },
-    .{ .root = "platform/host/work_queue.zig", .link_libc = true },
+    .{ .root = "platform/host/work_queue.zig", .link_libc = true, .link_http2 = true },
     .{ .root = "platform/host/event_loop.zig", .link_libc = true, .link_http2 = true },
     .{ .root = "platform/host/host.zig", .link_libc = true },
     .{

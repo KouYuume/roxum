@@ -4,8 +4,8 @@ import HostRequestExecution
 ## in `init!` and on HTTP/1. They carry no handle that can escape the request.
 ##
 ## Initial header completion is the immutable time origin. Body reception,
-## queueing, and handler execution all count. Finite HTTP/2 handlers currently
-## run after the body arrives; these operations do not provide early dispatch.
+## queueing, and handler execution all count. `BeforeBody` middleware can set
+## a deadline before waiting for input; ordinary handlers run after body EOF.
 RequestExecution := [].{
 	## Elapsed monotonic nanoseconds since initial headers completed.
 	## An expired or closed request stops instead of returning to application code.

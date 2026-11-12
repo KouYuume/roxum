@@ -212,6 +212,40 @@ def verify(executable, unix, debug=False):
                     request(stream, body=b'while partial')
                     receive([stream], [partial])
                     assert bodies[stream] == b'42|h2|while partial'
+                    # Middleware can reject before EOF; late body/trailers must
+                    # not become a connection error or reopen the execution.
+                    for route, status in (('/metadata-reject', '403'), ('/missing', '404')):
+                        stream += 2
+                        early = stream
+                        request(early, route, body=b'prefix', end=False)
+                        receive([early])
+                        assert headers[early][':status'] == status
+                        client.send_data(early, b'suffix')
+                        client.send_headers(early, [('x-late', 'discard')], end_stream=True)
+                        stream += 2
+                        request(stream, body=b'after early reply')
+                        receive([stream])
+                        assert bodies[stream] == b'42|h2|after early reply'
+                    # An early response does not disable the input timeout.
+                    stream += 2
+                    early = stream
+                    request(early, '/metadata-reject', end=False)
+                    receive([early])
+                    receive([], [early])
+                    # Route limits can tighten the finite server cap. Whole and
+                    # streamed adapters reject the first excess byte before EOF.
+                    for route in ('/metadata-limit', '/metadata-stream', '/metadata-stream-default'):
+                        for size in (3, 4, 5):
+                            stream += 2
+                            request(stream, route, body=b'x' * size, end=size <= 4)
+                            receive([stream])
+                            assert headers[stream][':status'] == ('413' if size > 4 else '200')
+                            if size <= 4:
+                                expected = (b'42|h2|' if route == '/metadata-limit' else b'') + b'x' * size
+                                assert bodies[stream] == expected
+                            else:
+                                client.end_stream(stream)
+                                sock.sendall(client.data_to_send())
                     # Incoming request IDs retain the existing host policy.
                     stream += 2
                     client.send_headers(stream, [(':method', 'GET'), (':scheme', 'http'),
@@ -327,12 +361,12 @@ def verify(executable, unix, debug=False):
     print('PASS production HTTP/2 ' + ('Unix' if unix else 'TCP') + (' debug' if debug else ' normal'))
 
 
-def verify_execution_limit(executable, unix, request_limits=False):
+def verify_execution_limit(executable, unix, request_limits=False, metadata=False):
     with tempfile.TemporaryDirectory(prefix='roxum-h2-limit-', dir='/tmp') as directory:
         path = str(pathlib.Path(directory) / 'http.sock') if unix else ''
         config = pathlib.Path(directory) / 'config'
         config.mkdir()
-        (config / 'local.toml').write_text('path = ' + json.dumps(path) + '\n' + ('' if request_limits else 'execution_milliseconds = 250\n'))
+        (config / 'local.toml').write_text('path = ' + json.dumps(path) + '\n' + ('execution_milliseconds = 10000\nbody_bytes = 16385\n' if metadata else '' if request_limits else 'execution_milliseconds = 250\n'))
         with tempfile.TemporaryFile(mode='w+') as errors:
             process = subprocess.Popen([executable], cwd=directory, stdout=subprocess.PIPE,
                                        stderr=errors, text=True, start_new_session=True)
@@ -353,7 +387,7 @@ def verify_execution_limit(executable, unix, request_limits=False):
                             sock.sendall(pending)
 
                     def request(stream, route, end=True, body=b''):
-                        client.send_headers(stream, [(':method', 'GET'), (':scheme', 'http'),
+                        client.send_headers(stream, [(':method', 'POST' if metadata else 'GET'), (':scheme', 'http'),
                                                      (':authority', 'localhost'), (':path', route),
                                                      ('x-request-id', f'execution-limit-{stream}')], end_stream=end and not body)
                         if body:
@@ -379,6 +413,89 @@ def verify_execution_limit(executable, unix, request_limits=False):
                                     reset.add(event.stream_id)
                             flush()
                             assert time.monotonic() < deadline, 'execution deadline made no progress'
+
+                    if metadata:
+                        # A held permit proves BeforeBody ran while input remains
+                        # open. It also lets cancellation prove resource cleanup.
+                        sid = 1
+                        for action in ('complete', 'reset', 'deadline'):
+                            pending = sid
+                            route = '/metadata-deadline' if action == 'deadline' else '/metadata-wait'
+                            with socket.socket() as notification:
+                                notification.settimeout(3)
+                                notification.bind(('127.0.0.1', 0))
+                                notification.listen()
+                                request(pending, route + '?' + str(notification.getsockname()[1]), end=False, body=b'a')
+                                admitted, _ = notification.accept()
+                                with admitted:
+                                    admitted.settimeout(3)
+                                    ready = b''
+                                    while len(ready) < 5:
+                                        chunk = admitted.recv(5 - len(ready))
+                                        assert chunk, 'metadata notification closed early'
+                                        ready += chunk
+                                    assert ready == b'ready'
+                            sid += 2
+                            request(sid, '/permit')
+                            receive(lambda: sid in ended)
+                            assert headers[sid][':status'] == '429'
+                            assert pending not in headers
+                            if action == 'complete':
+                                client.send_data(pending, b'bc', end_stream=True)
+                                flush()
+                                receive(lambda: pending in ended)
+                                assert bodies[pending] == b'42|h2|abc'
+                            elif action == 'reset':
+                                client.reset_stream(pending)
+                                flush()
+                            else:
+                                # The 3s receive bound is below the configured
+                                # 10s input/server deadlines: only Roc can expire it.
+                                receive(lambda: pending in reset)
+                                assert pending not in headers
+                            for _ in range(30):
+                                sid += 2
+                                request(sid, '/permit')
+                                receive(lambda: sid in ended)
+                                if headers[sid][':status'] == '200':
+                                    break
+                                time.sleep(.002)
+                            else:
+                                raise AssertionError('metadata body wait retained its permit')
+                            sid += 2
+                        request(sid, '/metadata-zero', end=False)
+                        receive(lambda: sid in reset)
+                        assert sid not in headers
+                        # Repeated races between worker parking and input EOF,
+                        # including an empty body and completion in the same read.
+                        for payload in (b'', b'x', b'xy') * 8:
+                            sid += 2
+                            request(sid, '/echo', end=False)
+                            client.send_data(sid, payload, end_stream=True)
+                            flush()
+                            receive(lambda: sid in ended)
+                            assert bodies[sid] == b'42|h2|' + payload
+                        # Both whole-body OnChunk and streamed reads cross the
+                        # 16 KiB part boundary with owned bytes preserved exactly.
+                        for route in ('/metadata-chunks', '/metadata-stream-chunks'):
+                            for size in (16383, 16384, 16385):
+                                sid += 2
+                                request(sid, route, end=False)
+                                payload = b'a' * (size - 1) + b'z'
+                                for offset in range(0, size, 16384):
+                                    part = payload[offset:offset + 16384]
+                                    client.send_data(sid, part, end_stream=offset + len(part) == size)
+                                flush()
+                                receive(lambda: sid in ended)
+                                expected = (b'42|h2|' + payload.replace(b'a', b'A')) if route == '/metadata-chunks' else payload
+                                assert bodies[sid] == expected
+                        assert stop(process) == 0
+                        errors.seek(0)
+                        entries = [json.loads(line) for line in errors if line.startswith('{')]
+                        assert not any(entry.get('outcome') == 'crashed' for entry in entries), entries
+                        assert sum(entry.get('outcome') == 'timeout' for entry in entries) == 2, entries
+                        print('PASS metadata dispatch, body resumption, cancellation and deadlines ' + ('Unix' if unix else 'TCP'))
+                        return
 
                     if request_limits:
                         # Peer completion proves headers were processed before the body delay.
@@ -507,6 +624,8 @@ if __name__ == '__main__':
     verify(executable, False, True)
     verify(executable, True, True)
 
+    verify_execution_limit(executable, False, metadata=True)
+    verify_execution_limit(executable, True, metadata=True)
     verify_execution_config(executable)
     verify_execution_limit(executable, False)
     verify_execution_limit(executable, True)

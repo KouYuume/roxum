@@ -8,10 +8,15 @@ const fiber = @import("../fiber.zig");
 
 pub const maximum_read_bytes = request_reader.maximum_stream_chunk_bytes;
 
-pub const Active = struct {
-    token: u64,
-    stream: *request_reader.BodyStream,
+/// A transport copies each result into the current request domain before
+/// releasing its input lock. The callback may suspend, but retains no view.
+pub const Reader = struct {
+    context: *anyopaque,
+    read: *const fn (*anyopaque, u64, bool) abi.HostBodyRequestRead,
+    limit: *const fn (*anyopaque, u64, bool) void,
 };
+const Source = union(enum) { http1: *request_reader.BodyStream, reader: Reader };
+pub const Active = struct { token: u64, source: Source };
 
 /// The active body of code off a fiber. A request fiber keeps its own in
 /// its `Locals`, so it follows the fiber to another thread.
@@ -26,12 +31,20 @@ fn slot() *?Active {
 }
 
 pub fn activate(stream: *request_reader.BodyStream) u64 {
+    return activateSource(.{ .http1 = stream });
+}
+
+pub fn activateReader(reader: Reader) u64 {
+    return activateSource(.{ .reader = reader });
+}
+
+fn activateSource(source: Source) u64 {
     const place = slot();
     std.debug.assert(place.* == null);
     var token = next_token.fetchAdd(1, std.builtin.AtomicOrder.monotonic);
     // 0 never names a body; after the counter wraps, skip it.
     if (token == 0) token = next_token.fetchAdd(1, std.builtin.AtomicOrder.monotonic);
-    place.* = .{ .token = token, .stream = stream };
+    place.* = .{ .token = token, .source = source };
     return token;
 }
 
@@ -62,14 +75,19 @@ pub fn hostedBodyRead(
         abi.HostBodyRequestReadTag.Closed,
     );
 
+    const stream = switch (current.source) {
+        Source.http1 => |stream| stream,
+        Source.reader => |reader| return reader.read(reader.context, requested_maximum, whole),
+    };
+
     // A whole read that asks for more than a part gets the rest of the body
     // at once when it has all been received.
     const buffered = if (whole and requested > maximum_read_bytes)
-        current.stream.readBufferedWhole() catch |err| return resultWithTag(failureTag(err))
+        stream.readBufferedWhole() catch |err| return resultWithTag(failureTag(err))
     else
         null;
     const mode = if (whole) request_reader.ReadMode.whole else request_reader.ReadMode.streamed;
-    const read = buffered orelse current.stream.readAs(maximum_bytes, mode) catch |err| return resultWithTag(
+    const read = buffered orelse stream.readAs(maximum_bytes, mode) catch |err| return resultWithTag(
         failureTag(err),
     );
     return switch (read) {
@@ -77,7 +95,7 @@ pub fn hostedBodyRead(
             abi.HostBodyRequestReadTag.End,
         ),
         request_reader.StreamRead.chunk => |bytes| chunkResult(
-            current.stream,
+            stream,
             bytes,
         ),
     };
@@ -88,7 +106,10 @@ pub fn hostedBodyRead(
 pub fn hostedBodyLimitWhole(token: u64, bytes: u64) callconv(std.builtin.CallingConvention.c) void {
     const current = slot().* orelse return;
     if (current.token != token) return;
-    current.stream.limits.whole_bytes = bytes;
+    switch (current.source) {
+        Source.http1 => |stream| stream.limits.whole_bytes = bytes,
+        Source.reader => |reader| reader.limit(reader.context, bytes, true),
+    }
 }
 
 /// Sets the limit of the current request's body read as a stream, for a
@@ -96,7 +117,10 @@ pub fn hostedBodyLimitWhole(token: u64, bytes: u64) callconv(std.builtin.Calling
 pub fn hostedBodyLimitStreamed(token: u64, bytes: u64) callconv(std.builtin.CallingConvention.c) void {
     const current = slot().* orelse return;
     if (current.token != token) return;
-    current.stream.limits.streamed_bytes = bytes;
+    switch (current.source) {
+        Source.http1 => |stream| stream.limits.streamed_bytes = bytes,
+        Source.reader => |reader| reader.limit(reader.context, bytes, false),
+    }
 }
 
 fn chunkResult(
@@ -160,4 +184,48 @@ test "body failure categories preserve client and internal distinctions" {
     try std.testing.expectEqual(abi.HostBodyRequestReadTag.TimedOut, failureTag(error.RequestBodyTimeout));
     try std.testing.expectEqual(abi.HostBodyRequestReadTag.Failed, failureTag(error.OutOfMemory));
     try std.testing.expectEqual(abi.HostBodyRequestReadTag.Failed, failureTag(error.ClockFailed));
+}
+
+test "transport reader validates tokens and forwards whole streamed limits and read sizes" {
+    const Context = struct {
+        maximum: u64 = 0,
+        whole: bool = false,
+        whole_limit: u64 = 0,
+        streamed_limit: u64 = 0,
+        fn read(ptr: *anyopaque, maximum: u64, whole: bool) abi.HostBodyRequestRead {
+            const self: *@This() = @ptrCast(@alignCast(ptr));
+            self.maximum = maximum;
+            self.whole = whole;
+            return resultWithTag(abi.HostBodyRequestReadTag.End);
+        }
+        fn limit(ptr: *anyopaque, bytes: u64, whole: bool) void {
+            const self: *@This() = @ptrCast(@alignCast(ptr));
+            if (whole) self.whole_limit = bytes else self.streamed_limit = bytes;
+        }
+    };
+    var context = Context{};
+    const reader = Reader{ .context = &context, .read = Context.read, .limit = Context.limit };
+    const first = activateReader(reader);
+    try std.testing.expectEqual(abi.HostBodyRequestReadTag.InvalidLimit, hostedBodyRead(first, 0, true).tag);
+    try std.testing.expectEqual(@as(u64, 0), context.maximum);
+    for ([_]u64{ 1, maximum_read_bytes, maximum_read_bytes + 1, std.math.maxInt(u64) }) |maximum| {
+        for ([_]bool{ false, true }) |whole| {
+            try std.testing.expectEqual(abi.HostBodyRequestReadTag.End, hostedBodyRead(first, maximum, whole).tag);
+            try std.testing.expectEqual(maximum, context.maximum);
+            try std.testing.expectEqual(whole, context.whole);
+        }
+    }
+    hostedBodyLimitWhole(first, 3);
+    hostedBodyLimitStreamed(first, 4);
+    try std.testing.expectEqual(@as(u64, 3), context.whole_limit);
+    try std.testing.expectEqual(@as(u64, 4), context.streamed_limit);
+    deactivate();
+    const second = activateReader(reader);
+    defer deactivate();
+    try std.testing.expect(second != first);
+    try std.testing.expectEqual(abi.HostBodyRequestReadTag.Closed, hostedBodyRead(first, 1, true).tag);
+    hostedBodyLimitWhole(first, 99);
+    hostedBodyLimitStreamed(first, 99);
+    try std.testing.expectEqual(@as(u64, 3), context.whole_limit);
+    try std.testing.expectEqual(@as(u64, 4), context.streamed_limit);
 }

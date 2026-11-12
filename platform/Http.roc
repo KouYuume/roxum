@@ -106,15 +106,20 @@ Http :: [].{
 	## connection (`Pipeline`). The type is opaque, so app code cannot build one, and
 	## this module does not expose it. A handle is valid only while its request runs.
 	##
-	## The host receives a small body (up to 64 KiB) before the platform asks for it,
+	## On HTTP/1, the host receives a small body (up to 64 KiB) before the platform asks for it,
 	## so reading it does not wait. A larger body is read from the connection as the
 	## platform reads; while a read waits, the thread serves other requests. A client
 	## that sent `Expect: 100-continue` gets `100 Continue` at the first read that
 	## waits for it.
+	## On HTTP/2, metadata stages run before EOF, but reads wait for the complete
+	## finite body. The host retains it until execution cleanup. The configured
+	## `maximum_body_bytes` remains a hard cap, including for streamed reads.
+	## Transport failures/timeouts cancel the request instead of returning a
+	## body error; route limits can return `TooLarge` before EOF.
 	RequestStream :: U64.{
 
-		## Reads the next part of the request body as a stream: only this part
-		## is held, so a body of any size can be read in parts. Fails with
+		## Reads the next part of the request body. On HTTP/1 only this part is
+		## held, so a body of any size can be read in parts. On HTTP/1 it fails with
 		## `TooLarge` past `Server.Limits.maximum_streamed_body_bytes` (none
 		## by default) or a route's `BodyLimit.streamed`, and with `TimedOut`
 		## when no bytes arrived for `Server.Timeouts.request_body_milliseconds`.
@@ -124,11 +129,12 @@ Http :: [].{
 		## empty. Read until `End`; after the last byte of the body, the next
 		## read returns `End`. `BadRequest` means invalid framing or a
 		## connection that ended early, and `Failed` is an internal error.
-		## After a failure, later reads return the same result.
+		## On HTTP/1, after a failure, later reads return the same result.
 		read! = |RequestStream.(token), maximum_bytes| HostBody.read!(token, maximum_bytes, Bool.False)
 
 		## Like `read!`, for a body read whole into memory, as `Extract.bytes`
-		## does. When the rest of a Content-Length body has already been
+		## does. On HTTP/2, each chunk is copied from completed finite input.
+		## On HTTP/1, when the rest of a Content-Length body has already been
 		## received, a `maximum_bytes` above 16 KiB returns all of it in one
 		## `Chunk`. It fails with `TooLarge` past `Server.Limits.maximum_body_bytes`
 		## (2 MiB by default) or a route's `BodyLimit.whole`, and with
