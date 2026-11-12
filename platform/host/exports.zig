@@ -9,6 +9,7 @@ const compress_effect = @import("effect/compress.zig");
 const time_effect = @import("effect/time.zig");
 const instant_effect = @import("effect/instant.zig");
 const sleep_effect = @import("effect/sleep.zig");
+const request_execution_effect = @import("effect/request_execution.zig");
 const response_writer = @import("effect/response_writer.zig");
 const random_effect = @import("effect/random.zig");
 const file_effect = @import("effect/file.zig");
@@ -18,6 +19,8 @@ const concurrency_effect = @import("effect/concurrency.zig");
 const tcp_effect = @import("effect/tcp.zig");
 
 pub fn exportRuntime() void {
+    @export(&request_execution_effect.hostedElapsed, .{ .name = "roxum_request_execution_elapsed", .visibility = std.builtin.SymbolVisibility.hidden });
+    @export(&request_execution_effect.hostedLimit, .{ .name = "roxum_request_execution_limit", .visibility = std.builtin.SymbolVisibility.hidden });
     @export(&runtime.rocAlloc, .{ .name = "roc_alloc" });
     @export(&runtime.rocDealloc, .{ .name = "roc_dealloc" });
     @export(&runtime.rocRealloc, .{ .name = "roc_realloc" });

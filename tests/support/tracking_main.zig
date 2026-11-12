@@ -4,6 +4,8 @@ const host = @import("host");
 const tracking_environment = @import("allocator/tracking_environment.zig");
 
 comptime {
+    @export(&host.request_execution_effect.hostedElapsed, .{ .name = "roxum_request_execution_elapsed", .visibility = std.builtin.SymbolVisibility.hidden });
+    @export(&host.request_execution_effect.hostedLimit, .{ .name = "roxum_request_execution_limit", .visibility = std.builtin.SymbolVisibility.hidden });
     if (!builtin.is_test) {
         @export(&cMain, .{ .name = "main" });
     }

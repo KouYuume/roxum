@@ -5,6 +5,7 @@ import pf.Config
 import pf.Concurrency
 import pf.Tcp
 import pf.Sleep
+import pf.RequestExecution
 import pf.Handler
 import pf.MethodRouter
 import pf.Reply
@@ -24,6 +25,9 @@ program = { init!, routes: Router.build(routes, {}) }
 
 init! : {} => Try({ model : Model, listen : Server.ListenOptions }, [StartupErr(Str)])
 init! = |{}| {
+	if RequestExecution.elapsed_nanoseconds!({}) != Err(Unavailable) or RequestExecution.limit_nanoseconds!(0) != Err(Unavailable) {
+		return Err(StartupErr("execution controls must be unavailable in init"))
+	}
 	settings : { path : Str, execution_milliseconds : Try(U64, [Missing]), http1 : Try(Bool, [Missing]) }
 	settings = Config.load!(base_text).map_err(|ConfigErr(message)| StartupErr(message))?
 	limiter = match Concurrency.new!({ max_keys: 1 }) {
@@ -53,10 +57,37 @@ routes : Router(Model, [], {})
 routes = {
 	handler = Handler.effectful(wait_and_answer!)
 	methods = MethodRouter.methods([MethodRouter.get(handler), MethodRouter.post(handler)])
-	Router.new.route("/trailers", methods).route("/empty-trailers", methods).route("/invalid-trailers", methods).route("/echo", methods).route("/reject", methods).route("/invalid-response", methods).route("/sleep", methods).route("/cancel", methods).route("/permit", methods).route("/tcp", methods).route("/tcp-cancel", methods).route("/id", methods).route("/debug", methods).route("/debug-many", methods).route("/crash", methods)
+	Router.new.route("/trailers", methods).route("/empty-trailers", methods).route("/invalid-trailers", methods).route("/echo", methods).route("/reject", methods).route("/invalid-response", methods).route("/sleep", methods).route("/cancel", methods).route("/permit", methods).route("/tcp", methods).route("/tcp-cancel", methods).route("/id", methods).route("/debug", methods).route("/debug-many", methods).route("/crash", methods).route("/execution-elapsed", methods).route("/execution-zero", methods).route("/execution-stale", methods).route("/execution-limit", methods).route("/execution-cap", methods).route("/execution-unavailable", methods)
 }
 
 wait_and_answer! = |Model.(state), context| {
+	path = context.request.path
+	if path == "/execution-unavailable" {
+		if RequestExecution.elapsed_nanoseconds!({}) == Err(Unavailable) and RequestExecution.limit_nanoseconds!(0) == Err(Unavailable) { return Ok(Reply.text("unavailable")) }
+		return Err(Reply.status(500))
+	}
+	if path == "/execution-elapsed" {
+		first = RequestExecution.elapsed_nanoseconds!({}).map_err(|_| Reply.status(500))?
+		RequestExecution.limit_nanoseconds!(U64.highest).map_err(|_| Reply.status(500))?
+		Sleep.millis!(2)
+		second = RequestExecution.elapsed_nanoseconds!({}).map_err(|_| Reply.status(500))?
+		if second < first { crash "elapsed time moved backwards after resumption" }
+		return Ok(Reply.text(first.to_str()))
+	}
+	if path == "/execution-zero" or path == "/execution-stale" {
+		elapsed = RequestExecution.elapsed_nanoseconds!({}).map_err(|_| Reply.status(500))?
+		RequestExecution.limit_nanoseconds!(if path == "/execution-zero" { 0 } else { elapsed }).map_err(|_| Reply.status(500))?
+		crash "expired execution returned to application code"
+	}
+	if path == "/execution-cap" {
+		RequestExecution.limit_nanoseconds!(5_000_000_000).map_err(|_| Reply.status(500))?
+		Sleep.millis!(60_000)
+		crash "server cap was extended"
+	}
+	if path == "/execution-limit" {
+		RequestExecution.limit_nanoseconds!(500_000_000).map_err(|_| Reply.status(500))?
+		RequestExecution.limit_nanoseconds!(U64.highest).map_err(|_| Reply.status(500))?
+	}
 	if context.request.path == "/crash" { crash "HTTP/2 handler failure" }
 	if context.request.path == "/debug" {
 		label = "HTTP/2 debug"
@@ -67,7 +98,7 @@ wait_and_answer! = |Model.(state), context| {
 		count = debug_countdown(20)
 		return Ok(Reply.text(count.to_str()))
 	}
-	if context.request.path == "/cancel" or context.request.path == "/permit" or context.request.path == "/tcp-cancel" {
+	if context.request.path == "/cancel" or context.request.path == "/permit" or context.request.path == "/tcp-cancel" or path == "/execution-limit" {
 		match Concurrency.acquire!(state.limiter, "cancel-key", 1) {
 			Ok({}) => {}
 			Err(_) => return Ok(Reply.text("busy").with_status(429))
@@ -81,7 +112,7 @@ wait_and_answer! = |Model.(state), context| {
 		Sleep.millis!(60000)
 		crash "cancelled handler resumed application code"
 	}
-	if context.request.path == "/tcp" or context.request.path == "/tcp-cancel" {
+	if context.request.path == "/tcp" or context.request.path == "/tcp-cancel" or path == "/execution-limit" {
 		port = match context.request.body {
 			RequestBody.Bytes(bytes) => U16.from_str(Str.from_utf8_lossy(bytes)) ?? 0
 			_ => 0
@@ -95,7 +126,7 @@ wait_and_answer! = |Model.(state), context| {
 				Ok(Str.from_utf8_lossy(bytes))
 			},
 		)
-		if context.request.path == "/tcp-cancel" {
+		if context.request.path == "/tcp-cancel" or path == "/execution-limit" {
 			crash "cancelled TCP handler resumed application code"
 		}
 		return Ok(Reply.text(match result {

@@ -549,5 +549,25 @@ status and error metadata on TCP and Unix sockets. Missing status and truncated
 message envelopes are negative controls. The Roc fixture supplies fixed bytes
 and generic HTTP trailers; the host has no gRPC-specific parsing or status policy.
 This verifies finite transport interoperability, not generated services or RPC
-deadline handling. Metadata-phase execution and per-request deadline APIs remain
-prerequisites for the planned gRPC integration.
+deadline handling. Metadata-phase execution remains a prerequisite for the planned gRPC integration.
+
+## Request execution controls
+
+`RequestExecution.elapsed_nanoseconds!` and `limit_nanoseconds!` act on the current
+HTTP/2 request fiber. The fiber holds a host-only callback to its generation-checked
+stream lease; there is no application-visible transport handle or thread-local
+request identity. The callback holds the connection lock, reads a fresh monotonic
+clock, checks expiry, and optionally tightens the duration from initial header
+completion. It cannot extend an existing server or application deadline.
+
+If execution has closed or expired, the effect ends the fiber without returning
+to Roc. The scheduler's existing abandonment path releases request allocations,
+held permits and borrowed resources; expiry retains the timeout access outcome.
+Otherwise the elapsed operation returns the nanoseconds since initial headers.
+Outside an HTTP/2 request, both operations report `Unavailable`. The effect binding
+lasts through the Roc invocation and follows fiber suspension/resumption.
+
+This exposes deadline control for finite handlers only. Initial dispatch still
+waits for request EOF, so installing a deadline before body collection requires
+the separately planned metadata-phase execution. Protocol timeout parsing stays
+in Roc integrations; the host neither parses `grpc-timeout` nor creates gRPC statuses.

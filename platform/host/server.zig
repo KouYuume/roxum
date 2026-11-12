@@ -631,6 +631,26 @@ fn RequestFiber(comptime Environment: type) type {
             self.thread.io.finishHttp2(self.dispatch, if (failed) access_log.Outcome.encode_failed else null);
         }
 
+        fn requestExecution(ptr: *anyopaque, duration: ?u64) ?u64 {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            const item = &self.shared.handoff.connections[self.dispatch.slot];
+            item.lock.lock();
+            defer item.lock.unlock();
+            const protocol = item.http2 orelse return null;
+            const ticket = self.dispatch.http2 orelse return null;
+            const now = net.monotonicNanoseconds() catch diagnostics.fatal("monotonic clock read failed");
+            protocol.expire(now);
+            _ = protocol.streams.leases.runningStream(ticket) orelse return null;
+            if (duration) |nanoseconds| {
+                // The cap is already installed at HEADERS completion. Tightening
+                // this lease cannot extend it, even when the requested sum saturates.
+                if (!protocol.streams.leases.limitExecution(ticket, nanoseconds, std.math.maxInt(u64))) return null;
+                protocol.expire(now);
+                _ = protocol.streams.leases.runningStream(ticket) orelse return null;
+            }
+            return protocol.streams.leases.headersElapsed(ticket, now);
+        }
+
         fn invokeHttp2(self: *Self) !bool {
             const item = &self.shared.handoff.connections[self.dispatch.slot];
             const ticket = self.dispatch.http2.?;
@@ -659,6 +679,9 @@ fn RequestFiber(comptime Environment: type) type {
             };
             const semantics = if (request.method == bridge.HttpMethod.head) bridge.ResponseRequestSemantics.head else bridge.ResponseRequestSemantics.regular;
             const writer = @import("effect/response_writer.zig");
+            const locals = fiber.currentLocals() orelse unreachable;
+            locals.request_execution = .{ .context = self, .apply = requestExecution };
+            defer locals.request_execution = null;
             writer.activate(.{ .context = self, .start = refuseHttp2Stream, .write = refuseHttp2Write, .abort = refuseHttp2Abort });
             const answered = bridge.rocHandle(self.shared.model_root.retainForHandle(), request);
             writer.deactivate();

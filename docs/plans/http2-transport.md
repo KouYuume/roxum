@@ -153,8 +153,10 @@ retain framing, allocator-failure and controlled lifetime coverage.
 Milestone 1 is still incomplete. The internal deadline lifecycle and configurable
 server execution cap are implemented, and the
 [fixed-byte gRPC interoperability probe](../../tests/grpc-probe/README.md) verifies
-finite Unary exchanges on TCP and Unix sockets. Roc metadata-phase dispatch and
-per-request deadline installation remain required. Broader
+finite Unary exchanges on TCP and Unix sockets. `RequestExecution` exposes
+metadata-anchored elapsed time and deadline tightening in finite handlers.
+Roc metadata-phase dispatch remains required to install those limits before body
+waits. Broader
 cancellation/slow-consumer coverage and incremental streaming capabilities should
 be added in focused changes. Native gRPC is not supported until the later
 integration gates pass.

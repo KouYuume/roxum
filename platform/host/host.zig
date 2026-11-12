@@ -24,6 +24,7 @@ pub const supervisor = @import("supervisor.zig");
 pub const time_effect = @import("effect/time.zig");
 pub const instant_effect = @import("effect/instant.zig");
 pub const sleep_effect = @import("effect/sleep.zig");
+pub const request_execution_effect = @import("effect/request_execution.zig");
 pub const response_writer = @import("effect/response_writer.zig");
 pub const random_effect = @import("effect/random.zig");
 pub const file_effect = @import("effect/file.zig");
@@ -69,6 +70,7 @@ test {
     _ = time_effect;
     _ = instant_effect;
     _ = sleep_effect;
+    _ = request_execution_effect;
     _ = response_writer;
     _ = random_effect;
     _ = file_effect;
