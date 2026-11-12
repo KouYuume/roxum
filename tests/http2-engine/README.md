@@ -16,7 +16,10 @@ bytes at a time. Request and response allocations are poisoned on release. Each
 connection gets at most 32 steps per turn; runnable work is continued without
 waiting for another edge.
 The client checks exact response bytes, completion, rejection, and subsequent
-connection reuse. It covers output credit 15/16/17, input body limits
+connection reuse. A separate trailer exchange verifies final fields before EOF,
+empty-body completion with zero credit, and exact-credit nonempty-body completion.
+Unit tests cover field byte/count boundaries, duplicate completion, reset and
+allocation-failure cleanup. It covers output credit 15/16/17, input body limits
 4095/4096/4097, header-list accounting 1023/1024/1025, sixteen admitted streams,
 reset isolation, and disconnect with a flow-controlled response still retained.
 Separate connections hold 15/16/17 requests open, synchronize with PING ACK, and

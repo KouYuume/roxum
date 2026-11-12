@@ -13,7 +13,7 @@ from h2.config import H2Configuration
 from h2.connection import H2Connection
 from h2.events import DataReceived, ResponseReceived, StreamEnded, StreamReset, ConnectionTerminated
 from h2.settings import SettingCodes
-from h2.events import PingAckReceived, SettingsAcknowledged
+from h2.events import PingAckReceived, SettingsAcknowledged, TrailersReceived
 from h2.errors import ErrorCodes
 from hyperframe.frame import HeadersFrame
 
@@ -475,10 +475,55 @@ def verify_connections(executable, disconnect=False):
         process.wait()
 
 
+def verify_trailers(executable):
+    process = subprocess.Popen([executable], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        assert select.select([process.stdout], [], [], 5)[0]
+        port = int(process.stdout.readline())
+        with socket.create_connection(('127.0.0.1', port), timeout=5) as sock:
+            conn = H2Connection(config=H2Configuration(client_side=True, header_encoding='utf-8'))
+            conn.initiate_connection()
+            conn.update_settings({SettingCodes.INITIAL_WINDOW_SIZE: 0})
+            for sid, data in ((1, b'body'), (3, b'')):
+                conn.send_headers(sid, [(':method', 'POST'), (':scheme', 'http'),
+                    (':authority', 'localhost'), (':path', '/trailers')], end_stream=not data)
+                if data:
+                    conn.send_data(sid, data, end_stream=True)
+            sock.sendall(conn.data_to_send())
+            ended, trailers, bodies = set(), {}, defaultdict(bytes)
+            def receive_until(predicate):
+                while not predicate():
+                    wire = sock.recv(65536)
+                    assert wire
+                    for event in conn.receive_data(wire):
+                        assert not isinstance(event, (StreamReset, ConnectionTerminated)), event
+                        if isinstance(event, DataReceived): bodies[event.stream_id] += event.data
+                        if isinstance(event, TrailersReceived): trailers[event.stream_id] = dict(event.headers)
+                        if isinstance(event, StreamEnded):
+                            assert event.stream_id in trailers, 'EOF before final fields'
+                            ended.add(event.stream_id)
+                    pending = conn.data_to_send()
+                    if pending: sock.sendall(pending)
+            receive_until(lambda: 3 in ended)
+            assert 1 not in ended and bodies[1] == b''
+            conn.increment_flow_control_window(4, stream_id=1)
+            sock.sendall(conn.data_to_send())
+            receive_until(lambda: 1 in ended)
+            assert bodies[1] == b'body' and bodies[3] == b''
+            assert trailers == {1: {'x-result': 'done'}, 3: {'x-result': 'done'}}
+        _, errors = process.communicate(timeout=10)
+        assert process.returncode == 0, errors
+        print('PASS trailers: zero-credit empty response and exact-credit body completion')
+    finally:
+        if process.poll() is None: process.kill()
+        process.wait()
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('server')
     executable = parser.parse_args().server
+    verify_trailers(executable)
     verify(executable)
     verify_input_budget(executable)
     for count in (15, 16, 17):

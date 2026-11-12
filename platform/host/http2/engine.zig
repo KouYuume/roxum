@@ -31,6 +31,8 @@ const Slot = struct {
     received: usize = 0,
     rejected: bool = false,
     responded: bool = false,
+    awaiting_trailers: bool = false,
+    body_done: bool = false,
     head_request: bool = false,
     response: ?[]u8 = null,
     offset: usize = 0,
@@ -127,11 +129,21 @@ pub const Engine = struct {
     /// Copies response bytes; callers may release their buffers on return.
     /// This initial adapter supports finite responses, not duplex writers.
     pub fn respond(self: *Engine, id: StreamId, status: u16, headers: []const Header, body: []const u8) Error!void {
+        return self.submitResponse(id, status, headers, body, false);
+    }
+
+    /// Keep the response open for explicit trailers after the finite DATA provider ends.
+    pub fn beginResponse(self: *Engine, id: StreamId, status: u16, headers: []const Header, body: []const u8) Error!void {
+        return self.submitResponse(id, status, headers, body, true);
+    }
+
+    fn submitResponse(self: *Engine, id: StreamId, status: u16, headers: []const Header, body: []const u8, trailers: bool) Error!void {
         try self.enter();
         defer self.entered = false;
         const slot = self.find(@backingInt(id)) orelse return error.Closed;
         if (slot.rejected) return error.Closed;
         if (slot.responded) return error.InvalidState;
+        if (trailers and (slot.head_request or status == 204 or status == 205 or status == 304)) return error.InvalidState;
         if (status < 200 or status > 599) return error.InvalidHeaders;
         if ((status == 204 or status == 205 or status == 304) and body.len != 0) return error.InvalidState;
         if (headers.len > 64 or body.len > self.limits.response_bytes) return error.LimitExceeded;
@@ -170,8 +182,40 @@ pub const Engine = struct {
             slot.response = null;
         };
         const provider = c.nghttp2_data_provider2{ .source = .{ .ptr = slot }, .read_callback = readResponse };
-        try check(c.nghttp2_submit_response2(self.session, slot.id, &fields, headers.len + 1, if (response_body.len == 0) null else &provider));
+        if (trailers and response_body.len == 0) {
+            try check(c.nghttp2_submit_headers(self.session, c.NGHTTP2_FLAG_NONE, slot.id, null, &fields, headers.len + 1, null));
+            slot.body_done = true;
+        } else {
+            try check(c.nghttp2_submit_response2(self.session, slot.id, &fields, headers.len + 1, if (response_body.len == 0) null else &provider));
+        }
         slot.responded = true;
+        slot.awaiting_trailers = trailers;
+    }
+
+    /// Copies final fields exactly once, after DATA EOF. Failed validation/allocation
+    /// leaves completion available for retry; a closed stream can never complete.
+    pub fn finishResponse(self: *Engine, id: StreamId, trailers: []const Header) Error!void {
+        try self.enter();
+        defer self.entered = false;
+        const slot = self.find(@backingInt(id)) orelse return error.Closed;
+        if (slot.rejected) return error.Closed;
+        if (!slot.awaiting_trailers or !slot.body_done) return error.InvalidState;
+        if (trailers.len > 64) return error.LimitExceeded;
+        var fields: [64]c.nghttp2_nv = undefined;
+        var total: usize = 0;
+        for (trailers, 0..) |header, index| {
+            if (!validHeader(header)) return error.InvalidHeaders;
+            for ([_][]const u8{ "content-length", "host", "trailer", "content-type", "content-encoding", "content-range", "authorization", "proxy-authorization", "www-authenticate", "proxy-authenticate" }) |forbidden| {
+                if (std.mem.eql(u8, header.name, forbidden)) return error.InvalidHeaders;
+            }
+            total = std.math.add(usize, total, header.name.len) catch return error.LimitExceeded;
+            total = std.math.add(usize, total, header.value.len) catch return error.LimitExceeded;
+            total = std.math.add(usize, total, 32) catch return error.LimitExceeded;
+            fields[index] = field(header.name, header.value);
+        }
+        if (total > self.limits.header_bytes) return error.LimitExceeded;
+        try check(c.nghttp2_submit_trailer(self.session, slot.id, &fields, trailers.len));
+        slot.awaiting_trailers = false;
     }
 
     pub fn cancel(self: *Engine, id: StreamId) Error!void {
@@ -311,11 +355,15 @@ fn streamClosed(_: ?*c.nghttp2_session, id: i32, error_code: u32, user: ?*anyopa
 }
 fn readResponse(_: ?*c.nghttp2_session, _: i32, buffer: [*c]u8, length: usize, flags: [*c]u32, source: [*c]c.nghttp2_data_source, _: ?*anyopaque) callconv(std.builtin.CallingConvention.c) isize {
     const slot: *Slot = @ptrCast(@alignCast(source.*.ptr.?));
-    const bytes = slot.response.?;
+    const bytes = slot.response orelse &.{};
     const count = @min(length, bytes.len - slot.offset);
     @memcpy(buffer[0..count], bytes[slot.offset..][0..count]);
     slot.offset += count;
-    if (slot.offset == bytes.len) flags.* = c.NGHTTP2_DATA_FLAG_EOF;
+    if (slot.offset == bytes.len) {
+        slot.body_done = true;
+        flags.* = c.NGHTTP2_DATA_FLAG_EOF;
+        if (slot.awaiting_trailers) flags.* |= c.NGHTTP2_DATA_FLAG_NO_END_STREAM;
+    }
     return @intCast(count);
 }
 
@@ -659,5 +707,141 @@ test "initial metadata handles END_STREAM continuation validation and reentry" {
         try std.testing.expectEqual(@as(usize, if (valid) 1 else 0), context.ends);
         try std.testing.expectEqual(valid, context.ordered);
         try std.testing.expectEqual(valid, context.reentry_rejected);
+    }
+}
+
+test "explicit trailers complete empty and finite bodies once without DATA END_STREAM" {
+    for ([_][]const u8{ "", "body" }) |body| {
+        var context: u8 = 0;
+        const self = try Engine.create(std.testing.allocator, .{}, TestObserver.observer(&context));
+        defer self.destroy();
+        try openTestStream(self);
+        const id: StreamId = @fromBackingInt(1);
+        try std.testing.expectError(error.InvalidState, self.finishResponse(id, &.{}));
+        try self.beginResponse(id, 200, &.{}, body);
+        if (body.len > 0) try std.testing.expectError(error.InvalidState, self.finishResponse(id, &.{}));
+        while (true) {
+            const bytes = try self.output();
+            if (bytes.len == 0) break;
+            // nghttp2 emits complete frames in each mem_send batch.
+            try std.testing.expect(bytes.len >= 9);
+            if (bytes[3] == 0 or bytes[3] == 1) try std.testing.expect(bytes[4] & 1 == 0);
+            try self.consumeOutput(bytes.len);
+        }
+        try std.testing.expectEqual(@as(usize, 1), self.activeStreams());
+        for ([_][]const u8{ ":status", "content-length", "connection", "host", "content-type" }) |name| {
+            try std.testing.expectError(error.InvalidHeaders, self.finishResponse(id, &.{.{ .name = name, .value = "x" }}));
+        }
+        try self.finishResponse(id, &.{.{ .name = "x-result", .value = "done" }});
+        try std.testing.expectError(error.InvalidState, self.finishResponse(id, &.{}));
+        const final = try self.output();
+        try std.testing.expect(final.len >= 9);
+        try std.testing.expectEqual(@as(u8, 1), final[3]);
+        try std.testing.expect(final[4] & 1 != 0);
+        try self.consumeOutput(final.len);
+        try std.testing.expectEqual(@as(usize, 0), self.activeStreams());
+        try std.testing.expectError(error.Closed, self.finishResponse(id, &.{}));
+    }
+}
+
+test "trailer field accounting accepts below and at budget and rejects above" {
+    for ([_]usize{ 63, 64, 65 }) |bytes| {
+        var context: u8 = 0;
+        const self = try Engine.create(std.testing.allocator, .{}, TestObserver.observer(&context));
+        defer self.destroy();
+        try openTestStream(self);
+        self.limits.header_bytes = 64;
+        const id: StreamId = @fromBackingInt(1);
+        try self.beginResponse(id, 200, &.{}, "");
+        while (true) {
+            const output = try self.output();
+            if (output.len == 0) break;
+            try self.consumeOutput(output.len);
+        }
+        const value: [32]u8 = @splat('a');
+        const trailers = [_]Header{.{ .name = "x", .value = value[0 .. bytes - 33] }};
+        if (bytes <= 64) {
+            try self.finishResponse(id, &trailers);
+        } else {
+            try std.testing.expectError(error.LimitExceeded, self.finishResponse(id, &trailers));
+            try self.finishResponse(id, &.{});
+        }
+    }
+}
+
+test "explicit trailer allocation failures release all owned storage" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn run(allocator: std.mem.Allocator) !void {
+            var context: u8 = 0;
+            const self = try Engine.create(allocator, .{}, TestObserver.observer(&context));
+            defer self.destroy();
+            try openTestStream(self);
+            try self.beginResponse(@fromBackingInt(1), 200, &.{}, "data");
+            while (true) {
+                const bytes = try self.output();
+                if (bytes.len == 0) break;
+                try self.consumeOutput(bytes.len);
+            }
+            try self.finishResponse(@fromBackingInt(1), &.{.{ .name = "x-result", .value = "ok" }});
+            while (true) {
+                const bytes = try self.output();
+                if (bytes.len == 0) break;
+                try self.consumeOutput(bytes.len);
+            }
+        }
+    }.run, .{});
+}
+
+test "trailer completion at stream window boundary needs no extra DATA credit" {
+    for ([_]usize{ 65534, 65535, 65536 }) |size| {
+        var context: u8 = 0;
+        const self = try Engine.create(std.testing.allocator, .{ .response_bytes = 65536 }, TestObserver.observer(&context));
+        defer self.destroy();
+        try openTestStream(self);
+        const body = try std.testing.allocator.alloc(u8, size);
+        defer std.testing.allocator.free(body);
+        @memset(body, 'x');
+        const id: StreamId = @fromBackingInt(1);
+        try self.beginResponse(id, 200, &.{}, body);
+        while (true) {
+            const bytes = try self.output();
+            if (bytes.len == 0) break;
+            try self.consumeOutput(bytes.len);
+        }
+        if (size == 65536) {
+            try std.testing.expectError(error.InvalidState, self.finishResponse(id, &.{}));
+            // Restore one byte of both stream and connection credit.
+            try self.receive("\x00\x00\x04\x08\x00\x00\x00\x00\x00\x00\x00\x00\x01" ++
+                "\x00\x00\x04\x08\x00\x00\x00\x00\x01\x00\x00\x00\x01");
+            while (true) {
+                const bytes = try self.output();
+                if (bytes.len == 0) break;
+                try self.consumeOutput(bytes.len);
+            }
+        }
+        try self.finishResponse(id, &.{});
+        const final = try self.output();
+        try std.testing.expect(final.len >= 9 and final[3] == 1 and final[4] & 1 != 0);
+        try self.consumeOutput(final.len);
+    }
+}
+
+test "trailer field count boundary and reset reject terminal reuse" {
+    for ([_]usize{ 63, 64, 65 }) |count| {
+        var context: u8 = 0;
+        const self = try Engine.create(std.testing.allocator, .{}, TestObserver.observer(&context));
+        defer self.destroy();
+        try openTestStream(self);
+        const id: StreamId = @fromBackingInt(1);
+        for ([_]u16{ 204, 205, 304 }) |status| try std.testing.expectError(error.InvalidState, self.beginResponse(id, status, &.{}, ""));
+        try self.beginResponse(id, 200, &.{}, "");
+        const fields: [65]Header = @splat(.{ .name = "x", .value = "y" });
+        if (count <= 64) {
+            try self.finishResponse(id, fields[0..count]);
+        } else {
+            try std.testing.expectError(error.LimitExceeded, self.finishResponse(id, fields[0..count]));
+            try self.cancel(id);
+            try std.testing.expectError(error.Closed, self.finishResponse(id, &.{}));
+        }
     }
 }

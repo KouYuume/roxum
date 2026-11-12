@@ -122,8 +122,10 @@ execution model cannot express the required lifetimes safely.
 
 In progress: [host dependency, internal engine, and nonblocking connection owner](../design/http2-engine.md).
 Opt-in TCP/Unix HTTP/2 listeners now dispatch finite requests through the production
-worker scheduler. Generic trailers, metadata-time deadlines and the fixed-byte gRPC
-probe remain required before this milestone is complete.
+worker scheduler. The internal engine supports explicit finite-body completion with
+trailers, verified independently of the Roc API. Public response completion with
+trailers, metadata-time deadlines and the fixed-byte gRPC probe remain required
+before this milestone is complete.
 
 Implement explicit opt-in HTTP/2 listeners and bounded stream execution, generic
 response trailers, deadlines, and cancellation. Keep gRPC schemas and status
