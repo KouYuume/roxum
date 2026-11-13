@@ -1,7 +1,7 @@
 """Descriptor identities and deterministic Roc module names for one invocation."""
 from dataclasses import dataclass
 import re
-from google.protobuf.descriptor_pb2 import DescriptorProto
+from google.protobuf.descriptor_pb2 import DescriptorProto, FieldDescriptorProto
 
 
 @dataclass(frozen=True)
@@ -86,3 +86,43 @@ def index(request, reserved):
             pending.extend((nested, path) for nested in reversed(descriptor.nested_type))
     require(identities, 'request', 'no messages requested')
     return files, sorted(identities.values(), key=lambda symbol: symbol.roc_name)
+
+
+def references(files, messages):
+    """Resolve canonical descriptor references and reject recursive codec graphs."""
+    identities = {message.full_name: message for message in messages}
+    graph = {}
+    for message in messages:
+        visible = {message.file_name}
+        pending = list(files[message.file_name].dependency)
+        while pending:
+            filename = pending.pop()
+            if filename in visible:
+                continue
+            visible.add(filename)
+            file = files[filename]
+            pending.extend(file.dependency[i] for i in file.public_dependency)
+        edges = set()
+        for field in message.descriptor.field:
+            if field.type != FieldDescriptorProto.TYPE_MESSAGE:
+                continue
+            location = message.location + '.' + field.name
+            target = identities.get(field.type_name)
+            require(target is not None, location, 'unknown fully qualified message type: ' + field.type_name)
+            require(target.file_name in visible, location, 'message type is not visible through imports')
+            edges.add(target.full_name)
+        graph[message.full_name] = edges
+    remaining = dict(graph)
+    while remaining:
+        leaves = {name for name, edges in remaining.items() if not edges}
+        if not leaves:
+            # Every remaining node reaches a cycle; report a cycle member,
+            # not an acyclic ancestor that merely depends on one.
+            node = min(remaining)
+            visited = set()
+            while node not in visited:
+                visited.add(node)
+                node = min(remaining[node])
+            require(False, identities[node].location, 'recursive message fields are not supported')
+        remaining = {name: edges - leaves for name, edges in remaining.items() if name not in leaves}
+    return identities

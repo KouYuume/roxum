@@ -213,6 +213,7 @@ ProtobufWire := [].{
 
 	## Encodes a length-delimited payload; the caller writes its field tag first.
 	## The encoder must append to the supplied child writer and return it.
+	write_message : ProtobufWire.Writer, value, (value, ProtobufWire.Writer -> Try(ProtobufWire.Writer, ProtobufWire.Error)) -> Try(ProtobufWire.Writer, ProtobufWire.Error)
 	write_message = |writer, value, encode_into| {
 		available = ProtobufWire.remaining_output(writer)
 		if available == 0 {
