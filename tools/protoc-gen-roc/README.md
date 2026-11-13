@@ -188,8 +188,11 @@ retained inputs remain available to the caller.
 
 These helpers establish scalar composition only. They do not enable
 message-valued schema fields or recursive codecs. Generated message references,
-child presence and recursive merge, and bounded length-delimited output
-composition remain separate work before those schemas can be accepted.
+child presence and recursive merge, and generated length-delimited output
+composition remain separate work before those schemas can be accepted. The wire
+library provides `write_message(writer, value, Message.encode_into)` for bounded,
+buffered child output; the caller writes the field tag first. Recursive encoding
+still needs a depth/work policy.
 
 ## Toolchain and generation
 

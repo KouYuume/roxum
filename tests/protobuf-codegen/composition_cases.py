@@ -135,6 +135,18 @@ def verify_composition(call, reference, envelope):
             assert len(valid(data, path='/compose-output')) == total
         else:
             rejected(data, 'OutputLimit', '/compose-output')
+    # Length-prefix width transitions and the complete 256-byte parent boundary.
+    for size in [0, 1, 122, 123, 124, 125, 126, 127, 128, 246, 247, 248, 249]:
+        data = child(optional(payload=b'x'*size).SerializeToString()) + b'\x10\x2a'
+        expected = envelope.OptionalEnvelope.FromString(data)
+        wire = expected.SerializeToString()
+        status, encoded = call('/compose-message', data)
+        if len(wire) <= 256:
+            assert status == 200, (size, status, encoded)
+            assert envelope.OptionalEnvelope.FromString(encoded) == expected
+        else:
+            assert (status, encoded) == (400, b'OutputLimit')
+
     # Output can also exhaust inside the generated fields, before the suffix.
     rejected(child(optional(payload=b'x'*11).SerializeToString()), 'OutputLimit', '/compose-output')
     valid(child(optional(unsigned32=42).SerializeToString()) + b'\x10\x2a')

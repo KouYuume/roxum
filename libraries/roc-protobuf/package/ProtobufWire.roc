@@ -211,6 +211,18 @@ ProtobufWire := [].{
 	write_fixed64 : ProtobufWire.Writer, U64 -> Try(ProtobufWire.Writer, ProtobufWire.Error)
 	write_fixed64 = |writer, value| append(writer, encoded_fixed(value, 8))
 
+	## Encodes a length-delimited payload; the caller writes its field tag first.
+	## The encoder must append to the supplied child writer and return it.
+	write_message = |writer, value, encode_into| {
+		available = ProtobufWire.remaining_output(writer)
+		if available == 0 {
+			return Err(OutputLimit)
+		}
+		# Reserve at least one prefix byte; write_bytes checks the actual prefix.
+		child = encode_into(value, ProtobufWire.new_writer(available - 1))?
+		ProtobufWire.write_bytes(writer, ProtobufWire.output(child))
+	}
+
 	write_bytes : ProtobufWire.Writer, List(U8) -> Try(ProtobufWire.Writer, ProtobufWire.Error)
 	write_bytes = |ProtobufWire.Writer.(state), value| {
 		prefix = encoded_varint(value.len())
@@ -659,4 +671,33 @@ skip_all = |reader| {
 		$reader = ProtobufWire.skip(after, field)?
 	}
 	Ok($reader)
+}
+
+# Child output and its length prefix share the parent's remaining capacity.
+expect {
+	var $ok = Bool.True
+	for size in [0.U64, 1, 126, 127, 128, 129] {
+		payload = List.repeat(42.U8, size)
+		needed = 1 + encoded_varint(size).len() + size
+		for capacity in [needed - 1, needed, needed + 1] {
+			parent = ProtobufWire.write_varint(ProtobufWire.new_writer(capacity), 7)?
+			result = ProtobufWire.write_message(parent, payload, |bytes, child| append(child, bytes))
+			$ok = $ok and if capacity < needed {
+				result == Err(OutputLimit)
+			} else {
+				output = result?
+				ProtobufWire.output(output) == [7].concat(encoded_varint(size)).concat(payload)
+					and ProtobufWire.remaining_output(output) == capacity - needed
+					and ProtobufWire.output(parent) == [7]
+			}
+		}
+	}
+	$ok
+}
+
+expect {
+	parent = ProtobufWire.new_writer(0)
+	# No capacity means the encoder is not called, even for an empty message.
+	ProtobufWire.write_message(parent, {}, |_, _| Err(InvalidTag)) == Err(OutputLimit)
+		and ProtobufWire.write_message(ProtobufWire.new_writer(1), {}, |_, _| Err(InvalidTag)) == Err(InvalidTag)
 }
