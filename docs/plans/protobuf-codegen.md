@@ -132,8 +132,9 @@ not just the final returned value. These are logical codec limits, not a claim
 to measure every allocator byte; host request memory limits remain independent.
 The wire foundation tests lower, exact, and upper boundaries. Its writer bounds
 accumulated output; generated scalar encoders can append to an existing bounded
-writer. They still need bounded length-delimited message composition before they
-are usable for gRPC replies.
+writer. `write_message` adds buffered length-delimited composition bounded by
+the remaining output capacity. Generated message fields and recursive encoding
+depth/work limits remain prerequisites for composite gRPC replies.
 
 ## Implementation slices and gates
 
