@@ -9,7 +9,8 @@ presence, plus empty messages. Native `F32`/`F64` conversion is verified, includ
 signed zero and NaN canonicalization. Optional scalar fields use
 `[Absent, Present(T)]`, with present-default values retained on the wire.
 Singular message fields in acyclic type graphs are supported with explicit
-presence and duplicate-occurrence wire merge. Recursive schemas, repeated
+presence and duplicate-occurrence wire merge, with or without explicit `optional`.
+Recursive schemas, repeated
 fields, maps, enums, and real oneofs remain unsupported.
 A [handwritten layout fixture](../../tests/protobuf-layouts/README.md)
 checks bounded self-recursion, mutual recursion, recursive lists, and imported
