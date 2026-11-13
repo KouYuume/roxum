@@ -705,6 +705,9 @@ pub fn build(b: *std.Build) void {
     const run_grpc_probe = b.addSystemCommand(&.{ "python3", "tools/check.py", "--only", "test-grpc-probe" });
     test_grpc_probe.dependOn(&run_grpc_probe.step);
 
+    const test_protobuf_layouts = b.step("test-protobuf-layouts", "Check candidate recursive Protobuf layouts in all backend/allocator modes");
+    const run_protobuf_layouts = b.addSystemCommand(&.{ "python3", "tools/check.py", "--only", "test-protobuf-layouts" });
+    test_protobuf_layouts.dependOn(&run_protobuf_layouts.step);
     const test_protobuf_codegen = b.step("test-protobuf-codegen", "Check generated Protobuf scalar codecs in all backend/allocator modes");
     const run_protobuf_codegen = b.addSystemCommand(&.{ "python3", "tools/check.py", "--only", "test-protobuf-codegen" });
     test_protobuf_codegen.dependOn(&run_protobuf_codegen.step);

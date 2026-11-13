@@ -81,6 +81,8 @@ def contract_verify(script, *apps):
 CONTRACT_ENV = {"ROXUM_CONTRACT_ALLOC": "{contract}"}
 
 TESTS = [
+    Test("test-protobuf-layouts", {"app": "tests/protobuf-layouts/app.roc"},
+         ["python3", "tests/protobuf-layouts/verify.py", "{exe:app}"], env=CONTRACT_ENV),
     # The verification process needs the toolchain and bindings produced by checks.
     Test("test-protobuf-codegen", {"app": "tests/protobuf-codegen/app.roc"},
          ["zig-out/protobuf-codegen/venv/bin/python", "tests/protobuf-codegen/verify.py", "{exe:app}"],
