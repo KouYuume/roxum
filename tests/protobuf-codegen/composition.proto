@@ -15,3 +15,6 @@ message ScalarEnvelope {
 }
 
 message Top { OptionalEnvelope envelope = 1; }
+
+message Collections { repeated string texts = 1; repeated bytes chunks = 2; }
+message CollectionEnvelope { Collections child = 1; }

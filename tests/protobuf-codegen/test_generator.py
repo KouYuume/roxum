@@ -340,6 +340,32 @@ class Generator(unittest.TestCase):
             self.assertTrue(result.error)
             self.assertFalse(result.file)
 
+    def test_repeated_length_fields(self):
+        # No other scalar, message, enum, or group list is enabled by this slice.
+        for kind in set(range(1, 19)) - {9, 12}:
+            req, file, _, field = request()
+            field.type, field.label = kind, 3
+            if kind == 11:
+                file.message_type.add(name='Child')
+                field.type_name = '.Child'
+            result = g.generate(req)
+            self.assertTrue(result.error)
+            self.assertFalse(result.file)
+        for kind in [9, 12]:
+            req, _, _, field = request()
+            field.type, field.label = kind, 3
+            self.assertFalse(g.generate(req).error)
+            for mutate in [lambda f: setattr(f, 'proto3_optional', True),
+                           lambda f: setattr(f, 'oneof_index', 0),
+                           lambda f: setattr(f.options, 'packed', True),
+                           lambda f: setattr(f.options, 'packed', False)]:
+                req, _, _, field = request()
+                field.type, field.label = kind, 3
+                mutate(field)
+                result = g.generate(req)
+                self.assertTrue(result.error)
+                self.assertFalse(result.file)
+
     def test_plugin_error_protocol(self):
         output = subprocess.run([sys.executable, g.__file__], input=b'\x80', capture_output=True, check=True)
         response = g.p.CodeGeneratorResponse.FromString(output.stdout)
