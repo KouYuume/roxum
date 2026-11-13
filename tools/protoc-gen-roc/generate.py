@@ -60,7 +60,7 @@ def validate(request):
             oneof_names.add(oneof.name)
             members = [f for f in message.field if f.HasField('oneof_index') and f.oneof_index == index]
             require(len(members) == 1 and members[0].proto3_optional, where,
-                    'only synthetic oneofs for proto3 optional scalars are supported')
+                    'only synthetic oneofs for proto3 optional fields are supported')
             require(not oneof.options.SerializeToString(), where, 'oneof options are not supported')
         fields = set()
         numbers = set()
@@ -77,10 +77,9 @@ def validate(request):
                     and not field.HasField('default_value') and not field.extendee
                     and (field.type == MESSAGE or not field.type_name),
                     where, 'only singular scalar or message fields are supported')
-            require(field.type != MESSAGE or not field.proto3_optional, where, 'optional message metadata is not supported')
             if field.proto3_optional:
                 require(field.HasField('oneof_index') and 0 <= field.oneof_index < len(message.oneof_decl),
-                        where, 'optional scalar requires a synthetic oneof')
+                        where, 'optional field requires a synthetic oneof')
             else:
                 require(not field.HasField('oneof_index'), where, 'real oneofs are not supported')
             require(not field.options.SerializeToString(), where, 'field options are not supported')

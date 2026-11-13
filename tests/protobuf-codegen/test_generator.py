@@ -308,6 +308,38 @@ class Generator(unittest.TestCase):
         other.public_dependency.append(0)
         self.assertFalse(g.generate(req).error)
 
+    def test_optional_message_metadata(self):
+        def sample():
+            req, file, message, field = request()
+            file.message_type.add(name='Child')
+            field.type, field.type_name = 11, '.Child'
+            return req, message, field
+
+        req, message, field = sample()
+        ordinary = g.generate(req)
+        self.assertFalse(ordinary.error)
+        message.oneof_decl.add(name='_count')
+        field.proto3_optional, field.oneof_index = True, 0
+        explicit = g.generate(req)
+        self.assertFalse(explicit.error)
+        self.assertEqual(ordinary.SerializeToString(), explicit.SerializeToString())
+        # Optional metadata must not bypass oneof, reference, or cycle validation.
+        for mutate in [lambda m, f: f.ClearField('oneof_index'),
+                       lambda m, f: setattr(f, 'oneof_index', -1),
+                       lambda m, f: setattr(f, 'oneof_index', 1),
+                       lambda m, f: setattr(f, 'proto3_optional', False),
+                       lambda m, f: setattr(f, 'type_name', '.Missing'),
+                       lambda m, f: setattr(f, 'type_name', '.Sample'),
+                       lambda m, f: m.field.add(name='other', number=2, type=11,
+                                               label=1, type_name='.Child', oneof_index=0)]:
+            req, message, field = sample()
+            message.oneof_decl.add(name='_count')
+            field.proto3_optional, field.oneof_index = True, 0
+            mutate(message, field)
+            result = g.generate(req)
+            self.assertTrue(result.error)
+            self.assertFalse(result.file)
+
     def test_plugin_error_protocol(self):
         output = subprocess.run([sys.executable, g.__file__], input=b'\x80', capture_output=True, check=True)
         response = g.p.CodeGeneratorResponse.FromString(output.stdout)

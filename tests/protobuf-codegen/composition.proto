@@ -5,7 +5,7 @@ import "scalar.proto";
 
 // Shared schema for generated Roc codecs and the independent Python oracle.
 message OptionalEnvelope {
-  probe.OptionalScalars child = 1;
+  optional probe.OptionalScalars child = 1;
   uint32 tail = 2;
 }
 

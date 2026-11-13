@@ -79,10 +79,10 @@ tag and materialization limits remain shared. Encoders use `write_message` and
 buffer children within remaining output capacity. Acyclic schema depth bounds
 call nesting; total temporary memory can scale with schema depth and output
 limit. There is no independent encoder depth/work limit. Do not interpret the
-output bound as a total allocation bound. Message fields using explicit
-`proto3_optional` metadata are rejected in this slice; ordinary singular message
-fields already preserve presence. Repeated fields, maps and real oneofs remain
-unsupported.
+output bound as a total allocation bound. Message fields with or without explicit
+`optional` use the same presence and merge behavior. Synthetic oneofs remain descriptor metadata and do not introduce
+a user-facing union beyond `Absent / Present`. Repeated fields, maps and real
+oneofs remain unsupported.
 
 ## Scalar representation
 
@@ -129,8 +129,8 @@ occurrences are skipped without setting or clearing presence. Fields without
 `optional` retain implicit default omission in the same message.
 
 The plugin advertises `FEATURE_PROTO3_OPTIONAL` and validates synthetic oneofs:
-each must contain exactly one scalar marked `proto3_optional`, with a valid
-oneof index and no oneof options. Their names are descriptor metadata and are
+each must contain exactly one supported field marked `proto3_optional`, with a
+valid oneof index and no oneof options. Their names are descriptor metadata and are
 not exposed in the Roc API. Real oneofs, including single-member real oneofs,
 remain unsupported. Invalid metadata fails before any generated files are
 returned.
