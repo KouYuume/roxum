@@ -124,6 +124,10 @@ class Generator(unittest.TestCase):
         # Valid messages preceding an unsupported declaration must not be emitted.
         for declaration, diagnostic in [
                 ('message Bad { repeated uint64 value = 1; }', b'invalid.proto:.Bad.value:'),
+                ('message Bad { Bad child = 1; }', b'invalid.proto:.Bad:'),
+                # The diagnostic must identify the cycle, not its acyclic ancestor.
+                ('message Ancestor { Left child = 1; } message Left { Right child = 1; } '
+                 'message Right { Left child = 1; }', b'invalid.proto:.Left:'),
                 ('message Bad { oneof choice { uint64 value = 1; } }', b'invalid.proto:.Bad.choice:'),
                 ('message Builtin { uint64 value = 1; }', b'invalid.proto:.Builtin:'),
                 ('message BUILTIN { uint64 value = 1; }', b'invalid.proto:.BUILTIN:')]:
@@ -181,7 +185,7 @@ class Generator(unittest.TestCase):
         collision('second', 'SampleChild', 'module name collision')
         for package in ['.pkg', 'pkg.', 'pkg..name', '9pkg', 'pkg/name']:
             self.reject(lambda r, f, m, x: setattr(f, 'package', package))
-        for mutate in [lambda n: n.field.add(name='value', number=1, type=11, label=1, type_name='.Sample'),
+        for mutate in [lambda n: n.field.add(name='value', number=1, type=11, label=1, type_name='.Missing'),
                        lambda n: n.field.add(name='value', number=1, type=4, label=3),
                        lambda n: n.enum_type.add(name='Choice'),
                        lambda n: setattr(n.options, 'map_entry', True),
@@ -269,6 +273,40 @@ class Generator(unittest.TestCase):
             self.assertNotEqual(collision.returncode, 0)
             self.assertIn(b'module name collision', collision.stderr)
             self.assertEqual(list(output.iterdir()), [])
+
+    def test_message_references(self):
+        req, file, message, field = request()
+        child = message.nested_type.add(name='Child')
+        child.field.add(name='value', number=1, type=4, label=1)
+        field.type, field.type_name = 11, '.Sample.Child'
+        self.assertFalse(g.generate(req).error)
+        for target in ['', 'Sample.Child', '.Missing', '.Sample']:
+            field.type_name = target
+            result = g.generate(req)
+            self.assertTrue(result.error, target)
+            self.assertFalse(result.file)
+        field.type_name = '.Sample.Child'
+        child.field[0].type, child.field[0].type_name = 11, '.Sample'
+        self.assertIn('recursive', g.generate(req).error)
+        req, file, message, field = request()
+        other = req.proto_file.add(name='other.proto', syntax='proto3')
+        other.message_type.add(name='Other')
+        req.file_to_generate.append('other.proto')
+        field.type, field.type_name = 11, '.Other'
+        self.assertIn('not visible', g.generate(req).error)
+        file.dependency.append('other.proto')
+        self.assertFalse(g.generate(req).error)
+        # A transitive import exposes types only when the intermediate edge is public.
+        leaf = req.proto_file.add(name='leaf.proto', syntax='proto3')
+        leaf.message_type.add(name='Leaf')
+        req.file_to_generate.append('leaf.proto')
+        other.dependency.append('leaf.proto')
+        field.type_name = '.Leaf'
+        result = g.generate(req)
+        self.assertIn('not visible', result.error)
+        self.assertFalse(result.file)
+        other.public_dependency.append(0)
+        self.assertFalse(g.generate(req).error)
 
     def test_plugin_error_protocol(self):
         output = subprocess.run([sys.executable, g.__file__], input=b'\x80', capture_output=True, check=True)

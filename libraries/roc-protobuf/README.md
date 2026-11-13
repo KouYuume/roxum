@@ -132,13 +132,14 @@ Schema-aware decoder fuzzing must be added when that decoder exists.
 with a fresh child writer bounded by the parent's remaining capacity minus one
 byte, then appends its actual length prefix and payload to the parent. Write the
 field tag before calling it. The encoder must append to the supplied child
-writer and return it, as generated `Message.encode_into` does. Empty payloads
+writer and return `Try(ProtobufWire.Writer, ProtobufWire.Error)`, as generated
+`Message.encode_into` does. Empty payloads
 still need a one-byte prefix. A wider prefix can make the final append fail even
 if the child fits; no partial writer is returned. Encoder errors propagate.
 
 This helper buffers the child payload. It bounds each child buffer and final
 output, not total allocation across arbitrary recursive composition. Recursive
-schema support still requires an explicit depth/work policy. It does not enable
-message-valued fields in the generator. The composition fixture verifies a
-handwritten outer encoder against Python, including prefix-width transitions
-and total output boundaries.
+schema support still requires an explicit depth/work policy. Generated acyclic
+message-valued fields use this helper. The composition fixture verifies generated
+and handwritten outer encoders against Python, including prefix-width
+transitions and total output boundaries.

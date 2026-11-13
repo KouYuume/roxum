@@ -21,6 +21,12 @@ def compare(actual, expected):
 
 
 def verify_composition(call, reference, envelope):
+    status, encoded = call('/generated-construct', b'')
+    assert status == 200
+    constructed = envelope.OptionalEnvelope.FromString(encoded)
+    assert constructed.HasField('child') and constructed.tail == 42
+    compare(constructed.child, reference.OptionalScalars(text='', unsigned32=0))
+
     def valid(data, scalar=False, path=None):
         outer = (envelope.ScalarEnvelope if scalar else envelope.OptionalEnvelope).FromString(data)
         message_type = reference.Scalars if scalar else reference.OptionalScalars
@@ -37,10 +43,20 @@ def verify_composition(call, reference, envelope):
             payload = str(len(value.payload)) if value.HasField('payload') else '-'
             view = f'{outer.tail},{unsigned},{text},{payload},{value.implicit_value}'.encode()
             assert call('/compose-view', data) == (200, view)
+        status, generated = call('/generated-scalar-message' if scalar else '/generated-message', data)
+        assert status == 200, (status, generated)
+        actual = type(outer).FromString(generated)
+        assert actual.HasField('child') == outer.HasField('child')
+        assert actual.tail == outer.tail
+        compare(actual.child, outer.child)
+        if not scalar:
+            assert call('/generated-presence', data) == (200, b'present' if outer.HasField('child') else b'absent')
         return encoded
 
     def rejected(data, error, path='/compose'):
         assert call(path, data) == (400, error.encode()), (data.hex(), error)
+        if path == '/compose':
+            assert call('/generated-message', data) == (400, error.encode())
 
     optional = reference.OptionalScalars
     nondefaults = dict(unsigned32=(1 << 32) - 1, signed32=-(1 << 31), signed64=-(1 << 63),
@@ -141,6 +157,7 @@ def verify_composition(call, reference, envelope):
         expected = envelope.OptionalEnvelope.FromString(data)
         wire = expected.SerializeToString()
         status, encoded = call('/compose-message', data)
+        assert call('/generated-message-limit', data) == (status, encoded)
         if len(wire) <= 256:
             assert status == 200, (size, status, encoded)
             assert envelope.OptionalEnvelope.FromString(encoded) == expected
@@ -150,3 +167,13 @@ def verify_composition(call, reference, envelope):
     # Output can also exhaust inside the generated fields, before the suffix.
     rejected(child(optional(payload=b'x'*11).SerializeToString()), 'OutputLimit', '/compose-output')
     valid(child(optional(unsigned32=42).SerializeToString()) + b'\x10\x2a')
+
+    # Absent, one level, and two levels cover the configured depth boundary.
+    # Duplicate outer/inner occurrences merge through both message scopes.
+    for data in [b'', child(b''), child(child(b'')),
+                 child(child(b'\x08\x07') + b'\x10\x2a'),
+                 child(child(b'\x08\x07')) + child(child(b'\x08\x00')) + child(b'')]:
+        status, encoded = call('/generated-top', data)
+        assert status == 200, (status, encoded)
+        assert envelope.Top.FromString(encoded) == envelope.Top.FromString(data)
+    assert call('/generated-top', child(child(b'\x9b\x01\x9c\x01'))) == (400, b'DepthLimit')

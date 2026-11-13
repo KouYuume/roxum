@@ -1,23 +1,27 @@
 # Protobuf codec and generator assessment
 
-Status: milestone 2 has a wire foundation and a small generated scalar pilot.
+Status: milestone 2 has a wire foundation and a generated scalar and acyclic-message pilot.
 The [pure Roc wire library](../../libraries/roc-protobuf/README.md) provides bounded
 primitive reads/writes and unknown-field skipping. The
 [protoc plugin](../../tools/protoc-gen-roc/README.md) generates singular
 codecs for all 15 proto3 scalar types with implicit or explicit `optional`
 presence, plus empty messages. Native `F32`/`F64` conversion is verified, including
 signed zero and NaN canonicalization. Optional scalar fields use
-`[Absent, Present(T)]`, with present-default values retained on the wire. Composite
-schemas remain unsupported. A [handwritten layout fixture](../../tests/protobuf-layouts/README.md)
+`[Absent, Present(T)]`, with present-default values retained on the wire.
+Singular message fields in acyclic type graphs are supported with explicit
+presence and duplicate-occurrence wire merge. Recursive schemas, repeated
+fields, maps, enums, and real oneofs remain unsupported.
+A [handwritten layout fixture](../../tests/protobuf-layouts/README.md)
 checks bounded self-recursion, mutual recursion, recursive lists, and imported
 payload records on the pinned compiler. The generator retains fully qualified
-message identities, emits scalar-only nested declarations with enclosing names
+message identities, emits nested declarations with enclosing names
 concatenated, and supports imports when the complete dependency closure is
 explicitly selected in one invocation. Case-insensitive output collisions fail
 before generation. Generated scalar codecs expose `decode_into` and
 `encode_into` for existing reader/writer composition, with wire merging and
-shared-budget fixtures. Message-reference resolution and generated composite
-codec semantics remain open.
+shared-budget fixtures. Fully qualified message references resolve through
+direct/public imports; acyclic generated message codecs share reader budgets
+and bounded child output.
 This is the next stage of the [gRPC plan](grpc.md), following
 [finite HTTP/2 acceptance](http2-finite-acceptance.md).
 
@@ -133,8 +137,8 @@ to measure every allocator byte; host request memory limits remain independent.
 The wire foundation tests lower, exact, and upper boundaries. Its writer bounds
 accumulated output; generated scalar encoders can append to an existing bounded
 writer. `write_message` adds buffered length-delimited composition bounded by
-the remaining output capacity. Generated message fields and recursive encoding
-depth/work limits remain prerequisites for composite gRPC replies.
+the remaining output capacity. Recursive encoding depth/work limits and the remaining schema
+matrix are still prerequisites for completing composite gRPC support.
 
 ## Implementation slices and gates
 
@@ -167,9 +171,10 @@ identities rather than Roc namespaces; ambiguous flattened module names are
 rejected. Generated scalar `decode_into`/`encode_into` functions preserve reader
 scopes, existing merge values, and accumulated writer capacity. Handwritten
 parent scope drivers compare repeated child occurrences with official Python
-message decoding and exercise shared limits. Generated message references,
-recursive merge, and bounded length-delimited encoding still need fixtures
-before the matrix expands. The handwritten layout fixture demonstrates bounded
+message decoding and exercise shared limits. Generated acyclic message references, recursive merging
+through finite schema levels, and buffered length-delimited encoding have interoperability fixtures.
+Recursive schema graphs remain rejected. The handwritten layout fixture demonstrates
+bounded
 recursive values with `Box`/`List` and co-located mutually recursive nominal definitions.
 It does not yet define generated recursive module boundaries or validate
 composite wire semantics.

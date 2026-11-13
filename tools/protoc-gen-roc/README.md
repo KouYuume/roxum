@@ -11,7 +11,8 @@ the same repository revision and the [pinned Roc compiler](../../docs/toolchain.
 ## Supported input
 
 - Proto3 top-level and lexically nested messages, including empty messages.
-  Nesting declares independent codecs; fields still accept only scalar types.
+  Nesting declares independent codecs; singular message fields may reference them.
+- Singular message fields in acyclic type graphs, with explicit presence and wire merge.
 - All 15 proto3 scalar types as singular fields, with implicit presence or explicit `optional` presence (see below).
 - Message names matching `[A-Z][A-Za-z0-9]*` and field names matching
   `[a-z][a-z0-9]*(?:_[a-z0-9]+)*`. Roc keywords, conflicting built-in names,
@@ -22,7 +23,7 @@ the same repository revision and the [pinned Roc compiler](../../docs/toolchain.
 - Files may contain services; the plugin ignores service declarations and their
   options. It generates no RPC bindings.
 
-Repeated fields, maps, enums, real `oneof`, message-valued fields, proto2,
+Repeated fields, maps, enums, real `oneof`, recursive message fields, proto2,
 editions, extensions, and weak imports are rejected.
 All file/message/field/oneof options are rejected in this pilot, including options
 for other languages. Validation completes before any output is returned;
@@ -55,13 +56,33 @@ transitive imports. The resulting directory is one standalone Roc package;
 there is no external generated-package mapping or automatic dependency output.
 Missing targets/descriptors, duplicate or cyclic imports, invalid public import
 indices, and weak imports fail before output. All selected messages, including
-nested and imported declarations, undergo the same scalar validation. Files
+nested and imported declarations, undergo the same supported-subset validation. Files
 containing only services or import declarations may participate, but the whole
 invocation must contain at least one message.
 
-This establishes identities and output names for scalar declarations. It does
-not resolve message-valued fields, generate cross-message codec calls, or enable
-well-known types. Those require composite codec and import-policy fixtures.
+Message fields resolve canonical fully qualified descriptor names. Targets must
+be in the same file, a direct import, or an import exposed transitively through
+public imports. Unknown or invisible targets and cycles in the message-field
+graph fail before output. Recursive schemas and well-known types remain unsupported.
+
+## Singular message fields
+
+A message field uses `[Absent, Present(Child)]`; defaults are `Absent`. For an absent
+field, an empty wire occurrence sets `Present(Child.defaults)`, and encoding a present empty
+child writes its tag and zero length. Wrong-wire occurrences do not change
+presence. Duplicate occurrences merge into the existing child, retaining absent
+fields and replacing scalar wire occurrences, including explicit defaults.
+This also applies through multiple acyclic message levels.
+
+Generated decoders enter/leave scopes on the same reader; input, field, depth,
+tag and materialization limits remain shared. Encoders use `write_message` and
+buffer children within remaining output capacity. Acyclic schema depth bounds
+call nesting; total temporary memory can scale with schema depth and output
+limit. There is no independent encoder depth/work limit. Do not interpret the
+output bound as a total allocation bound. Message fields using explicit
+`proto3_optional` metadata are rejected in this slice; ordinary singular message
+fields already preserve presence. Repeated fields, maps and real oneofs remain
+unsupported.
 
 ## Scalar representation
 
@@ -186,10 +207,8 @@ limit. It writes neither an enclosing tag nor a length prefix. Empty messages
 leave the writer unchanged. Errors return no partially advanced reader/writer;
 retained inputs remain available to the caller.
 
-These helpers establish scalar composition only. They do not enable
-message-valued schema fields or recursive codecs. Generated message references,
-child presence and recursive merge, and generated length-delimited output
-composition remain separate work before those schemas can be accepted. The wire
+Generated acyclic message fields use these helpers for shared reader state and
+wire merge. Recursive schemas remain unsupported. The wire
 library provides `write_message(writer, value, Message.encode_into)` for bounded,
 buffered child output; the caller writes the field tag first. Recursive encoding
 still needs a depth/work policy.
@@ -275,16 +294,18 @@ payloads. It does not generate codecs or enable recursive schemas.
 Generated nested and imported scalar codecs are checked against Python bindings,
 including direct Roc value views and independent construction. Descriptor and
 real `protoc` tests cover import closure, flattening/package/case collisions,
-atomic rejection, and deterministic output. Shared recursive budgets,
-message-reference resolution, merge behavior, and bounded composition remain
-prerequisites to expanding composite support. This pilot does not complete
+atomic rejection, and deterministic output. Acyclic message references, shared
+reader budgets, duplicate-child merges, and bounded composition are covered by
+generated envelope codecs. Recursive schemas remain unsupported. This pilot does not complete
 milestone 2 or make Unary gRPC available.
 
 The composition fixture uses handwritten outer scope handling with generated
-scalar codecs and Python-only envelope schemas. It checks merges across child
+scalar codecs and shared envelope schemas. It checks merges across child
 occurrences against the official parser, including implicit wire defaults and
 all 15 optional scalar types, retained originals, parent tails, malformed child
 boundaries, and shared input/field/depth/tag/materialization limits. A framed
 writer test checks prefix preservation and total capacity across generated
-fields, an empty codec, and a suffix. The framing is test transport, not a
-generated nested-message encoder.
+fields, an empty codec, and a suffix. The framing is test transport, not itself a
+nested-message encoder. Generated envelope codecs are additionally compared
+with the same Python oracle for presence, merge, shared limits, nested levels,
+and length-delimited output.

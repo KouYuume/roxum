@@ -12,6 +12,9 @@ import generated.Packet
 import generated.Empty
 import generated.Scalars
 import generated.OptionalScalars
+import generated.OptionalEnvelope
+import generated.ScalarEnvelope
+import generated.Top
 import generated.Envelope
 import generated.EnvelopePayload
 import generated.EnvelopeEmpty
@@ -34,7 +37,7 @@ init! = |{}| Ok({
 })
 
 routes : Router(Model, [], {})
-routes = Router.new.route("/compose-message", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose-scalars", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose-retained", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose-view", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose-output", MethodRouter.post(Handler.stateful(composition_answer))).route("/identity-copy", MethodRouter.post(Handler.stateful(identity_answer))).route("/identity-view", MethodRouter.post(Handler.stateful(identity_answer))).route("/identity-construct", MethodRouter.post(Handler.stateful(identity_answer))).route("/identity-empty", MethodRouter.post(Handler.stateful(identity_answer))).route("/optional", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-view", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-text", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-bytes", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-construct", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-defaults", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-clear", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-limits", MethodRouter.post(Handler.stateful(optional_answer))).route("/scalars", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-view", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-text", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-construct", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-limits", MethodRouter.post(Handler.stateful(scalar_answer))).route("/copy", MethodRouter.post(Handler.stateful(answer))).route("/construct", MethodRouter.post(Handler.stateful(answer))).route("/defaults", MethodRouter.post(Handler.stateful(answer))).route("/view", MethodRouter.post(Handler.stateful(answer))).route("/empty", MethodRouter.post(Handler.stateful(answer))).route("/limits", MethodRouter.post(Handler.stateful(answer)))
+routes = Router.new.route("/generated-construct", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/generated-message", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/generated-scalar-message", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/generated-top", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/generated-message-limit", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/generated-presence", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/compose-message", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose-scalars", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose-retained", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose-view", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose-output", MethodRouter.post(Handler.stateful(composition_answer))).route("/identity-copy", MethodRouter.post(Handler.stateful(identity_answer))).route("/identity-view", MethodRouter.post(Handler.stateful(identity_answer))).route("/identity-construct", MethodRouter.post(Handler.stateful(identity_answer))).route("/identity-empty", MethodRouter.post(Handler.stateful(identity_answer))).route("/optional", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-view", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-text", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-bytes", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-construct", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-defaults", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-clear", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-limits", MethodRouter.post(Handler.stateful(optional_answer))).route("/scalars", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-view", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-text", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-construct", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-limits", MethodRouter.post(Handler.stateful(scalar_answer))).route("/copy", MethodRouter.post(Handler.stateful(answer))).route("/construct", MethodRouter.post(Handler.stateful(answer))).route("/defaults", MethodRouter.post(Handler.stateful(answer))).route("/view", MethodRouter.post(Handler.stateful(answer))).route("/empty", MethodRouter.post(Handler.stateful(answer))).route("/limits", MethodRouter.post(Handler.stateful(answer)))
 
 answer = |_model, context| {
 	bytes = match context.request.body {
@@ -391,4 +394,49 @@ write_envelope = |value, tail| {
 	tail_tag = ProtobufWire.write_tag(child, { number: 2, kind: Varint })?
 	complete = ProtobufWire.write_varint(tail_tag, tail.to_u64())?
 	Ok(ProtobufWire.output(complete))
+}
+
+generated_message_answer = |_model, context| {
+	bytes = match context.request.body {
+		RequestBody.Bytes(value) => value
+		_ => []
+	}
+	limits = { input_bytes: 4096, field_bytes: 256, depth: 2, tags: 128, entries: 0, materialized_bytes: 512 }
+	if context.request.path == "/generated-construct" {
+		OptionalScalars.(defaults) = OptionalScalars.defaults
+		child = OptionalScalars.{ ..defaults, text: Present(""), unsigned32: Present(0) }
+		return scalar_reply(OptionalEnvelope.encode(OptionalEnvelope.{ child: Present(child), tail: 42 }, 4096))
+	}
+	if context.request.path == "/generated-top" {
+		return scalar_reply(copy_generated(bytes, limits, Top.decode, Top.encode))
+	}
+	if context.request.path == "/generated-scalar-message" {
+		return scalar_reply(copy_generated(bytes, limits, ScalarEnvelope.decode, ScalarEnvelope.encode))
+	}
+	value = match OptionalEnvelope.decode(bytes, limits) {
+		Ok(decoded) => decoded
+		Err(error) => return scalar_reply(Err(error))
+	}
+	if context.request.path == "/generated-presence" {
+		OptionalEnvelope.(record) = value
+		return Ok(
+			Reply.text(
+				match record.child {
+					Absent => "absent"
+					Present(_) => "present"
+				},
+			),
+		)
+	}
+	capacity = if context.request.path == "/generated-message-limit" {
+		256
+	} else {
+		4096
+	}
+	scalar_reply(OptionalEnvelope.encode(value, capacity))
+}
+
+copy_generated = |bytes, limits, decode, encode| {
+	value = decode(bytes, limits)?
+	encode(value, 4096)
 }

@@ -17,10 +17,7 @@ def main():
                         '--plugin=protoc-gen-roc=' + str(ROOT / 'tools/protoc-gen-roc/protoc-gen-roc'),
                         '--roc_out=wire=../../../libraries/roc-protobuf/package/main.roc:' + directory,
                         '--python_out=' + str(TOOLS), str(FIXTURE / 'scalar.proto'),
-                        str(FIXTURE / 'catalog.proto')], check=True)
-        # Composite schemas are only reference oracles until generated support exists.
-        subprocess.run([str(TOOLS / 'bin/protoc'), '-I', str(FIXTURE),
-                        '--python_out=' + str(TOOLS), str(FIXTURE / 'composition.proto')], check=True)
+                        str(FIXTURE / 'catalog.proto'), str(FIXTURE / 'composition.proto')], check=True)
         files = sorted(output.glob('*.roc'))
         subprocess.run([os.environ.get('ROC_BIN', 'roc'), 'fmt', *map(str, files)], check=True)
         if '--write' in sys.argv:
