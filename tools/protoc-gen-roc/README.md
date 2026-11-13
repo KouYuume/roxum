@@ -10,7 +10,8 @@ the same repository revision and the [pinned Roc compiler](../../docs/toolchain.
 
 ## Supported input
 
-- Proto3 top-level messages, including empty messages.
+- Proto3 top-level and lexically nested messages, including empty messages.
+  Nesting declares independent codecs; fields still accept only scalar types.
 - All 15 proto3 scalar types as singular fields, with implicit presence or explicit `optional` presence (see below).
 - Message names matching `[A-Z][A-Za-z0-9]*` and field names matching
   `[a-z][a-z0-9]*(?:_[a-z0-9]+)*`. Roc keywords, conflicting built-in names,
@@ -21,13 +22,46 @@ the same repository revision and the [pinned Roc compiler](../../docs/toolchain.
 - Files may contain services; the plugin ignores service declarations and their
   options. It generates no RPC bindings.
 
-Imports, nested declarations, repeated fields, maps, enums,
-real `oneof`, message-valued fields, proto2, editions, and extensions are rejected.
+Repeated fields, maps, enums, real `oneof`, message-valued fields, proto2,
+editions, extensions, and weak imports are rejected.
 All file/message/field/oneof options are rejected in this pilot, including options
-for other languages. Names are not automatically transformed. Proto package
-names do not become Roc namespaces; message module names must be unique across
-all files in one invocation. Validation completes before any output is returned;
-errors identify the file/symbol where possible.
+for other languages. Validation completes before any output is returned;
+errors identify the file and fully qualified symbol where possible.
+
+## Schema identities and imports
+
+The generator keeps each message's fully qualified Protobuf identity, including
+its package and enclosing messages. Top-level names retain their spelling;
+nested names concatenate enclosing message names. For example:
+
+| Protobuf identity | Generated nominal type / module |
+|---|---|
+| `.probe.Packet` | `Packet` |
+| `.probe.Envelope` | `Envelope` |
+| `.probe.Envelope.Payload` | `EnvelopePayload` |
+| `.catalog.Entry.Detail` | `EntryDetail` |
+
+Every local message name must match the supported type-name pattern. Generated
+module names must be unique, case-insensitively, across the whole invocation and
+must not conflict with the reserved modules listed above. For example, a
+top-level `EnvelopePayload` collides with `Envelope.Payload`; `a.Packet` and
+`b.Packet` also collide. The generator rejects these schemas rather than adding
+suffixes. Package names are part of schema identity, not Roc namespaces. The
+original fully qualified identity appears in each generated module's comment.
+
+Ordinary and public imports are accepted only when **every imported file is
+explicitly listed as a generation target in the same invocation**, including
+transitive imports. The resulting directory is one standalone Roc package;
+there is no external generated-package mapping or automatic dependency output.
+Missing targets/descriptors, duplicate or cyclic imports, invalid public import
+indices, and weak imports fail before output. All selected messages, including
+nested and imported declarations, undergo the same scalar validation. Files
+containing only services or import declarations may participate, but the whole
+invocation must contain at least one message.
+
+This establishes identities and output names for scalar declarations. It does
+not resolve message-valued fields, generate cross-message codec calls, or enable
+well-known types. Those require composite codec and import-policy fixtures.
 
 ## Scalar representation
 
@@ -120,7 +154,7 @@ zig-out/protobuf-codegen/bin/protoc \
   -I tests/protobuf-codegen \
   --plugin=protoc-gen-roc=tools/protoc-gen-roc/protoc-gen-roc \
   --roc_out=wire=../../libraries/roc-protobuf/package/main.roc:zig-out/scalar-example \
-  tests/protobuf-codegen/scalar.proto
+  tests/protobuf-codegen/scalar.proto tests/protobuf-codegen/catalog.proto
 ```
 
 The required `wire` parameter is the package path as seen from generated
@@ -184,7 +218,12 @@ construct present-default values in Roc, clear fields, and exercise duplicates,
 wrong wire types, malformed values, and cumulative/output bounds.
 A separate [handwritten layout fixture](../../tests/protobuf-layouts/README.md)
 checks bounded self/mutual recursion, recursive lists, and cross-module nominal
-payloads. It does not generate codecs or enable recursive schemas. Generated
-imports/namespaces, shared recursive budgets, merge behavior, and bounded
-composition remain prerequisites to expanding composite support. This pilot
-does not complete milestone 2 or make Unary gRPC available.
+payloads. It does not generate codecs or enable recursive schemas.
+
+Generated nested and imported scalar codecs are checked against Python bindings,
+including direct Roc value views and independent construction. Descriptor and
+real `protoc` tests cover import closure, flattening/package/case collisions,
+atomic rejection, and deterministic output. Shared recursive budgets,
+message-reference resolution, merge behavior, and bounded composition remain
+prerequisites to expanding composite support. This pilot does not complete
+milestone 2 or make Unary gRPC available.

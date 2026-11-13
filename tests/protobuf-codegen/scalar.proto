@@ -1,6 +1,8 @@
 syntax = "proto3";
 package probe;
 
+import "catalog.proto";
+
 message Packet {
   uint64 count = 1;
   fixed32 code = 15;
@@ -13,6 +15,7 @@ message Empty {}
 // Service declarations do not generate bindings in codec mode.
 service Echo {
   rpc Send(Packet) returns (Packet);
+  rpc Inspect(catalog.Entry.Detail) returns (Envelope.Payload);
 }
 
 message Scalars {
@@ -47,4 +50,12 @@ message OptionalScalars {
   optional fixed64 fixed64_value = 14;
   optional bytes payload = 15;
   uint32 implicit_value = 16;
+}
+
+// Lexical nesting defines separate scalar codecs, not message-valued fields.
+message Envelope {
+  message Payload {
+    optional string text = 1;
+  }
+  message Empty {}
 }

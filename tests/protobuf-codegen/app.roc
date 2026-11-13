@@ -12,6 +12,11 @@ import generated.Packet
 import generated.Empty
 import generated.Scalars
 import generated.OptionalScalars
+import generated.Envelope
+import generated.EnvelopePayload
+import generated.EnvelopeEmpty
+import generated.Entry
+import generated.EntryDetail
 
 Model := {}
 
@@ -29,7 +34,7 @@ init! = |{}| Ok({
 })
 
 routes : Router(Model, [], {})
-routes = Router.new.route("/optional", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-view", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-text", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-bytes", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-construct", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-defaults", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-clear", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-limits", MethodRouter.post(Handler.stateful(optional_answer))).route("/scalars", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-view", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-text", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-construct", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-limits", MethodRouter.post(Handler.stateful(scalar_answer))).route("/copy", MethodRouter.post(Handler.stateful(answer))).route("/construct", MethodRouter.post(Handler.stateful(answer))).route("/defaults", MethodRouter.post(Handler.stateful(answer))).route("/view", MethodRouter.post(Handler.stateful(answer))).route("/empty", MethodRouter.post(Handler.stateful(answer))).route("/limits", MethodRouter.post(Handler.stateful(answer)))
+routes = Router.new.route("/identity-copy", MethodRouter.post(Handler.stateful(identity_answer))).route("/identity-view", MethodRouter.post(Handler.stateful(identity_answer))).route("/identity-construct", MethodRouter.post(Handler.stateful(identity_answer))).route("/identity-empty", MethodRouter.post(Handler.stateful(identity_answer))).route("/optional", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-view", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-text", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-bytes", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-construct", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-defaults", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-clear", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-limits", MethodRouter.post(Handler.stateful(optional_answer))).route("/scalars", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-view", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-text", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-construct", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-limits", MethodRouter.post(Handler.stateful(scalar_answer))).route("/copy", MethodRouter.post(Handler.stateful(answer))).route("/construct", MethodRouter.post(Handler.stateful(answer))).route("/defaults", MethodRouter.post(Handler.stateful(answer))).route("/view", MethodRouter.post(Handler.stateful(answer))).route("/empty", MethodRouter.post(Handler.stateful(answer))).route("/limits", MethodRouter.post(Handler.stateful(answer)))
 
 answer = |_model, context| {
 	bytes = match context.request.body {
@@ -211,4 +216,86 @@ optional_answer = |_model, context| {
 presence_view = |value, render| match value {
 	Absent => "-"
 	Present(item) => render(item)
+}
+
+# Each discriminator selects a distinct generated nominal type and schema identity.
+identity_answer = |_model, context| {
+	bytes = match context.request.body {
+		RequestBody.Bytes(value) => value
+		_ => []
+	}
+	limits = ProtobufWire.default_limits
+	if context.request.path == "/identity-empty" {
+		Envelope.(_) = match Envelope.decode(bytes, limits) {
+			Ok(value) => value
+			Err(error) => return scalar_reply(Err(error))
+		}
+		EnvelopeEmpty.(_) = match EnvelopeEmpty.decode(bytes, limits) {
+			Ok(value) => value
+			Err(error) => return scalar_reply(Err(error))
+		}
+		return scalar_reply(EnvelopeEmpty.encode(EnvelopeEmpty.defaults, 0))
+	}
+	selector = match List.first(bytes) {
+		Ok(value) => value
+		Err(_) => return Ok(Reply.text("missing selector").with_status(400))
+	}
+	input = List.drop_first(bytes, 1)
+	construct = context.request.path == "/identity-construct"
+	view = context.request.path == "/identity-view"
+	match selector {
+		0 => {
+			value = if construct {
+				EnvelopePayload.{ text: Present("nested 🐦") }
+			} else {
+				match EnvelopePayload.decode(input, limits) {
+					Ok(decoded) => decoded
+					Err(error) => return scalar_reply(Err(error))
+				}
+			}
+			EnvelopePayload.(record) = value
+			if view {
+				return Ok(
+					Reply.text(
+						match record.text {
+							Absent => "absent"
+							Present(text) => "present:${text}"
+						},
+					),
+				)
+			}
+			scalar_reply(EnvelopePayload.encode(value, 4096))
+		}
+		1 => {
+			value = if construct {
+				Entry.{ count: 18446744073709551615 }
+			} else {
+				match Entry.decode(input, limits) {
+					Ok(decoded) => decoded
+					Err(error) => return scalar_reply(Err(error))
+				}
+			}
+			Entry.(record) = value
+			if view {
+				return Ok(Reply.text(record.count.to_str()))
+			}
+			scalar_reply(Entry.encode(value, 4096))
+		}
+		2 => {
+			value = if construct {
+				EntryDetail.{ payload: [0, 128, 255] }
+			} else {
+				match EntryDetail.decode(input, limits) {
+					Ok(decoded) => decoded
+					Err(error) => return scalar_reply(Err(error))
+				}
+			}
+			EntryDetail.(record) = value
+			if view {
+				return Ok(Reply.bytes(record.payload, "application/octet-stream"))
+			}
+			scalar_reply(EntryDetail.encode(value, 4096))
+		}
+		_ => Ok(Reply.text("unknown selector").with_status(400))
+	}
 }

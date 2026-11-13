@@ -92,7 +92,6 @@ class Generator(unittest.TestCase):
         for mutate in [lambda r, f, m, x: f.dependency.append('other.proto'),
                        lambda r, f, m, x: f.enum_type.add(name='Enum'),
                        lambda r, f, m, x: f.extension.add(name='extension'),
-                       lambda r, f, m, x: m.nested_type.add(name='Nested'),
                        lambda r, f, m, x: m.enum_type.add(name='Enum'),
                        lambda r, f, m, x: m.oneof_decl.add(name='choice'),
                        lambda r, f, m, x: m.extension_range.add(start=1, end=2),
@@ -124,10 +123,10 @@ class Generator(unittest.TestCase):
         root = pathlib.Path(__file__).resolve().parents[2]
         # Valid messages preceding an unsupported declaration must not be emitted.
         for declaration, diagnostic in [
-                ('message Bad { repeated uint64 value = 1; }', b'invalid.proto:Bad.value:'),
-                ('message Bad { oneof choice { uint64 value = 1; } }', b'invalid.proto:Bad.choice:'),
-                ('message Builtin { uint64 value = 1; }', b'invalid.proto:Builtin:'),
-                ('message BUILTIN { uint64 value = 1; }', b'invalid.proto:BUILTIN:')]:
+                ('message Bad { repeated uint64 value = 1; }', b'invalid.proto:.Bad.value:'),
+                ('message Bad { oneof choice { uint64 value = 1; } }', b'invalid.proto:.Bad.choice:'),
+                ('message Builtin { uint64 value = 1; }', b'invalid.proto:.Builtin:'),
+                ('message BUILTIN { uint64 value = 1; }', b'invalid.proto:.BUILTIN:')]:
             with self.subTest(declaration=declaration), tempfile.TemporaryDirectory() as directory:
                 base = pathlib.Path(directory)
                 schema = base / 'invalid.proto'
@@ -141,6 +140,135 @@ class Generator(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(diagnostic, result.stderr)
                 self.assertEqual(list(output.iterdir()), [])
+
+    def test_nested_identities_and_deterministic_output(self):
+        req, file, message, _ = request()
+        file.package = 'example.v1'
+        nested = message.nested_type.add(name='Payload')
+        nested.oneof_decl.add(name='_text')
+        nested.field.add(name='text', number=1, type=9, label=1,
+                         proto3_optional=True, oneof_index=0)
+        nested.nested_type.add(name='Empty')
+        imported = req.proto_file.add(name='other.proto', syntax='proto3', package='other')
+        imported.message_type.add(name='Record')
+        file.dependency.append('other.proto')
+        file.public_dependency.append(0)
+        req.file_to_generate.append('other.proto')
+        first = g.generate(req)
+        self.assertFalse(first.error, first.error)
+        self.assertEqual([f.name for f in first.file],
+                         ['Record.roc', 'Sample.roc', 'SamplePayload.roc', 'SamplePayloadEmpty.roc', 'main.roc'])
+        self.assertIn('# Protobuf message: .example.v1.Sample.Payload', first.file[2].content)
+        self.assertIn('SamplePayload :=', first.file[2].content)
+        req.file_to_generate.reverse()
+        req.proto_file.reverse()
+        self.assertEqual(first.SerializeToString(), g.generate(req).SerializeToString())
+
+    def test_identity_collisions_and_invalid_nested_declarations(self):
+        def collision(package, name, diagnostic):
+            req, file, message, _ = request()
+            file.package = 'first'
+            message.nested_type.add(name='Child')
+            other = req.proto_file.add(name='other.proto', syntax='proto3', package=package)
+            other.message_type.add(name=name)
+            req.file_to_generate.append('other.proto')
+            result = g.generate(req)
+            self.assertIn(diagnostic, result.error)
+            self.assertFalse(result.file)
+        collision('first', 'Sample', 'duplicate message identity')
+        collision('second', 'Sample', 'module name collision')
+        collision('second', 'SAMPLE', 'module name collision')
+        collision('second', 'SampleChild', 'module name collision')
+        for package in ['.pkg', 'pkg.', 'pkg..name', '9pkg', 'pkg/name']:
+            self.reject(lambda r, f, m, x: setattr(f, 'package', package))
+        for mutate in [lambda n: n.field.add(name='value', number=1, type=11, label=1, type_name='.Sample'),
+                       lambda n: n.field.add(name='value', number=1, type=4, label=3),
+                       lambda n: n.enum_type.add(name='Choice'),
+                       lambda n: setattr(n.options, 'map_entry', True),
+                       lambda n: setattr(n, 'name', 'bad_name')]:
+            self.reject(lambda r, f, m, x: mutate(m.nested_type.add(name='Child')))
+
+    def test_import_closure_and_rejections(self):
+        def imported_request():
+            req, file, _, _ = request()
+            # A diamond import graph exercises shared and transitive dependencies.
+            for name, dependencies in [('left', ['leaf']), ('right', ['leaf']), ('leaf', [])]:
+                imported = req.proto_file.add(name=name + '.proto', syntax='proto3')
+                imported.message_type.add(name=name.title())
+                imported.dependency.extend(dep + '.proto' for dep in dependencies)
+                req.file_to_generate.append(imported.name)
+            file.dependency.extend(['left.proto', 'right.proto'])
+            file.public_dependency.append(0)
+            return req
+        self.assertFalse(g.generate(imported_request()).error)
+        cases = [
+            (lambda r: r.file_to_generate.remove('leaf.proto'), 'generation target'),
+            (lambda r: r.proto_file.pop(), 'missing descriptor'),
+            (lambda r: r.proto_file[0].dependency.append('missing.proto'), 'missing import descriptor'),
+            (lambda r: r.proto_file[0].dependency.append('left.proto'), 'duplicate imports'),
+            (lambda r: r.proto_file[0].weak_dependency.append(0), 'weak imports'),
+            (lambda r: r.proto_file[0].public_dependency.append(0), 'public import indices'),
+            (lambda r: r.proto_file[-1].dependency.append('test.proto'), 'cyclic imports'),
+            (lambda r: r.proto_file[0].dependency.append('test.proto'), 'cyclic imports'),
+            (lambda r: r.proto_file[-1].enum_type.add(name='Choice'), 'enums and extensions'),
+        ]
+        # Public indices immediately below, at, and above the valid upper bound.
+        for index in [-1, 1, 2, 3]:
+            req = imported_request()
+            req.proto_file[0].public_dependency[:] = [index]
+            result = g.generate(req)
+            self.assertEqual(bool(result.error), index != 1)
+            if result.error:
+                self.assertFalse(result.file)
+        for mutate, diagnostic in cases:
+            with self.subTest(diagnostic=diagnostic):
+                req = imported_request()
+                mutate(req)
+                result = g.generate(req)
+                self.assertIn(diagnostic, result.error)
+                self.assertFalse(result.file)
+
+    def test_import_only_files_and_empty_requests(self):
+        req, file, _, _ = request()
+        file.dependency.append('services.proto')
+        services = req.proto_file.add(name='services.proto', syntax='proto3')
+        services.service.add(name='Ignored')
+        req.file_to_generate.append(services.name)
+        self.assertFalse(g.generate(req).error)
+        file.ClearField('message_type')
+        result = g.generate(req)
+        self.assertIn('no messages requested', result.error)
+        self.assertFalse(result.file)
+        req.ClearField('file_to_generate')
+        result = g.generate(req)
+        self.assertIn('no files requested', result.error)
+        self.assertFalse(result.file)
+
+    def test_protoc_import_targets_and_collisions(self):
+        root = pathlib.Path(__file__).resolve().parents[2]
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory)
+            (base / 'leaf.proto').write_text('syntax = "proto3"; package other; message Leaf { optional string text = 1; }')
+            (base / 'root.proto').write_text('syntax = "proto3"; package example; import public "leaf.proto"; message Root { message Child {} }')
+            output = base / 'output'
+            output.mkdir()
+            command = [str(root / 'zig-out/protobuf-codegen/bin/protoc'), '-I', directory,
+                       '--plugin=protoc-gen-roc=' + str(root / 'tools/protoc-gen-roc/protoc-gen-roc'),
+                       '--roc_out=wire=./wire/main.roc:' + str(output)]
+            missing = subprocess.run(command + ['root.proto'], capture_output=True)
+            self.assertNotEqual(missing.returncode, 0)
+            self.assertIn(b'leaf.proto must also be listed as a generation target', missing.stderr)
+            self.assertEqual(list(output.iterdir()), [])
+            subprocess.run(command + ['root.proto', 'leaf.proto'], capture_output=True, check=True)
+            self.assertEqual({f.name for f in output.iterdir()}, {'Root.roc', 'RootChild.roc', 'Leaf.roc', 'main.roc'})
+            for file in output.iterdir():
+                file.unlink()
+            with (base / 'root.proto').open('a') as file:
+                file.write(' message RootChild {}')
+            collision = subprocess.run(command + ['root.proto', 'leaf.proto'], capture_output=True)
+            self.assertNotEqual(collision.returncode, 0)
+            self.assertIn(b'module name collision', collision.stderr)
+            self.assertEqual(list(output.iterdir()), [])
 
     def test_plugin_error_protocol(self):
         output = subprocess.run([sys.executable, g.__file__], input=b'\x80', capture_output=True, check=True)
