@@ -2,12 +2,14 @@ app [target] { fuzz: platform "https://github.com/lukewilliamboswell/roc-fuzz/re
 
 import fuzz.Fuzz
 import ProtobufWire
+import ScopeFuzz
 
 target = Fuzz.target_with({
 	name: "protobuf-wire",
 	generator: Fuzz.raw_bytes,
 	show: |bytes| Str.inspect(bytes),
 	test: |bytes| {
+		ScopeFuzz.check(bytes)
 		match check(bytes) {
 			Ok({}) => Fuzz.keep
 			Err(_) => Fuzz.keep

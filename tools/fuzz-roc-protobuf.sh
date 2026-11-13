@@ -23,9 +23,11 @@ if [[ "$actual" != d9bae1e93e6e94f3fafb4040861402dbab90af247023461d8e5451db4a3ae
     exit 1
 fi
 cp "$repo_root/fuzz/roc-protobuf/target.roc" "$temporary_dir/target.roc"
+cp "$repo_root/fuzz/roc-protobuf/ScopeFuzz.roc" "$temporary_dir/ScopeFuzz.roc"
 cp "$repo_root/libraries/roc-protobuf/package/ProtobufWire.roc" "$temporary_dir/ProtobufWire.roc"
 mkdir "$temporary_dir/corpus"
 cp "$repo_root"/fuzz/corpus/roc-protobuf/* "$temporary_dir/corpus/"
+"$ROC_BIN" test "$temporary_dir/ScopeFuzz.roc"
 "$ROC_BIN" build --fuzz --output="$temporary_dir/protobuf-fuzz" "$temporary_dir/target.roc"
 "$temporary_dir/protobuf-fuzz" run "$temporary_dir/corpus" \
     --runs="$RUNS" --seed=424242 --max-input-size=4096 --timeout=5 --memory-limit=256

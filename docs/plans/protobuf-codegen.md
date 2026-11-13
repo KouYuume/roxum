@@ -160,7 +160,9 @@ remains milestone 3.
 The wire foundation has module boundary tests and an application fixture that
 compares primitive reads/writes and skips with an independent Python wire parser
 across the Roc backend/allocator matrix. Arbitrary-byte fuzzing checks progress,
-read/skip agreement, and varint round trips. See its [verification commands](../../libraries/roc-protobuf/README.md#verification).
+read/skip agreement, and varint round trips. Structured nested-message fuzzing
+checks scope boundaries and cumulative budgets against a separate counter model.
+See its [verification commands](../../libraries/roc-protobuf/README.md#verification).
 The pinned fuzz runner supports macOS arm64 and Linux x64, not Linux arm64;
 the latter still runs the module and differential tests.
 This is not generated-schema interoperability with an established Protobuf

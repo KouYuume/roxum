@@ -90,7 +90,14 @@ random bytes. This independent wire implementation is not the milestone 2 gate
 for generated-schema interoperability with an established Protobuf library.
 
 The pinned Roc fuzz runner checks arbitrary input, parser progress, scalar
-read/skip agreement, and varint round trips. Its corpus and seed are retained;
+read/skip agreement, and varint round trips. A second path generates nested
+messages with leaves before and after each child. It threads charged readers
+through `reserve`, `read_bytes`, `enter_message`, and `leave_message`, checking
+scope boundaries and comparing outcomes with an independent cumulative budget
+model. Each input runs with both generous and input-derived small limits.
+Deterministic scope tests cover the lower, exact, and upper boundaries of the
+shared counters and run before fuzz compilation.
+Its corpus and seed are retained;
 `RUNS` overrides the default 10,000 iterations. The pinned runner ships hosts
 only for macOS arm64 and Linux x64. On those environments,
 `zig build fuzz-protobuf` and the complete `tools/check.py` suite run this target.
