@@ -10,7 +10,7 @@ ROC = os.environ.get('ROC_BIN', 'roc')
 
 
 class ScalarOracle(unittest.TestCase):
-    def run_oracle(self, writer=None):
+    def run_oracle(self, writer=None, opt="dev"):
         with tempfile.TemporaryDirectory(prefix='roxum-scalar-oracle-') as directory:
             base = pathlib.Path(directory)
             for name in ['ProtobufWire.roc', 'ProtobufScalar.roc']:
@@ -24,13 +24,15 @@ class ScalarOracle(unittest.TestCase):
                 source += writer + '\n'
             target = base / 'ScalarFuzz.roc'
             target.write_text(source)
-            return subprocess.run([ROC, 'test', str(target)], cwd=ROOT, capture_output=True,
+            return subprocess.run([ROC, 'test', f'--opt={opt}', str(target)], cwd=ROOT, capture_output=True,
                                   text=True, timeout=60)
 
     def test_real_codecs_accept_valid_and_malformed_inputs(self):
-        result = self.run_oracle()
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('tests passed', result.stdout + result.stderr)
+        for opt in ['dev', 'interpreter']:
+            with self.subTest(opt=opt):
+                result = self.run_oracle(opt=opt)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn('tests passed', result.stdout + result.stderr)
 
     def test_post_decode_failures_are_detected(self):
         cases = [
@@ -46,7 +48,10 @@ class ScalarOracle(unittest.TestCase):
         ]
         for name, writer, diagnostic in cases:
             with self.subTest(name=name):
-                result = self.run_oracle(writer)
+                # The pinned Roc's native test crash path SIGSEGVs on Linux x64,
+                # even for a standalone `expect { crash "probe" }`. Interpret
+                # negative controls so only the intended oracle diagnostic passes.
+                result = self.run_oracle(writer, opt='interpreter')
                 self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertIn('Roc application crashed with this message:', result.stdout + result.stderr)
                 self.assertIn(diagnostic, result.stdout + result.stderr)
