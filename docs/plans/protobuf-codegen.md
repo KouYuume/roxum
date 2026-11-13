@@ -10,8 +10,12 @@ signed zero and NaN canonicalization. Optional scalar fields use
 `[Absent, Present(T)]`, with present-default values retained on the wire. Composite
 schemas remain unsupported. A [handwritten layout fixture](../../tests/protobuf-layouts/README.md)
 checks bounded self-recursion, mutual recursion, recursive lists, and imported
-payload records on the pinned compiler; generated naming/imports and composite
-codec semantics remain open.
+payload records on the pinned compiler. The generator retains fully qualified
+message identities, emits scalar-only nested declarations with enclosing names
+concatenated, and supports imports when the complete dependency closure is
+explicitly selected in one invocation. Case-insensitive output collisions fail
+before generation. Message-reference resolution and composite codec semantics
+remain open.
 This is the next stage of the [gRPC plan](grpc.md), following
 [finite HTTP/2 acceptance](http2-finite-acceptance.md).
 
@@ -152,11 +156,15 @@ message composition before they are usable for gRPC replies.
    reference fixtures and dependencies, verify deterministic generation, and
    document the package/tool compatibility contract.
 
-Each slice may require more than one focused PR. Slice 2 has a scalar pilot;
-imports/namespaces and generated composite codecs still need fixtures before the
-matrix expands. The handwritten layout fixture demonstrates bounded recursive
-values with `Box`/`List` and co-located mutually recursive nominal definitions.
-It does not yet define generated module boundaries or validate wire semantics.
+Each slice may require more than one focused PR. Slice 2 has scalar generation,
+including nested declarations and explicit multi-file import closure, with
+collision and deterministic-output fixtures. Package names remain schema
+identities rather than Roc namespaces; ambiguous flattened module names are
+rejected. Generated message references and composite codecs still need fixtures
+before the matrix expands. The handwritten layout fixture demonstrates bounded
+recursive values with `Box`/`List` and co-located mutually recursive nominal definitions.
+It does not yet define generated recursive module boundaries or validate
+composite wire semantics.
 Scalar representation, including native floats, bounded UTF-8 conversion, and
 optional presence, is implemented. Before
 expanding the generator, resolve compiler limitations with evidence rather than

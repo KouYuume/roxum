@@ -4,6 +4,7 @@ import sys
 from google.protobuf import descriptor_pb2 as d
 from google.protobuf.compiler import plugin_pb2 as p
 from google.protobuf.message import DecodeError
+import schema
 
 # Roc type, wire tag, primitive suffix, default expression.
 SCALARS = {
@@ -38,67 +39,54 @@ def require(condition, location, reason):
 def validate(request):
     require(re.fullmatch(r'wire=[A-Za-z0-9_./:-]+', request.parameter), 'parameter',
             'expected wire=<Roc package path>; only letters, digits, _, ., /, :, - are accepted')
-    files = {f.name: f for f in request.proto_file}
-    require(len(files) == len(request.proto_file), 'request', 'duplicate file descriptors')
-    require(request.file_to_generate, 'request', 'no files requested')
-    require(len(set(request.file_to_generate)) == len(request.file_to_generate), 'request', 'duplicate generation targets')
-    names = set()
-    messages = []
-    for filename in request.file_to_generate:
-        require(filename in files, filename, 'missing descriptor')
+    files, messages = schema.index(request, RESERVED)
+    for filename in sorted(request.file_to_generate):
         file = files[filename]
         require(file.syntax == 'proto3', filename, 'only proto3 is supported')
-        require(not file.dependency, filename, 'imports are not supported')
         require(not file.enum_type and not file.extension, filename, 'enums and extensions are not supported')
         require(not file.options.SerializeToString() and not file.HasField('edition'), filename, 'file options and editions are not supported')
-        for message in file.message_type:
-            loc = f'{filename}:{message.name}'
-            name = message.name
-            require(re.fullmatch(r'[A-Z][A-Za-z0-9]*', name) and name.lower() not in {n.lower() for n in RESERVED},
-                    loc, 'message name is not a supported Roc type name')
-            require(name.lower() not in names, loc, 'message module name collision')
-            names.add(name.lower())
-            require(not message.nested_type and not message.enum_type
-                    and not message.extension and not message.extension_range,
-                    loc, 'nested types, enums, and extensions are not supported')
-            require(not message.options.SerializeToString(), loc, 'message options are not supported')
-            oneof_names = set()
-            for index, oneof in enumerate(message.oneof_decl):
-                where = loc + '.' + oneof.name
-                require(re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', oneof.name)
-                        and oneof.name not in oneof_names, where, 'invalid or duplicate oneof name')
-                oneof_names.add(oneof.name)
-                members = [f for f in message.field if f.HasField('oneof_index') and f.oneof_index == index]
-                require(len(members) == 1 and members[0].proto3_optional, where,
-                        'only synthetic oneofs for proto3 optional scalars are supported')
-                require(not oneof.options.SerializeToString(), where, 'oneof options are not supported')
-            fields = set()
-            numbers = set()
-            for field in message.field:
-                where = loc + '.' + field.name
-                require(re.fullmatch(r'[a-z][a-z0-9]*(?:_[a-z0-9]+)*', field.name)
-                        and field.name not in KEYWORDS, where, 'field name is not a supported Roc identifier')
-                require(field.name not in fields and field.number not in numbers, where, 'duplicate field')
-                fields.add(field.name)
-                numbers.add(field.number)
-                require(1 <= field.number <= 536870911 and not 19000 <= field.number <= 19999,
-                        where, 'invalid field number')
-                require(field.type in SCALARS and field.label == d.FieldDescriptorProto.LABEL_OPTIONAL
-                        and not field.HasField('default_value') and not field.type_name and not field.extendee,
-                        where, 'only singular scalar fields are supported')
-                if field.proto3_optional:
-                    require(field.HasField('oneof_index') and 0 <= field.oneof_index < len(message.oneof_decl),
-                            where, 'optional scalar requires a synthetic oneof')
-                else:
-                    require(not field.HasField('oneof_index'), where, 'real oneofs are not supported')
-                require(not field.options.SerializeToString(), where, 'field options are not supported')
-            messages.append(message)
-    require(messages, 'request', 'no messages requested')
+    for symbol in messages:
+        message = symbol.descriptor
+        loc = symbol.location
+        require(not message.enum_type and not message.extension and not message.extension_range,
+                loc, 'enums and extensions are not supported')
+        require(not message.options.SerializeToString(), loc, 'message options are not supported')
+        oneof_names = set()
+        for index, oneof in enumerate(message.oneof_decl):
+            where = loc + '.' + oneof.name
+            require(re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', oneof.name)
+                    and oneof.name not in oneof_names, where, 'invalid or duplicate oneof name')
+            oneof_names.add(oneof.name)
+            members = [f for f in message.field if f.HasField('oneof_index') and f.oneof_index == index]
+            require(len(members) == 1 and members[0].proto3_optional, where,
+                    'only synthetic oneofs for proto3 optional scalars are supported')
+            require(not oneof.options.SerializeToString(), where, 'oneof options are not supported')
+        fields = set()
+        numbers = set()
+        for field in message.field:
+            where = loc + '.' + field.name
+            require(re.fullmatch(r'[a-z][a-z0-9]*(?:_[a-z0-9]+)*', field.name)
+                    and field.name not in KEYWORDS, where, 'field name is not a supported Roc identifier')
+            require(field.name not in fields and field.number not in numbers, where, 'duplicate field')
+            fields.add(field.name)
+            numbers.add(field.number)
+            require(1 <= field.number <= 536870911 and not 19000 <= field.number <= 19999,
+                    where, 'invalid field number')
+            require(field.type in SCALARS and field.label == d.FieldDescriptorProto.LABEL_OPTIONAL
+                    and not field.HasField('default_value') and not field.type_name and not field.extendee,
+                    where, 'only singular scalar fields are supported')
+            if field.proto3_optional:
+                require(field.HasField('oneof_index') and 0 <= field.oneof_index < len(message.oneof_decl),
+                        where, 'optional scalar requires a synthetic oneof')
+            else:
+                require(not field.HasField('oneof_index'), where, 'real oneofs are not supported')
+            require(not field.options.SerializeToString(), where, 'field options are not supported')
     return messages
 
 
-def emit(message):
-    name = message.name
+def emit(symbol):
+    message = symbol.descriptor
+    name = symbol.roc_name
     fields = sorted(message.field, key=lambda f: f.number)
     shape = ', '.join(f'{f.name} : ' + (f'[Absent, Present({SCALARS[f.type][0]})]' if f.proto3_optional else SCALARS[f.type][0]) for f in fields)
     defaults = ', '.join(f'{f.name}: ' + ('Absent' if f.proto3_optional else SCALARS[f.type][3]) for f in fields)
@@ -107,6 +95,7 @@ def emit(message):
         imports.append('import wire.ProtobufScalar')
     lines = [
         '# Generated by protoc-gen-roc; regenerate from the schema.',
+        f'# Protobuf message: {symbol.full_name}',
         *imports, '', f'{name} := {{ {shape} }}.{{',
         '\tis_eq : _', f'\tdefaults : {name}', f'\tdefaults = {name}.{{ {defaults} }}', '',
         f'\tdecode : List(U8), ProtobufWire.Limits -> Try({name}, ProtobufWire.Error)',
@@ -154,9 +143,9 @@ def generate(request):
     try:
         messages = validate(request)
         response.supported_features = p.CodeGeneratorResponse.FEATURE_PROTO3_OPTIONAL
-        for message in sorted(messages, key=lambda m: m.name):
-            response.file.add(name=message.name + '.roc', content=emit(message))
-        modules = ', '.join(sorted(m.name for m in messages))
+        for message in messages:
+            response.file.add(name=message.roc_name + '.roc', content=emit(message))
+        modules = ', '.join(sorted(m.roc_name for m in messages))
         response.file.add(name='main.roc', content=f'package\n    [{modules}]\n    {{ wire: "{request.parameter[5:]}" }}\n')
     except ValueError as error:
         response.ClearField('file')

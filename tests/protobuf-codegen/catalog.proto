@@ -1,0 +1,9 @@
+syntax = "proto3";
+package catalog;
+
+message Entry {
+  uint64 count = 1;
+  message Detail {
+    bytes payload = 1;
+  }
+}
