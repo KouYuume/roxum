@@ -1,9 +1,11 @@
 # Protobuf codec and generator assessment
 
-Status: milestone 2 inventory and the initial wire foundation are implemented.
+Status: milestone 2 has a wire foundation and a small generated scalar pilot.
 The [pure Roc wire library](../../libraries/roc-protobuf/README.md) provides bounded
-primitive reads/writes and unknown-field skipping. Schema-aware codecs,
-generator implementation, and generated-type compiler feasibility remain open.
+primitive reads/writes and unknown-field skipping. The
+[protoc plugin](../../tools/protoc-gen-roc/README.md) generates implicit singular
+`uint64`, `fixed32`, `fixed64`, and `bytes` codecs, plus empty messages. The broader
+schema matrix and recursive/float/presence type feasibility remain open.
 This is the next stage of the [gRPC plan](grpc.md), following
 [finite HTTP/2 acceptance](http2-finite-acceptance.md).
 
@@ -37,12 +39,13 @@ codec exists. The plugin reads `CodeGeneratorRequest` and writes
 [plugin schema](https://github.com/protocolbuffers/protobuf/blob/main/src/google/protobuf/compiler/plugin.proto).
 This choice is for build tooling only and does not add Python to deployed apps.
 
-Before introducing dependencies, pin compatible `protoc` and Python Protobuf
-versions, record artifact hashes and licenses, and verify installation on the
-repository's supported development/test environments. Include the independent
-test implementation in that lock. The wire foundation adds no Protobuf dependency
-and does not select an untested generator version. Keep the codec package and generator
-versioned together initially; establish packaging before advertising reuse.
+The scalar pilot pins `protoc` 33.5 and the official Python Protobuf 6.33.5
+universal wheel, including the independent reference implementation. Its
+[toolchain instructions](../../tools/protoc-gen-roc/README.md#toolchain-and-generation)
+record artifact hashes and licenses. These dependencies are build-time only.
+Validate dependency changes on the supported development/test environments.
+Keep the codec package and generator versioned together initially; establish
+packaging before advertising reuse.
 
 ## Initial schema target
 
@@ -143,9 +146,10 @@ message composition before they are usable for gRPC replies.
    reference fixtures and dependencies, verify deterministic generation, and
    document the package/tool compatibility contract.
 
-Each slice may require more than one focused PR. The immediate next change is
-slice 2, not a Unary service or another HTTP/2 host change. Before expanding
-the generator, resolve compiler limitations with evidence rather than silently
+Each slice may require more than one focused PR. Slice 2 has a scalar pilot;
+imports/namespaces, recursive types, floating-point representation, and presence
+layouts still need feasibility fixtures before the matrix expands. Before
+expanding the generator, resolve compiler limitations with evidence rather than silently
 changing the compiler pin or moving pure codec logic into the host.
 
 Milestone 2 remains incomplete until generated code compiles with the pinned
@@ -165,7 +169,13 @@ checks scope boundaries and cumulative budgets against a separate counter model.
 See its [verification commands](../../libraries/roc-protobuf/README.md#verification).
 The pinned fuzz runner supports macOS arm64 and Linux x64, not Linux arm64;
 the latter still runs the module and differential tests.
-This is not generated-schema interoperability with an established Protobuf
-implementation. Generated fixtures, a generator dependency lock, and generated
-type feasibility results remain absent. Neither these primitive checks nor the
-existing fixed-byte gRPC probe complete milestone 2.
+The scalar pilot adds generated Roc and Python fixtures, pinned build tools,
+and value comparisons with official Python Protobuf for its advertised subset.
+The `test-protobuf-codegen` group covers defaults, duplicates, unknown/wrong-wire
+fields, malformed inputs, resource bounds, schema rejection, and deterministic
+output. It compiles empty and scalar record types across the backend/allocator
+matrix. The reference implementation's overlong-tag limitation is recorded in
+the [generator verification notes](../../tools/protoc-gen-roc/README.md#verification).
+These checks do not establish support for the rest of the target matrix or
+complete milestone 2; the fixed-byte gRPC probe still supplies no generated
+service bindings.

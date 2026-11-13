@@ -9,8 +9,10 @@ length-delimited bytes. It skips unknown fields, including matched groups, and
 can enter/leave length-delimited messages while retaining the same budgets.
 Integers are raw wire values: signed conversion, ZigZag, floating-point
 conversion, UTF-8 validation, presence, merge rules and typed message generation
-remain later work. The wire reader accepts reserved field numbers because their
-schema restrictions do not make incoming unknown fields malformed.
+remain separate schema-layer work. A [scalar generator pilot](../../tools/protoc-gen-roc/README.md)
+now uses this library for four implicit-presence field types. The wire reader
+accepts reserved field numbers because their schema restrictions do not make
+incoming unknown fields malformed.
 
 ## Reader contract
 

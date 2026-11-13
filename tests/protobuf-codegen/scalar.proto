@@ -1,0 +1,16 @@
+syntax = "proto3";
+package probe;
+
+message Packet {
+  uint64 count = 1;
+  fixed32 code = 15;
+  fixed64 stamp = 16;
+  bytes payload = 536870911;
+}
+
+message Empty {}
+
+// Service declarations do not generate bindings in codec mode.
+service Echo {
+  rpc Send(Packet) returns (Packet);
+}
