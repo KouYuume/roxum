@@ -208,3 +208,39 @@ expect {
 	}
 	$ok
 }
+
+# Crossing 128 UTF-8 bytes grows the varint prefix from one byte to two.
+# Exercise remaining capacity after an existing byte as well as an empty writer.
+expect {
+	var $ok = Bool.True
+	for (length, prefix) in [(127.U64, [127.U8]), (128, [128, 1]), (129, [129, 1])] {
+		bytes = List.repeat(97.U8, length)
+		text = Str.from_utf8(bytes)?
+		expected = prefix.concat(bytes)
+		for occupied in [0.U64, 1] {
+			for capacity in [expected.len() - 1, expected.len(), expected.len() + 1] {
+				initial = ProtobufWire.new_writer(occupied + capacity)
+				writer = if occupied == 0 {
+					initial
+				} else {
+					ProtobufWire.write_varint(initial, 42)?
+				}
+				match ProtobufScalar.write_string(writer, text) {
+					Ok(after) => {
+						output = if occupied == 0 {
+							expected
+						} else {
+							[42.U8].concat(expected)
+						}
+						$ok = $ok and capacity >= expected.len() and ProtobufWire.output(after) == output
+							and ProtobufWire.remaining_output(after) == capacity - expected.len()
+					}
+					Err(error) => {
+						$ok = $ok and capacity < expected.len() and error == OutputLimit
+					}
+				}
+			}
+		}
+	}
+	$ok
+}
