@@ -8,7 +8,10 @@ codecs for all 15 proto3 scalar types with implicit or explicit `optional`
 presence, plus empty messages. Native `F32`/`F64` conversion is verified, including
 signed zero and NaN canonicalization. Optional scalar fields use
 `[Absent, Present(T)]`, with present-default values retained on the wire. Composite
-schemas and recursive type feasibility remain open.
+schemas remain unsupported. A [handwritten layout fixture](../../tests/protobuf-layouts/README.md)
+checks bounded self-recursion, mutual recursion, recursive lists, and imported
+payload records on the pinned compiler; generated naming/imports and composite
+codec semantics remain open.
 This is the next stage of the [gRPC plan](grpc.md), following
 [finite HTTP/2 acceptance](http2-finite-acceptance.md).
 
@@ -150,9 +153,12 @@ message composition before they are usable for gRPC replies.
    document the package/tool compatibility contract.
 
 Each slice may require more than one focused PR. Slice 2 has a scalar pilot;
-imports/namespaces, recursive types, and composite layouts still need feasibility
-fixtures before the matrix expands. Scalar representation, including native
-floats, bounded UTF-8 conversion, and optional presence, is implemented. Before
+imports/namespaces and generated composite codecs still need fixtures before the
+matrix expands. The handwritten layout fixture demonstrates bounded recursive
+values with `Box`/`List` and co-located mutually recursive nominal definitions.
+It does not yet define generated module boundaries or validate wire semantics.
+Scalar representation, including native floats, bounded UTF-8 conversion, and
+optional presence, is implemented. Before
 expanding the generator, resolve compiler limitations with evidence rather than
 silently changing the compiler pin or moving pure codec logic into the host.
 
@@ -191,3 +197,11 @@ implementation's overlong-tag limitation is recorded in the [generator verificat
 These checks do not establish support for the rest of the target matrix or
 complete milestone 2; the fixed-byte gRPC probe still supplies no generated
 service bindings.
+
+The separate `test-protobuf-layouts` group checks construction, cross-module
+traversal, retained originals after child replacement, and request-lifetime
+cleanup for those candidate layouts across all backends and allocators. Input
+selects depth and heap-backed payloads at runtime. Closed-form Python assertions
+cover node/payload summaries, depth and input boundaries, and repeated deep
+requests; tracking mode requires one allocator success marker per request.
+This closes the bounded type-layout experiment, not recursive schema support.

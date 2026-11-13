@@ -182,6 +182,9 @@ Optional scalar layouts are verified across all scalar types and backends. Tests
 compare presence with Python `HasField`, directly inspect Roc tags and values,
 construct present-default values in Roc, clear fields, and exercise duplicates,
 wrong wire types, malformed values, and cumulative/output bounds.
-Imports/namespaces, recursion, and composite layouts still need feasibility
-fixtures before extending support. This pilot
+A separate [handwritten layout fixture](../../tests/protobuf-layouts/README.md)
+checks bounded self/mutual recursion, recursive lists, and cross-module nominal
+payloads. It does not generate codecs or enable recursive schemas. Generated
+imports/namespaces, shared recursive budgets, merge behavior, and bounded
+composition remain prerequisites to expanding composite support. This pilot
 does not complete milestone 2 or make Unary gRPC available.
