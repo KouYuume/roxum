@@ -1,0 +1,16 @@
+syntax = "proto3";
+package composition;
+
+import "scalar.proto";
+
+// Python-only oracle for the handwritten scope driver in the Roc test fixture.
+// The Roc generator still rejects message-valued fields.
+message OptionalEnvelope {
+  probe.OptionalScalars child = 1;
+  uint32 tail = 2;
+}
+
+message ScalarEnvelope {
+  probe.Scalars child = 1;
+  uint32 tail = 2;
+}

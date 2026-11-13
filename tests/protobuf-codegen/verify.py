@@ -10,10 +10,12 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / 'zig-out/protobuf-codegen'), str(ROOT / 'tests/support')]
 import scalar_pb2 as reference
 import catalog_pb2 as catalog
+import composition_pb2 as composition
 from roxum_process import read_port, stop
 from scalar_cases import verify_scalars
 from optional_cases import verify_optional
 from identity_cases import verify_identities
+from composition_cases import verify_composition
 
 
 def varint(number):
@@ -95,6 +97,7 @@ def verify(executable):
             verify_scalars(call, reference)
             verify_optional(call, reference)
             verify_identities(call, reference, catalog)
+            verify_composition(call, reference, composition)
             for data in valid_cases():
                 valid(data)
             status, encoded = call('/construct', b'')

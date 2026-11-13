@@ -142,6 +142,55 @@ field-number order. String encoding checks capacity for the full length-prefixed
 value before converting it to a byte list. Neither API parses a gRPC envelope or
 assigns gRPC statuses.
 
+## Composing generated codecs
+
+The generated types also expose two lower-level pure functions for codec
+composition. The existing `decode` and `encode` APIs delegate to them; their
+standalone behavior is unchanged.
+
+```roc
+Packet.decode_into(reader, initial)
+Packet.encode_into(value, writer)
+```
+
+`decode_into` returns `Try((Message, ProtobufWire.Reader), ProtobufWire.Error)`.
+It consumes exactly the reader's current scope, starting from `initial`, and
+returns the reader with its accumulated counters. Missing fields retain their
+initial value. Each known scalar occurrence replaces that field, including
+explicit zero/empty values for implicit scalars and `Present(default)` for
+optional scalars. Unknown fields and wrong-wire-type occurrences are validated
+and skipped without clearing the initial value. This is a **wire merge**; it is
+not an object merge that ignores default-valued implicit fields.
+
+The caller enters and leaves child scopes explicitly:
+
+```roc
+inside = ProtobufWire.enter_message(reader)?
+(merged, after_child) = Packet.decode_into(inside, previous)?
+after = ProtobufWire.leave_message(after_child)?
+```
+
+Pass the reader returned by every operation onward. `decode_into` creates no
+reader and does not enter or leave scopes; a truncated child cannot consume its
+parent's following fields. Tags, materialization, and depth remain shared with
+the parent and subsequent children, including repeated occurrences that replace
+earlier values. Initial values are already constructed and are not charged
+again; the budget accounts for processing the supplied reader, not arbitrary
+storage supplied by the caller. Old values remain usable after a successful
+merge. As with the wire API, retaining and reusing an old reader deliberately
+replays its input and budget; these are pure values rather than linear handles.
+
+`encode_into` returns `Try(ProtobufWire.Writer, ProtobufWire.Error)`. It appends
+fields to the supplied writer and preserves its existing bytes and total output
+limit. It writes neither an enclosing tag nor a length prefix. Empty messages
+leave the writer unchanged. Errors return no partially advanced reader/writer;
+retained inputs remain available to the caller.
+
+These helpers establish scalar composition only. They do not enable
+message-valued schema fields or recursive codecs. Generated message references,
+child presence and recursive merge, and bounded length-delimited output
+composition remain separate work before those schemas can be accepted.
+
 ## Toolchain and generation
 
 Requires Python 3.9+ and the pinned Roc compiler on `PATH` (or `ROC_BIN`). From the
@@ -227,3 +276,12 @@ atomic rejection, and deterministic output. Shared recursive budgets,
 message-reference resolution, merge behavior, and bounded composition remain
 prerequisites to expanding composite support. This pilot does not complete
 milestone 2 or make Unary gRPC available.
+
+The composition fixture uses handwritten outer scope handling with generated
+scalar codecs and Python-only envelope schemas. It checks merges across child
+occurrences against the official parser, including implicit wire defaults and
+all 15 optional scalar types, retained originals, parent tails, malformed child
+boundaries, and shared input/field/depth/tag/materialization limits. A framed
+writer test checks prefix preservation and total capacity across generated
+fields, an empty codec, and a suffix. The framing is test transport, not a
+generated nested-message encoder.

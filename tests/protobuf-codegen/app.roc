@@ -34,7 +34,7 @@ init! = |{}| Ok({
 })
 
 routes : Router(Model, [], {})
-routes = Router.new.route("/identity-copy", MethodRouter.post(Handler.stateful(identity_answer))).route("/identity-view", MethodRouter.post(Handler.stateful(identity_answer))).route("/identity-construct", MethodRouter.post(Handler.stateful(identity_answer))).route("/identity-empty", MethodRouter.post(Handler.stateful(identity_answer))).route("/optional", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-view", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-text", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-bytes", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-construct", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-defaults", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-clear", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-limits", MethodRouter.post(Handler.stateful(optional_answer))).route("/scalars", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-view", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-text", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-construct", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-limits", MethodRouter.post(Handler.stateful(scalar_answer))).route("/copy", MethodRouter.post(Handler.stateful(answer))).route("/construct", MethodRouter.post(Handler.stateful(answer))).route("/defaults", MethodRouter.post(Handler.stateful(answer))).route("/view", MethodRouter.post(Handler.stateful(answer))).route("/empty", MethodRouter.post(Handler.stateful(answer))).route("/limits", MethodRouter.post(Handler.stateful(answer)))
+routes = Router.new.route("/compose", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose-scalars", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose-retained", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose-view", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose-output", MethodRouter.post(Handler.stateful(composition_answer))).route("/identity-copy", MethodRouter.post(Handler.stateful(identity_answer))).route("/identity-view", MethodRouter.post(Handler.stateful(identity_answer))).route("/identity-construct", MethodRouter.post(Handler.stateful(identity_answer))).route("/identity-empty", MethodRouter.post(Handler.stateful(identity_answer))).route("/optional", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-view", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-text", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-bytes", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-construct", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-defaults", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-clear", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-limits", MethodRouter.post(Handler.stateful(optional_answer))).route("/scalars", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-view", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-text", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-construct", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-limits", MethodRouter.post(Handler.stateful(scalar_answer))).route("/copy", MethodRouter.post(Handler.stateful(answer))).route("/construct", MethodRouter.post(Handler.stateful(answer))).route("/defaults", MethodRouter.post(Handler.stateful(answer))).route("/view", MethodRouter.post(Handler.stateful(answer))).route("/empty", MethodRouter.post(Handler.stateful(answer))).route("/limits", MethodRouter.post(Handler.stateful(answer)))
 
 answer = |_model, context| {
 	bytes = match context.request.body {
@@ -298,4 +298,86 @@ identity_answer = |_model, context| {
 		}
 		_ => Ok(Reply.text("unknown selector").with_status(400))
 	}
+}
+
+composition_answer = |_model, context| {
+	bytes = match context.request.body {
+		RequestBody.Bytes(value) => value
+		_ => []
+	}
+	limits = { input_bytes: 4096, field_bytes: 256, depth: 2, tags: 128, entries: 0, materialized_bytes: 512 }
+	if context.request.path == "/compose-scalars" {
+		(value, tail, _) = match read_envelope(bytes, limits, Scalars.defaults, Scalars.decode_into) {
+			Ok(result) => result
+			Err(error) => return scalar_reply(Err(error))
+		}
+		return scalar_reply(write_framed(value, tail, 4096, Scalars.encode_into))
+	}
+	(value, tail, first) = match read_envelope(bytes, limits, OptionalScalars.defaults, OptionalScalars.decode_into) {
+		Ok(result) => result
+		Err(error) => return scalar_reply(Err(error))
+	}
+	OptionalScalars.(record) = value
+	if context.request.path == "/compose-view" {
+		unsigned = presence_view(record.unsigned32, |item| item.to_str())
+		text = presence_view(record.text, |item| item)
+		payload = presence_view(record.payload, |item| item.len().to_str())
+		return Ok(Reply.text("${tail.to_str()},${unsigned},${text},${payload},${record.implicit_value.to_str()}"))
+	}
+	selected = if context.request.path == "/compose-retained" {
+		first
+	} else {
+		value
+	}
+	capacity = if context.request.path == "/compose-output" {
+		16
+	} else {
+		4096
+	}
+	scalar_reply(write_framed(selected, tail, capacity, OptionalScalars.encode_into))
+}
+
+# Handwritten outer driver: generated scalar codecs own only the entered scope.
+read_envelope = |bytes, limits, initial, decode_into| {
+	var $reader = ProtobufWire.new_reader(bytes, limits)?
+	var $value = initial
+	var $first = initial
+	var $seen = Bool.False
+	var $tail = 0.U32
+	while ProtobufWire.remaining($reader) > 0 {
+		(field, after_tag) = ProtobufWire.read_tag($reader)?
+		$reader = after_tag
+		match (field.number, field.kind) {
+			(1, Bytes) => {
+				inside = ProtobufWire.enter_message($reader)?
+				(merged, after_child) = decode_into(inside, $value)?
+				$value = merged
+				if !$seen {
+					$first = merged
+					$seen = Bool.True
+				}
+				$reader = ProtobufWire.leave_message(after_child)?
+			}
+			(2, Varint) => {
+				(tail, after) = ProtobufWire.read_varint($reader)?
+				$tail = tail.to_u32_wrap()
+				$reader = after
+			}
+			_ => {
+				$reader = ProtobufWire.skip($reader, field)?
+			}
+		}
+	}
+	Ok(($value, $tail, $first))
+}
+
+# Test transport framing proves that codec output preserves a prefix and leaves
+# the shared capacity for a suffix. It is not a Protobuf nested-message encoder.
+write_framed = |value, tail, capacity, encode_into| {
+	prefix = ProtobufWire.write_fixed32(ProtobufWire.new_writer(capacity), 0x44332211)?
+	fields = encode_into(value, prefix)?
+	# Empty codecs must preserve both the accumulated bytes and the limit.
+	unchanged = Empty.encode_into(Empty.defaults, fields)?
+	complete = ProtobufWire.write_fixed32(unchanged, tail)?
+	Ok(ProtobufWire.output(complete))
 }

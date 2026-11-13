@@ -10,8 +10,17 @@ Scalars := { unsigned32 : U32, signed32 : I32, signed64 : I64, zigzag32 : I32, z
 
 	decode : List(U8), ProtobufWire.Limits -> Try(Scalars, ProtobufWire.Error)
 	decode = |input, limits| {
-		var $reader = ProtobufWire.new_reader(input, limits)?
-		var $value = { unsigned32: 0.U32, signed32: 0.I32, signed64: 0.I64, zigzag32: 0.I32, zigzag64: 0.I64, signed_fixed32: 0.I32, signed_fixed64: 0.I64, enabled: Bool.False, text: "", float_value: 0.0.F32, double_value: 0.0.F64 }
+		reader = ProtobufWire.new_reader(input, limits)?
+		(value, _) = Scalars.decode_into(reader, Scalars.defaults)?
+		Ok(value)
+	}
+
+	## Consumes the current reader scope and merges wire occurrences into initial.
+	## Thread the returned reader onward; this does not enter or leave a message.
+	decode_into : ProtobufWire.Reader, Scalars -> Try((Scalars, ProtobufWire.Reader), ProtobufWire.Error)
+	decode_into = |reader, Scalars.(initial)| {
+		var $reader = reader
+		var $value = initial
 		while ProtobufWire.remaining($reader) > 0 {
 			(field, after_tag) = ProtobufWire.read_tag($reader)?
 			$reader = after_tag
@@ -76,12 +85,19 @@ Scalars := { unsigned32 : U32, signed32 : I32, signed64 : I64, zigzag32 : I32, z
 				}
 			}
 		}
-		Ok(Scalars.($value))
+		Ok((Scalars.($value), $reader))
 	}
 
 	encode : Scalars, U64 -> Try(List(U8), ProtobufWire.Error)
-	encode = |Scalars.(value), max_bytes| {
-		var $writer = ProtobufWire.new_writer(max_bytes)
+	encode = |value, max_bytes| {
+		writer = Scalars.encode_into(value, ProtobufWire.new_writer(max_bytes))?
+		Ok(ProtobufWire.output(writer))
+	}
+
+	## Appends fields to the supplied writer, retaining its accumulated output limit.
+	encode_into : Scalars, ProtobufWire.Writer -> Try(ProtobufWire.Writer, ProtobufWire.Error)
+	encode_into = |Scalars.(value), writer| {
+		var $writer = writer
 		if value.unsigned32 != 0.U32 {
 			$writer = ProtobufWire.write_tag($writer, { number: 1, kind: Varint })?
 			$writer = ProtobufScalar.write_uint32($writer, value.unsigned32)?
@@ -126,6 +142,6 @@ Scalars := { unsigned32 : U32, signed32 : I32, signed64 : I64, zigzag32 : I32, z
 			$writer = ProtobufWire.write_tag($writer, { number: 11, kind: Fixed64 })?
 			$writer = ProtobufScalar.write_double($writer, value.double_value)?
 		}
-		Ok(ProtobufWire.output($writer))
+		Ok($writer)
 	}
 }

@@ -9,8 +9,17 @@ Empty := {}.{
 
 	decode : List(U8), ProtobufWire.Limits -> Try(Empty, ProtobufWire.Error)
 	decode = |input, limits| {
-		var $reader = ProtobufWire.new_reader(input, limits)?
-		var $value = {}
+		reader = ProtobufWire.new_reader(input, limits)?
+		(value, _) = Empty.decode_into(reader, Empty.defaults)?
+		Ok(value)
+	}
+
+	## Consumes the current reader scope and merges wire occurrences into initial.
+	## Thread the returned reader onward; this does not enter or leave a message.
+	decode_into : ProtobufWire.Reader, Empty -> Try((Empty, ProtobufWire.Reader), ProtobufWire.Error)
+	decode_into = |reader, Empty.(initial)| {
+		var $reader = reader
+		var $value = initial
 		while ProtobufWire.remaining($reader) > 0 {
 			(field, after_tag) = ProtobufWire.read_tag($reader)?
 			$reader = after_tag
@@ -20,12 +29,19 @@ Empty := {}.{
 				}
 			}
 		}
-		Ok(Empty.($value))
+		Ok((Empty.($value), $reader))
 	}
 
 	encode : Empty, U64 -> Try(List(U8), ProtobufWire.Error)
-	encode = |Empty.(_value), max_bytes| {
-		var $writer = ProtobufWire.new_writer(max_bytes)
-		Ok(ProtobufWire.output($writer))
+	encode = |value, max_bytes| {
+		writer = Empty.encode_into(value, ProtobufWire.new_writer(max_bytes))?
+		Ok(ProtobufWire.output(writer))
+	}
+
+	## Appends fields to the supplied writer, retaining its accumulated output limit.
+	encode_into : Empty, ProtobufWire.Writer -> Try(ProtobufWire.Writer, ProtobufWire.Error)
+	encode_into = |Empty.(_value), writer| {
+		var $writer = writer
+		Ok($writer)
 	}
 }

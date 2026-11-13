@@ -10,8 +10,17 @@ EnvelopePayload := { text : [Absent, Present(Str)] }.{
 
 	decode : List(U8), ProtobufWire.Limits -> Try(EnvelopePayload, ProtobufWire.Error)
 	decode = |input, limits| {
-		var $reader = ProtobufWire.new_reader(input, limits)?
-		var $value = { text: Absent }
+		reader = ProtobufWire.new_reader(input, limits)?
+		(value, _) = EnvelopePayload.decode_into(reader, EnvelopePayload.defaults)?
+		Ok(value)
+	}
+
+	## Consumes the current reader scope and merges wire occurrences into initial.
+	## Thread the returned reader onward; this does not enter or leave a message.
+	decode_into : ProtobufWire.Reader, EnvelopePayload -> Try((EnvelopePayload, ProtobufWire.Reader), ProtobufWire.Error)
+	decode_into = |reader, EnvelopePayload.(initial)| {
+		var $reader = reader
+		var $value = initial
 		while ProtobufWire.remaining($reader) > 0 {
 			(field, after_tag) = ProtobufWire.read_tag($reader)?
 			$reader = after_tag
@@ -26,12 +35,19 @@ EnvelopePayload := { text : [Absent, Present(Str)] }.{
 				}
 			}
 		}
-		Ok(EnvelopePayload.($value))
+		Ok((EnvelopePayload.($value), $reader))
 	}
 
 	encode : EnvelopePayload, U64 -> Try(List(U8), ProtobufWire.Error)
-	encode = |EnvelopePayload.(value), max_bytes| {
-		var $writer = ProtobufWire.new_writer(max_bytes)
+	encode = |value, max_bytes| {
+		writer = EnvelopePayload.encode_into(value, ProtobufWire.new_writer(max_bytes))?
+		Ok(ProtobufWire.output(writer))
+	}
+
+	## Appends fields to the supplied writer, retaining its accumulated output limit.
+	encode_into : EnvelopePayload, ProtobufWire.Writer -> Try(ProtobufWire.Writer, ProtobufWire.Error)
+	encode_into = |EnvelopePayload.(value), writer| {
+		var $writer = writer
 		match value.text {
 			Absent => {}
 			Present(present_value) => {
@@ -39,6 +55,6 @@ EnvelopePayload := { text : [Absent, Present(Str)] }.{
 				$writer = ProtobufScalar.write_string($writer, present_value)?
 			}
 		}
-		Ok(ProtobufWire.output($writer))
+		Ok($writer)
 	}
 }
