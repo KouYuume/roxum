@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root="$(cd "$(dirname "$0")/../.." && pwd)"
+exec "$root/zig-out/protobuf-codegen/venv/bin/python" "$root/tools/protoc-gen-roc/generate.py"
