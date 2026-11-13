@@ -10,6 +10,7 @@ import pf.Server
 import proto.ProtobufWire
 import generated.Packet
 import generated.Empty
+import generated.Scalars
 
 Model := {}
 
@@ -27,7 +28,7 @@ init! = |{}| Ok({
 })
 
 routes : Router(Model, [], {})
-routes = Router.new.route("/copy", MethodRouter.post(Handler.stateful(answer))).route("/construct", MethodRouter.post(Handler.stateful(answer))).route("/defaults", MethodRouter.post(Handler.stateful(answer))).route("/view", MethodRouter.post(Handler.stateful(answer))).route("/empty", MethodRouter.post(Handler.stateful(answer))).route("/limits", MethodRouter.post(Handler.stateful(answer)))
+routes = Router.new.route("/scalars", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-view", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-text", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-construct", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-limits", MethodRouter.post(Handler.stateful(scalar_answer))).route("/copy", MethodRouter.post(Handler.stateful(answer))).route("/construct", MethodRouter.post(Handler.stateful(answer))).route("/defaults", MethodRouter.post(Handler.stateful(answer))).route("/view", MethodRouter.post(Handler.stateful(answer))).route("/empty", MethodRouter.post(Handler.stateful(answer))).route("/limits", MethodRouter.post(Handler.stateful(answer)))
 
 answer = |_model, context| {
 	bytes = match context.request.body {
@@ -72,4 +73,48 @@ copy_empty = |bytes, limits| {
 copy_packet = |bytes, limits, max_bytes| {
 	value = Packet.decode(bytes, limits)?
 	Packet.encode(value, max_bytes)
+}
+
+scalar_answer = |_model, context| {
+	bytes = match context.request.body {
+		RequestBody.Bytes(value) => value
+		_ => []
+	}
+	if context.request.path == "/scalar-construct" {
+		value = Scalars.{ unsigned32: 4294967295, signed32: -2147483648, signed64: -9223372036854775808, zigzag32: -2147483648, zigzag64: -9223372036854775808, signed_fixed32: -2147483648, signed_fixed64: -9223372036854775808, enabled: Bool.True, text: "Roc 🐦", float_value: F32.from_bits(0x80000000), double_value: F64.infinity }
+		return scalar_reply(Scalars.encode(value, 4096))
+	}
+	limits = { input_bytes: 4096, field_bytes: 256, depth: 8, tags: 128, entries: 0, materialized_bytes: 512 }
+	value = match Scalars.decode(bytes, limits) {
+		Ok(decoded) => decoded
+		Err(error) => return Ok(Reply.text(Str.inspect(error)).with_status(400))
+	}
+	Scalars.(record) = value
+	if context.request.path == "/scalar-text" {
+		return Ok(Reply.text(record.text))
+	}
+	if context.request.path == "/scalar-view" {
+		enabled = if record.enabled {
+			"1"
+		} else {
+			"0"
+		}
+		return Ok(Reply.text("${record.unsigned32.to_str()},${record.signed32.to_str()},${record.signed64.to_str()},${record.zigzag32.to_str()},${record.zigzag64.to_str()},${record.signed_fixed32.to_str()},${record.signed_fixed64.to_str()},${enabled},${record.float_value.to_bits().to_str()},${record.double_value.to_bits().to_str()}"))
+	}
+	match Scalars.encode(
+		value,
+		if context.request.path == "/scalar-limits" {
+			16
+		} else {
+			4096
+		},
+	) {
+		Ok(encoded) => Ok(Reply.bytes(encoded, "application/octet-stream"))
+		Err(error) => Ok(Reply.text(Str.inspect(error)).with_status(400))
+	}
+}
+
+scalar_reply = |encoded| match encoded {
+	Ok(bytes) => Ok(Reply.bytes(bytes, "application/octet-stream"))
+	Err(error) => Ok(Reply.text(Str.inspect(error)).with_status(400))
 }

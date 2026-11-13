@@ -27,7 +27,10 @@ class Generator(unittest.TestCase):
         self.assertIn(':', result.error)
 
     def test_supported_types_and_number_boundaries(self):
-        for kind in g.SCALARS:
+        # The advertised proto3 scalar set is independent of the generator table.
+        scalar_types = {1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 15, 16, 17, 18}
+        self.assertEqual(set(g.SCALARS), scalar_types)
+        for kind in scalar_types:
             for number in [1, 15, 16, 17, 18999, 20000, 20001, 536870910, 536870911]:
                 with self.subTest(kind=kind, number=number):
                     req, _, _, f = request()

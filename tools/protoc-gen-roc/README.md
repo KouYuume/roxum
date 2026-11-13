@@ -1,7 +1,8 @@
 # Protobuf scalar generator pilot
 
 This build-time `protoc` plugin emits pure Roc message codecs using
-[ProtobufWire](../../libraries/roc-protobuf/README.md). Generated code imports no
+[ProtobufWire and ProtobufScalar](../../libraries/roc-protobuf/README.md). Generated
+code imports no
 roxum module or hosted effect. This is an internal feasibility slice of
 [gRPC milestone 2](../../docs/plans/protobuf-codegen.md), not a published generator
 or a complete Protobuf implementation. Use the generator and wire library from
@@ -10,23 +11,52 @@ the same repository revision and the [pinned Roc compiler](../../docs/toolchain.
 ## Supported input
 
 - Proto3 top-level messages, including empty messages.
-- Singular, implicit-presence `uint64`, `fixed32`, `fixed64`, and `bytes`, represented
-  by `U64`, `U32`, `U64`, and `List(U8)` respectively.
+- All 15 proto3 scalar types as singular, implicit-presence fields (see below).
 - Message names matching `[A-Z][A-Za-z0-9]*` and field names matching
   `[a-z][a-z0-9]*(?:_[a-z0-9]+)*`. Roc keywords, conflicting built-in names,
-  `Builtin`, `Main`, `ProtobufWire`, and case-insensitive module collisions are rejected.
+  `Builtin`, `Main`, `ProtobufWire`, `ProtobufScalar`, and case-insensitive module
+  collisions are rejected.
 - Reserved schema names/ranges and source metadata do not change codec behavior.
   `protoc` validates schema declarations before invoking the plugin.
 - Files may contain services; the plugin ignores service declarations and their
   options. It generates no RPC bindings.
 
 Imports, nested declarations, repeated fields, maps, enums, explicit presence,
-`oneof`, other scalar types, proto2, editions, and extensions are rejected.
+`oneof`, message-valued fields, proto2, editions, and extensions are rejected.
 All file/message/field options are rejected in this pilot, including options
 for other languages. Names are not automatically transformed. Proto package
 names do not become Roc namespaces; message module names must be unique across
 all files in one invocation. Validation completes before any output is returned;
 errors identify the file/symbol where possible.
+
+## Scalar representation
+
+| Protobuf type | Roc type |
+|---|---|
+| `uint32`, `fixed32` | `U32` |
+| `uint64`, `fixed64` | `U64` |
+| `int32`, `sint32`, `sfixed32` | `I32` |
+| `int64`, `sint64`, `sfixed64` | `I64` |
+| `bool` | `Bool` |
+| `string` | `Str` |
+| `bytes` | `List(U8)` |
+| `float` | `F32` |
+| `double` | `F64` |
+
+Integer conversion follows the declared wire encoding: negative `int32`/`int64`
+use sign-extended varints; `sint32`/`sint64` use ZigZag. After bounded 64-bit
+varint parsing, 32-bit decoders keep the low 32 bits. Booleans decode any nonzero
+varint as true and encode only 0 or 1. See the
+[encoding specification](https://protobuf.dev/programming-guides/encoding/).
+
+Known strings require valid UTF-8 and return `InvalidUtf8` on failure. Bytes and
+unknown length-delimited fields are not interpreted as text. Floating-point
+codecs preserve finite values, subnormals, signed zero, and infinities. Only
+positive zero is omitted as the implicit default. NaNs remain NaNs, but Roc's
+`to_bits` canonicalizes their sign and payload to `0x7fc00000` / `0x7ff8000000000000`;
+this codec does not preserve NaN payloads. This uses the pinned compiler's
+[native float conversion APIs](https://github.com/roc-lang/roc/blob/9e85de7aba79eaeb8ca589ab6a1ea581274c8930/src/build/roc/Builtin.roc),
+verified through generated codecs on all three backends.
 
 ## Generated API and limits
 
@@ -45,11 +75,16 @@ skipped. **Unknown data is discarded**, so this is not a lossless relay.
 
 The reader carries input, field-length, tag, group-depth, and cumulative byte
 materialization budgets through the whole message. Replacing a `bytes` field
-does not refund the copied-byte budget. This subset creates no repeated/map
-entries, so `entries` is not consumed. The record has a schema-fixed size.
+does not refund the copied-byte budget. A string charges twice its UTF-8 byte
+length: once for the wire byte slice and once before conversion to `Str`. This
+conservative accounting applies even if the compiler can reuse storage. Empty
+strings charge zero bytes; duplicates still consume tag budget. This subset
+creates no repeated/map entries, so `entries` is not consumed. The record has a schema-fixed size.
 `encode` takes a maximum output length and returns
 `Try(List(U8), ProtobufWire.Error)`; it omits default-valued fields and writes in
-field-number order. Neither API parses a gRPC envelope or assigns gRPC statuses.
+field-number order. String encoding checks capacity for the full length-prefixed
+value before converting it to a byte list. Neither API parses a gRPC envelope or
+assigns gRPC statuses.
 
 ## Toolchain and generation
 
@@ -109,7 +144,10 @@ The application is only a test transport. Tests use independently generated
 Python bindings to check values in both directions, directly inspect decoded
 Roc record fields, and construct a Roc record independently of decoding.
 They cover defaults, duplicates, wrong wire types, unknown fields/groups,
-truncation, overflow, deterministic generation, and resource boundaries.
+truncation, overflow, deterministic generation, and resource boundaries. Scalar
+cases include signed limits, 32-bit truncation, noncanonical booleans, invalid
+UTF-8 classes, and IEEE zero/subnormal/normal/infinity/NaN patterns. Floating-point
+assertions compare non-NaN bits and NaN classes, not ordinary float equality.
 
 The pinned pure Python decoder dispatches on raw tag bytes: an overlong tag
 such as `88 00` is treated as unknown, although it numerically denotes field 1
@@ -118,6 +156,6 @@ than using Python's default-valued field as an oracle. Non-minimal value varints
 are still compared with Python. See the upstream
 [decoder](https://github.com/protocolbuffers/protobuf/blob/v33.5/python/google/protobuf/internal/decoder.py).
 
-Imports/namespaces, recursion, floating-point representation, and presence/type
-layouts still need feasibility fixtures before extending support. This pilot
+Imports/namespaces, recursion, and presence/type layouts still need feasibility
+fixtures before extending support. This pilot
 does not complete milestone 2 or make Unary gRPC available.

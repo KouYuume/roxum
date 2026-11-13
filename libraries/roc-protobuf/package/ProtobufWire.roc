@@ -5,7 +5,7 @@ ProtobufWire := [].{
 	default_limits : ProtobufWire.Limits
 	default_limits = { input_bytes: 4194304, field_bytes: 4194304, depth: 64, tags: 65536, entries: 65536, materialized_bytes: 8388608 }
 
-	Error : [Truncated, VarintOverflow, InvalidTag, InvalidWireType, UnexpectedEndGroup, MismatchedGroup, UnclosedGroup, InputLimit, FieldLimit, DepthLimit, TagLimit, EntryLimit, MaterializationLimit, UnfinishedMessage, NoParent, OutputLimit]
+	Error : [Truncated, VarintOverflow, InvalidTag, InvalidWireType, UnexpectedEndGroup, MismatchedGroup, UnclosedGroup, InputLimit, FieldLimit, DepthLimit, TagLimit, EntryLimit, MaterializationLimit, UnfinishedMessage, NoParent, OutputLimit, InvalidUtf8]
 	Kind : [Varint, Fixed64, Bytes, StartGroup, EndGroup, Fixed32]
 	Tag : { number : U32, kind : ProtobufWire.Kind }
 
@@ -180,6 +180,10 @@ ProtobufWire := [].{
 
 	output : ProtobufWire.Writer -> List(U8)
 	output = |ProtobufWire.Writer.(state)| state.bytes
+
+	## Remaining capacity lets schema codecs reject temporary conversions before copying.
+	remaining_output : ProtobufWire.Writer -> U64
+	remaining_output = |ProtobufWire.Writer.(state)| state.limit - state.bytes.len()
 
 	write_varint : ProtobufWire.Writer, U64 -> Try(ProtobufWire.Writer, ProtobufWire.Error)
 	write_varint = |writer, value| append(writer, encoded_varint(value))
