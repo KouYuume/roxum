@@ -3,10 +3,12 @@
 Status: milestone 2 has a wire foundation and a small generated scalar pilot.
 The [pure Roc wire library](../../libraries/roc-protobuf/README.md) provides bounded
 primitive reads/writes and unknown-field skipping. The
-[protoc plugin](../../tools/protoc-gen-roc/README.md) generates implicit singular
-codecs for all 15 proto3 scalar types, plus empty messages. Native `F32`/`F64`
-conversion is verified, including signed zero and NaN canonicalization. Composite
-schemas and recursive/presence type feasibility remain open.
+[protoc plugin](../../tools/protoc-gen-roc/README.md) generates singular
+codecs for all 15 proto3 scalar types with implicit or explicit `optional`
+presence, plus empty messages. Native `F32`/`F64` conversion is verified, including
+signed zero and NaN canonicalization. Optional scalar fields use
+`[Absent, Present(T)]`, with present-default values retained on the wire. Composite
+schemas and recursive type feasibility remain open.
 This is the next stage of the [gRPC plan](grpc.md), following
 [finite HTTP/2 acceptance](http2-finite-acceptance.md).
 
@@ -148,11 +150,11 @@ message composition before they are usable for gRPC replies.
    document the package/tool compatibility contract.
 
 Each slice may require more than one focused PR. Slice 2 has a scalar pilot;
-imports/namespaces, recursive types, and presence layouts still need feasibility
+imports/namespaces, recursive types, and composite layouts still need feasibility
 fixtures before the matrix expands. Scalar representation, including native
-floats and bounded UTF-8 conversion, is implemented. Before expanding the generator,
-resolve compiler limitations with evidence rather than silently changing the
-compiler pin or moving pure codec logic into the host.
+floats, bounded UTF-8 conversion, and optional presence, is implemented. Before
+expanding the generator, resolve compiler limitations with evidence rather than
+silently changing the compiler pin or moving pure codec logic into the host.
 
 Milestone 2 remains incomplete until generated code compiles with the pinned
 compiler and the advertised schema subset passes independent interoperability
@@ -180,8 +182,12 @@ matrix. Scalar interoperability also covers signed limits, 32-bit truncation,
 ZigZag, nonzero booleans, valid/invalid UTF-8, and exact non-NaN IEEE patterns.
 NaNs are compared by class because the pinned Roc `to_bits` API canonicalizes
 their payload and sign. Scalar fuzzing checks parser progress, canonical
-round trips, and exact output limits. The reference implementation's overlong-tag
-limitation is recorded in the [generator verification notes](../../tools/protoc-gen-roc/README.md#verification).
+round trips, and exact output limits. Optional scalar fixtures verify all 15
+payload layouts across the backend/allocator matrix, compare Python `HasField`
+with direct Roc presence/value views, and check present defaults, clearing,
+duplicates, wrong-wire skipping, malformed values, and cumulative/output bounds.
+Synthetic oneof metadata is validated; real oneofs remain rejected. The reference
+implementation's overlong-tag limitation is recorded in the [generator verification notes](../../tools/protoc-gen-roc/README.md#verification).
 These checks do not establish support for the rest of the target matrix or
 complete milestone 2; the fixed-byte gRPC probe still supplies no generated
 service bindings.

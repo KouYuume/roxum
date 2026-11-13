@@ -39,6 +39,40 @@ class Generator(unittest.TestCase):
         for number in [0, 19000, 19001, 19998, 19999, 536870912]:
             self.reject(lambda r, f, m, x: setattr(x, 'number', number))
 
+    def test_optional_scalar_descriptors(self):
+        for kind in {1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 15, 16, 17, 18}:
+            with self.subTest(kind=kind):
+                req, _, message, field = request()
+                # Synthetic names are descriptor metadata, not Roc identifiers.
+                message.oneof_decl.add(name='_count')
+                field.type, field.proto3_optional, field.oneof_index = kind, True, 0
+                result = g.generate(req)
+                self.assertFalse(result.error, result.error)
+                self.assertEqual(result.supported_features, g.p.CodeGeneratorResponse.FEATURE_PROTO3_OPTIONAL)
+                self.assertEqual(result.SerializeToString(), g.generate(req).SerializeToString())
+
+    def test_invalid_optional_metadata(self):
+        def optional(mutate):
+            def apply(req, file, message, field):
+                message.oneof_decl.add(name='_count')
+                field.proto3_optional, field.oneof_index = True, 0
+                mutate(req, file, message, field)
+            self.reject(apply)
+
+        for index in [-1, 1, 2]:
+            optional(lambda r, f, m, x: setattr(x, 'oneof_index', index))
+        for mutate in [lambda r, f, m, x: x.ClearField('oneof_index'),
+                       lambda r, f, m, x: setattr(x, 'proto3_optional', False),
+                       lambda r, f, m, x: m.ClearField('oneof_decl'),
+                       lambda r, f, m, x: m.oneof_decl.add(name='_unused'),
+                       lambda r, f, m, x: m.field.add(name='second', number=2, type=4, label=1, oneof_index=0, proto3_optional=True),
+                       lambda r, f, m, x: m.field.add(name='second', number=2, type=4, label=1, oneof_index=0),
+                       lambda r, f, m, x: setattr(m.oneof_decl[0], 'name', ''),
+                       lambda r, f, m, x: m.oneof_decl[0].options.ParseFromString(b'\x80\x80\x04\x01'),
+                       lambda r, f, m, x: setattr(x, 'label', 3),
+                       lambda r, f, m, x: setattr(x, 'type', 11)]:
+            optional(mutate)
+
     def test_unsupported_field_contracts(self):
         for kind in range(1, 19):
             if kind not in g.SCALARS:
@@ -91,6 +125,7 @@ class Generator(unittest.TestCase):
         # Valid messages preceding an unsupported declaration must not be emitted.
         for declaration, diagnostic in [
                 ('message Bad { repeated uint64 value = 1; }', b'invalid.proto:Bad.value:'),
+                ('message Bad { oneof choice { uint64 value = 1; } }', b'invalid.proto:Bad.choice:'),
                 ('message Builtin { uint64 value = 1; }', b'invalid.proto:Builtin:'),
                 ('message BUILTIN { uint64 value = 1; }', b'invalid.proto:BUILTIN:')]:
             with self.subTest(declaration=declaration), tempfile.TemporaryDirectory() as directory:

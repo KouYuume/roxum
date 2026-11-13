@@ -11,6 +11,7 @@ import proto.ProtobufWire
 import generated.Packet
 import generated.Empty
 import generated.Scalars
+import generated.OptionalScalars
 
 Model := {}
 
@@ -28,7 +29,7 @@ init! = |{}| Ok({
 })
 
 routes : Router(Model, [], {})
-routes = Router.new.route("/scalars", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-view", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-text", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-construct", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-limits", MethodRouter.post(Handler.stateful(scalar_answer))).route("/copy", MethodRouter.post(Handler.stateful(answer))).route("/construct", MethodRouter.post(Handler.stateful(answer))).route("/defaults", MethodRouter.post(Handler.stateful(answer))).route("/view", MethodRouter.post(Handler.stateful(answer))).route("/empty", MethodRouter.post(Handler.stateful(answer))).route("/limits", MethodRouter.post(Handler.stateful(answer)))
+routes = Router.new.route("/optional", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-view", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-text", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-bytes", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-construct", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-defaults", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-clear", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-limits", MethodRouter.post(Handler.stateful(optional_answer))).route("/scalars", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-view", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-text", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-construct", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-limits", MethodRouter.post(Handler.stateful(scalar_answer))).route("/copy", MethodRouter.post(Handler.stateful(answer))).route("/construct", MethodRouter.post(Handler.stateful(answer))).route("/defaults", MethodRouter.post(Handler.stateful(answer))).route("/view", MethodRouter.post(Handler.stateful(answer))).route("/empty", MethodRouter.post(Handler.stateful(answer))).route("/limits", MethodRouter.post(Handler.stateful(answer)))
 
 answer = |_model, context| {
 	bytes = match context.request.body {
@@ -117,4 +118,97 @@ scalar_answer = |_model, context| {
 scalar_reply = |encoded| match encoded {
 	Ok(bytes) => Ok(Reply.bytes(bytes, "application/octet-stream"))
 	Err(error) => Ok(Reply.text(Str.inspect(error)).with_status(400))
+}
+
+optional_answer = |_model, context| {
+	if context.request.path == "/optional-defaults" {
+		return scalar_reply(OptionalScalars.encode(OptionalScalars.defaults, 0))
+	}
+	if context.request.path == "/optional-construct" {
+		return scalar_reply(OptionalScalars.encode(OptionalScalars.{ unsigned32: Present(0.U32), signed32: Present(0.I32), signed64: Present(0.I64), zigzag32: Present(0.I32), zigzag64: Present(0.I64), signed_fixed32: Present(0.I32), signed_fixed64: Present(0.I64), enabled: Present(Bool.False), text: Present(""), float_value: Present(0.0.F32), double_value: Present(0.0.F64), unsigned64: Present(0.U64), fixed32_value: Present(0.U32), fixed64_value: Present(0.U64), payload: Present([]), implicit_value: 0 }, 4096))
+	}
+	bytes = match context.request.body {
+		RequestBody.Bytes(value) => value
+		_ => []
+	}
+	limits = { input_bytes: 4096, field_bytes: 256, depth: 8, tags: 128, entries: 0, materialized_bytes: 512 }
+	value = match OptionalScalars.decode(bytes, limits) {
+		Ok(decoded) => decoded
+		Err(error) => return Ok(Reply.text(Str.inspect(error)).with_status(400))
+	}
+	OptionalScalars.(record) = value
+	if context.request.path == "/optional-view" {
+		return Ok(
+			Reply.text(
+				Str.join_with(
+					[
+						presence_view(record.unsigned32, |item| item.to_str()),
+						presence_view(record.signed32, |item| item.to_str()),
+						presence_view(record.signed64, |item| item.to_str()),
+						presence_view(record.zigzag32, |item| item.to_str()),
+						presence_view(record.zigzag64, |item| item.to_str()),
+						presence_view(record.signed_fixed32, |item| item.to_str()),
+						presence_view(record.signed_fixed64, |item| item.to_str()),
+						presence_view(
+							record.enabled,
+							|item| if item {
+								"1"
+							} else {
+								"0"
+							},
+						),
+						presence_view(record.text, |item| Str.count_utf8_bytes(item).to_str()),
+						presence_view(record.float_value, |item| item.to_bits().to_str()),
+						presence_view(record.double_value, |item| item.to_bits().to_str()),
+						presence_view(record.unsigned64, |item| item.to_str()),
+						presence_view(record.fixed32_value, |item| item.to_str()),
+						presence_view(record.fixed64_value, |item| item.to_str()),
+						presence_view(record.payload, |item| item.len().to_str()),
+						record.implicit_value.to_str(),
+					],
+					",",
+				),
+			),
+		)
+	}
+	if context.request.path == "/optional-text" {
+		return Ok(
+			Reply.bytes(
+				match record.text {
+					Absent => [0]
+					Present(text) => [1].concat(text.to_utf8())
+				},
+				"application/octet-stream",
+			),
+		)
+	}
+	if context.request.path == "/optional-bytes" {
+		return Ok(
+			Reply.bytes(
+				match record.payload {
+					Absent => [0]
+					Present(payload) => [1].concat(payload)
+				},
+				"application/octet-stream",
+			),
+		)
+	}
+	if context.request.path == "/optional-clear" {
+		return scalar_reply(OptionalScalars.encode(OptionalScalars.({ ..record, unsigned32: Absent, text: Absent }), 4096))
+	}
+	scalar_reply(
+		OptionalScalars.encode(
+			value,
+			if context.request.path == "/optional-limits" {
+				16
+			} else {
+				4096
+			},
+		),
+	)
+}
+
+presence_view = |value, render| match value {
+	Absent => "-"
+	Present(item) => render(item)
 }

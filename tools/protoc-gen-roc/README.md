@@ -11,7 +11,7 @@ the same repository revision and the [pinned Roc compiler](../../docs/toolchain.
 ## Supported input
 
 - Proto3 top-level messages, including empty messages.
-- All 15 proto3 scalar types as singular, implicit-presence fields (see below).
+- All 15 proto3 scalar types as singular fields, with implicit presence or explicit `optional` presence (see below).
 - Message names matching `[A-Z][A-Za-z0-9]*` and field names matching
   `[a-z][a-z0-9]*(?:_[a-z0-9]+)*`. Roc keywords, conflicting built-in names,
   `Builtin`, `Main`, `ProtobufWire`, `ProtobufScalar`, and case-insensitive module
@@ -21,9 +21,9 @@ the same repository revision and the [pinned Roc compiler](../../docs/toolchain.
 - Files may contain services; the plugin ignores service declarations and their
   options. It generates no RPC bindings.
 
-Imports, nested declarations, repeated fields, maps, enums, explicit presence,
-`oneof`, message-valued fields, proto2, editions, and extensions are rejected.
-All file/message/field options are rejected in this pilot, including options
+Imports, nested declarations, repeated fields, maps, enums,
+real `oneof`, message-valued fields, proto2, editions, and extensions are rejected.
+All file/message/field/oneof options are rejected in this pilot, including options
 for other languages. Names are not automatically transformed. Proto package
 names do not become Roc namespaces; message module names must be unique across
 all files in one invocation. Validation completes before any output is returned;
@@ -58,6 +58,28 @@ this codec does not preserve NaN payloads. This uses the pinned compiler's
 [native float conversion APIs](https://github.com/roc-lang/roc/blob/9e85de7aba79eaeb8ca589ab6a1ea581274c8930/src/build/roc/Builtin.roc),
 verified through generated codecs on all three backends.
 
+## Explicit scalar presence
+
+A proto3 `optional` scalar uses `[Absent, Present(T)]`, where `T` is the scalar
+type above. `defaults` initializes it to `Absent`. For example, with
+`optional uint32 count = 1`, set `count: Present(0)` to encode a present zero,
+and `count: Absent` to omit the field. Pattern matching exposes presence and the
+value together; there is no separate boolean that can disagree with the value.
+This follows the [Protobuf presence contract](https://protobuf.dev/programming-guides/field_presence/).
+
+Every successfully decoded occurrence sets `Present(value)`, including zero,
+false, empty bytes, and empty strings. The last occurrence wins. Encoding emits
+every `Present` value, including positive floating-point zero. Wrong-wire-type
+occurrences are skipped without setting or clearing presence. Fields without
+`optional` retain implicit default omission in the same message.
+
+The plugin advertises `FEATURE_PROTO3_OPTIONAL` and validates synthetic oneofs:
+each must contain exactly one scalar marked `proto3_optional`, with a valid
+oneof index and no oneof options. Their names are descriptor metadata and are
+not exposed in the Roc API. Real oneofs, including single-member real oneofs,
+remain unsupported. Invalid metadata fails before any generated files are
+returned.
+
 ## Generated API and limits
 
 Each message becomes a nominal record with `defaults`, `decode`, and `encode`:
@@ -81,7 +103,7 @@ conservative accounting applies even if the compiler can reuse storage. Empty
 strings charge zero bytes; duplicates still consume tag budget. This subset
 creates no repeated/map entries, so `entries` is not consumed. The record has a schema-fixed size.
 `encode` takes a maximum output length and returns
-`Try(List(U8), ProtobufWire.Error)`; it omits default-valued fields and writes in
+`Try(List(U8), ProtobufWire.Error)`; it omits absent fields and implicit default-valued fields, and writes in
 field-number order. String encoding checks capacity for the full length-prefixed
 value before converting it to a byte list. Neither API parses a gRPC envelope or
 assigns gRPC statuses.
@@ -156,6 +178,10 @@ than using Python's default-valued field as an oracle. Non-minimal value varints
 are still compared with Python. See the upstream
 [decoder](https://github.com/protocolbuffers/protobuf/blob/v33.5/python/google/protobuf/internal/decoder.py).
 
-Imports/namespaces, recursion, and presence/type layouts still need feasibility
+Optional scalar layouts are verified across all scalar types and backends. Tests
+compare presence with Python `HasField`, directly inspect Roc tags and values,
+construct present-default values in Roc, clear fields, and exercise duplicates,
+wrong wire types, malformed values, and cumulative/output bounds.
+Imports/namespaces, recursion, and composite layouts still need feasibility
 fixtures before extending support. This pilot
 does not complete milestone 2 or make Unary gRPC available.
