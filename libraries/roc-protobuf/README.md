@@ -4,7 +4,7 @@
 with no platform or hosted imports. They support
 [gRPC milestone 2](../../docs/plans/protobuf-codegen.md) and are not yet published
 packages. The [generator pilot](../../tools/protoc-gen-roc/README.md) composes them
-into codecs for implicit singular scalar fields.
+into codecs for singular scalar fields with implicit or explicit `optional` presence.
 
 `ProtobufWire` reads/writes unsigned varints, tags, fixed-width words, and
 length-delimited bytes. It skips unknown fields, including matched groups, and

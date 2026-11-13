@@ -58,10 +58,20 @@ def validate(request):
                     loc, 'message name is not a supported Roc type name')
             require(name.lower() not in names, loc, 'message module name collision')
             names.add(name.lower())
-            require(not message.nested_type and not message.enum_type and not message.oneof_decl
+            require(not message.nested_type and not message.enum_type
                     and not message.extension and not message.extension_range,
-                    loc, 'nested types, enums, oneofs, and extensions are not supported')
+                    loc, 'nested types, enums, and extensions are not supported')
             require(not message.options.SerializeToString(), loc, 'message options are not supported')
+            oneof_names = set()
+            for index, oneof in enumerate(message.oneof_decl):
+                where = loc + '.' + oneof.name
+                require(re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', oneof.name)
+                        and oneof.name not in oneof_names, where, 'invalid or duplicate oneof name')
+                oneof_names.add(oneof.name)
+                members = [f for f in message.field if f.HasField('oneof_index') and f.oneof_index == index]
+                require(len(members) == 1 and members[0].proto3_optional, where,
+                        'only synthetic oneofs for proto3 optional scalars are supported')
+                require(not oneof.options.SerializeToString(), where, 'oneof options are not supported')
             fields = set()
             numbers = set()
             for field in message.field:
@@ -74,9 +84,13 @@ def validate(request):
                 require(1 <= field.number <= 536870911 and not 19000 <= field.number <= 19999,
                         where, 'invalid field number')
                 require(field.type in SCALARS and field.label == d.FieldDescriptorProto.LABEL_OPTIONAL
-                        and not field.proto3_optional and not field.HasField('oneof_index')
                         and not field.HasField('default_value') and not field.type_name and not field.extendee,
-                        where, 'only implicit singular scalar fields are supported')
+                        where, 'only singular scalar fields are supported')
+                if field.proto3_optional:
+                    require(field.HasField('oneof_index') and 0 <= field.oneof_index < len(message.oneof_decl),
+                            where, 'optional scalar requires a synthetic oneof')
+                else:
+                    require(not field.HasField('oneof_index'), where, 'real oneofs are not supported')
                 require(not field.options.SerializeToString(), where, 'field options are not supported')
             messages.append(message)
     require(messages, 'request', 'no messages requested')
@@ -86,8 +100,8 @@ def validate(request):
 def emit(message):
     name = message.name
     fields = sorted(message.field, key=lambda f: f.number)
-    shape = ', '.join(f'{f.name} : {SCALARS[f.type][0]}' for f in fields)
-    defaults = ', '.join(f'{f.name}: {SCALARS[f.type][3]}' for f in fields)
+    shape = ', '.join(f'{f.name} : ' + (f'[Absent, Present({SCALARS[f.type][0]})]' if f.proto3_optional else SCALARS[f.type][0]) for f in fields)
+    defaults = ', '.join(f'{f.name}: ' + ('Absent' if f.proto3_optional else SCALARS[f.type][3]) for f in fields)
     imports = ['import wire.ProtobufWire']
     if any(f.type not in WIRE_TYPES for f in fields):
         imports.append('import wire.ProtobufScalar')
@@ -109,7 +123,7 @@ def emit(message):
         lines += [f'\t\t\t\t({f.number}, {kind}) => {{',
                   f'\t\t\t\t\t(value, after) = {codec}.read_{operation}($reader)?',
                   '\t\t\t\t\t$reader = after',
-                  f'\t\t\t\t\t$value = {{ ..$value, {f.name}: value }}', '\t\t\t\t}']
+                  f'\t\t\t\t\t$value = {{ ..$value, {f.name}: {"Present(value)" if f.proto3_optional else "value"} }}', '\t\t\t\t}']
     lines += ['\t\t\t\t_ => { $reader = ProtobufWire.skip($reader, field)? }',
               '\t\t\t}', '\t\t}', f'\t\tOk({name}.($value))', '\t}', '',
               f'\tencode : {name}, U64 -> Try(List(U8), ProtobufWire.Error)',
@@ -118,12 +132,19 @@ def emit(message):
     for f in fields:
         _, kind, operation, default = SCALARS[f.type]
         codec = 'ProtobufWire' if f.type in WIRE_TYPES else 'ProtobufScalar'
-        # Only positive zero is the implicit default; retain IEEE negative zero.
-        nondefault = (f'value.{f.name}.to_bits() != 0' if f.type in FLOAT_TYPES
-                      else f'value.{f.name} != {default}')
-        lines += [f'\t\tif {nondefault} {{',
-                  f'\t\t\t$writer = ProtobufWire.write_tag($writer, {{ number: {f.number}, kind: {kind} }})?',
-                  f'\t\t\t$writer = {codec}.write_{operation}($writer, value.{f.name})?', '\t\t}']
+        if f.proto3_optional:
+            lines += [f'\t\tmatch value.{f.name} {{', '\t\t\tAbsent => {}',
+                      '\t\t\tPresent(present_value) => {',
+                      f'\t\t\t\t$writer = ProtobufWire.write_tag($writer, {{ number: {f.number}, kind: {kind} }})?',
+                      f'\t\t\t\t$writer = {codec}.write_{operation}($writer, present_value)?',
+                      '\t\t\t}', '\t\t}']
+        else:
+            # Only positive zero is the implicit default; retain IEEE negative zero.
+            nondefault = (f'value.{f.name}.to_bits() != 0' if f.type in FLOAT_TYPES
+                          else f'value.{f.name} != {default}')
+            lines += [f'\t\tif {nondefault} {{',
+                      f'\t\t\t$writer = ProtobufWire.write_tag($writer, {{ number: {f.number}, kind: {kind} }})?',
+                      f'\t\t\t$writer = {codec}.write_{operation}($writer, value.{f.name})?', '\t\t}']
     lines += ['\t\tOk(ProtobufWire.output($writer))', '\t}', '}', '']
     return '\n'.join(lines)
 
@@ -132,6 +153,7 @@ def generate(request):
     response = p.CodeGeneratorResponse()
     try:
         messages = validate(request)
+        response.supported_features = p.CodeGeneratorResponse.FEATURE_PROTO3_OPTIONAL
         for message in sorted(messages, key=lambda m: m.name):
             response.file.add(name=message.name + '.roc', content=emit(message))
         modules = ', '.join(sorted(m.name for m in messages))

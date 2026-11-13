@@ -11,6 +11,7 @@ sys.path[:0] = [str(ROOT / 'zig-out/protobuf-codegen'), str(ROOT / 'tests/suppor
 import scalar_pb2 as reference
 from roxum_process import read_port, stop
 from scalar_cases import verify_scalars
+from optional_cases import verify_optional
 
 
 def varint(number):
@@ -90,6 +91,7 @@ def verify(executable):
             assert call('/copy', nonminimal) == (200, b'\x08\x01')
             assert call('/view', nonminimal) == (200, b'1,0,0,0')
             verify_scalars(call, reference)
+            verify_optional(call, reference)
             for data in valid_cases():
                 valid(data)
             status, encoded = call('/construct', b'')
