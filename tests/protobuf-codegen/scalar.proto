@@ -14,3 +14,17 @@ message Empty {}
 service Echo {
   rpc Send(Packet) returns (Packet);
 }
+
+message Scalars {
+  uint32 unsigned32 = 1;
+  int32 signed32 = 2;
+  int64 signed64 = 3;
+  sint32 zigzag32 = 4;
+  sint64 zigzag64 = 5;
+  sfixed32 signed_fixed32 = 6;
+  sfixed64 signed_fixed64 = 7;
+  bool enabled = 8;
+  string text = 9;
+  float float_value = 10;
+  double double_value = 11;
+}

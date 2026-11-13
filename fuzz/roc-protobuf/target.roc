@@ -3,6 +3,7 @@ app [target] { fuzz: platform "https://github.com/lukewilliamboswell/roc-fuzz/re
 import fuzz.Fuzz
 import ProtobufWire
 import ScopeFuzz
+import ScalarFuzz
 
 target = Fuzz.target_with({
 	name: "protobuf-wire",
@@ -10,6 +11,7 @@ target = Fuzz.target_with({
 	show: |bytes| Str.inspect(bytes),
 	test: |bytes| {
 		ScopeFuzz.check(bytes)
+		ScalarFuzz.check(bytes)
 		match check(bytes) {
 			Ok({}) => Fuzz.keep
 			Err(_) => Fuzz.keep

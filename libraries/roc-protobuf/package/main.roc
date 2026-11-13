@@ -1,3 +1,1 @@
-package
-	[ProtobufWire]
-	{}
+package [ProtobufScalar, ProtobufWire] {}

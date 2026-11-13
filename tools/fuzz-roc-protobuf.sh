@@ -25,9 +25,12 @@ fi
 cp "$repo_root/fuzz/roc-protobuf/target.roc" "$temporary_dir/target.roc"
 cp "$repo_root/fuzz/roc-protobuf/ScopeFuzz.roc" "$temporary_dir/ScopeFuzz.roc"
 cp "$repo_root/libraries/roc-protobuf/package/ProtobufWire.roc" "$temporary_dir/ProtobufWire.roc"
+cp "$repo_root/fuzz/roc-protobuf/ScalarFuzz.roc" "$temporary_dir/ScalarFuzz.roc"
+cp "$repo_root/libraries/roc-protobuf/package/ProtobufScalar.roc" "$temporary_dir/ProtobufScalar.roc"
 mkdir "$temporary_dir/corpus"
 cp "$repo_root"/fuzz/corpus/roc-protobuf/* "$temporary_dir/corpus/"
 "$ROC_BIN" test "$temporary_dir/ScopeFuzz.roc"
+"$ROC_BIN" test "$temporary_dir/ScalarFuzz.roc"
 "$ROC_BIN" build --fuzz --output="$temporary_dir/protobuf-fuzz" "$temporary_dir/target.roc"
 "$temporary_dir/protobuf-fuzz" run "$temporary_dir/corpus" \
     --runs="$RUNS" --seed=424242 --max-input-size=4096 --timeout=5 --memory-limit=256

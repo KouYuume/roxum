@@ -1,1 +1,1 @@
-package [Empty, Packet] { wire: "../../../libraries/roc-protobuf/package/main.roc" }
+package [Empty, Packet, Scalars] { wire: "../../../libraries/roc-protobuf/package/main.roc" }

@@ -1,18 +1,25 @@
-# Protobuf wire foundation
+# Protobuf wire and scalar codecs
 
-`package/main.roc` exports `ProtobufWire`, a pure Roc library with no platform or
-hosted imports. This is the wire foundation for [gRPC milestone 2](../../docs/plans/protobuf-codegen.md),
-not a generated or schema-aware Protobuf codec. It is not yet a published package.
+`package/main.roc` exports `ProtobufWire` and `ProtobufScalar`, pure Roc modules
+with no platform or hosted imports. They support
+[gRPC milestone 2](../../docs/plans/protobuf-codegen.md) and are not yet published
+packages. The [generator pilot](../../tools/protoc-gen-roc/README.md) composes them
+into codecs for implicit singular scalar fields.
 
-It reads and writes unsigned varints, field tags, fixed32/fixed64 words, and
+`ProtobufWire` reads/writes unsigned varints, tags, fixed-width words, and
 length-delimited bytes. It skips unknown fields, including matched groups, and
 can enter/leave length-delimited messages while retaining the same budgets.
-Integers are raw wire values: signed conversion, ZigZag, floating-point
-conversion, UTF-8 validation, presence, merge rules and typed message generation
-remain separate schema-layer work. A [scalar generator pilot](../../tools/protoc-gen-roc/README.md)
-now uses this library for four implicit-presence field types. The wire reader
-accepts reserved field numbers because their schema restrictions do not make
-incoming unknown fields malformed.
+The wire reader accepts reserved field numbers because their schema restrictions
+do not make incoming unknown fields malformed.
+
+`ProtobufScalar` adds typed signed/unsigned integer conversion, ZigZag, booleans,
+UTF-8 strings, and native `F32`/`F64` values. Its `read_<type>` and `write_<type>`
+functions use Protobuf type names (for example `read_sint32`, `write_double`),
+thread the same reader/writer, and do not read or write field tags. The four
+wire-native types continue to use `ProtobufWire` directly. See the generator's
+[scalar representation contract](../../tools/protoc-gen-roc/README.md#scalar-representation)
+for truncation, UTF-8, signed-zero, and NaN semantics. Message composition,
+presence, enums, repeated fields, maps, and merge rules remain schema-layer work.
 
 ## Reader contract
 
@@ -50,10 +57,14 @@ must charge collection entries and any storage not already charged by
 bytes and entering messages do not copy or charge their payload as materialized
 storage. Limits are not measurements of allocator overhead, and creating a
 reader cannot limit memory already used to receive its input. Bound reception
-separately. Counters are never replenished on leaving a message.
+separately. Counters are never replenished on leaving a message. `read_string` charges its
+UTF-8 length for the byte slice and again before the string conversion, including
+values later overwritten. This conservative two-copy budget is not refunded
+when storage happens to be reused.
 
 Errors are typed tags in `ProtobufWire.Error`, including malformed/truncated
-input, mismatched groups, and each exhausted budget. Valid non-minimal varints
+input, mismatched groups, and each exhausted budget. The shared error type also
+includes `InvalidUtf8`, emitted by `ProtobufScalar.read_string`. Valid non-minimal varints
 are accepted; values beyond 64 bits are rejected before shifting/accumulating.
 Each failed operation returns no partial reader or value. When several limits
 or malformed conditions apply, the first check encountered determines the error;
@@ -64,6 +75,8 @@ callers should not depend on a universal precedence between them.
 `new_writer(max_bytes)` creates an empty bounded writer. Thread the writer
 returned by `write_tag`, `write_varint`, `write_fixed32`, `write_fixed64`, or
 `write_bytes` into the next operation; `output` returns the accumulated bytes.
+`remaining_output` reports unused output capacity. Scalar string encoding uses
+it to check the length prefix and payload before creating a UTF-8 byte list.
 Lengths and available space are checked before growing output. Varints use their
 minimal encoding, fixed words use little endian, and `write_bytes` includes its
 length prefix. Groups and tag/value ordering remain the schema encoder's
@@ -83,7 +96,9 @@ bash tools/linux/test.sh python3 tools/check.py --only test-protobuf
 
 The unit checks cover each 7-bit varint transition, tenth-byte overflow,
 truncation, wire types, fixed-width boundaries, nested scopes, group matching,
-and lower/exact/upper limit boundaries. `zig build test` includes these checks.
+and lower/exact/upper limit boundaries. Scalar unit checks cover signed/ZigZag
+limits, IEEE conversion, UTF-8 rejection, and string materialization/output
+bounds. `zig build test` includes both modules' checks.
 
 The fixture executes the library with all three Roc backends and both allocators.
 Its Python reference decoder compares normalized output or typed rejection for
@@ -97,6 +112,10 @@ messages with leaves before and after each child. It threads charged readers
 through `reserve`, `read_bytes`, `enter_message`, and `leave_message`, checking
 scope boundaries and comparing outcomes with an independent cumulative budget
 model. Each input runs with both generous and input-derived small limits.
+A scalar path parses arbitrary bytes as each newly supported scalar, checks
+progress and canonical re-encoding (including NaNs), and tests exact/undersized
+output bounds. Negative controls reject unexpected encode, canonical decode,
+and re-encode failures after valid input; only initial input errors are tolerated.
 Deterministic scope tests cover the lower, exact, and upper boundaries of the
 shared counters and run before fuzz compilation.
 Its corpus and seed are retained;
