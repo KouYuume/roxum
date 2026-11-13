@@ -9,8 +9,17 @@ Packet := { count : U64, code : U32, stamp : U64, payload : List(U8) }.{
 
 	decode : List(U8), ProtobufWire.Limits -> Try(Packet, ProtobufWire.Error)
 	decode = |input, limits| {
-		var $reader = ProtobufWire.new_reader(input, limits)?
-		var $value = { count: 0.U64, code: 0.U32, stamp: 0.U64, payload: [] }
+		reader = ProtobufWire.new_reader(input, limits)?
+		(value, _) = Packet.decode_into(reader, Packet.defaults)?
+		Ok(value)
+	}
+
+	## Consumes the current reader scope and merges wire occurrences into initial.
+	## Thread the returned reader onward; this does not enter or leave a message.
+	decode_into : ProtobufWire.Reader, Packet -> Try((Packet, ProtobufWire.Reader), ProtobufWire.Error)
+	decode_into = |reader, Packet.(initial)| {
+		var $reader = reader
+		var $value = initial
 		while ProtobufWire.remaining($reader) > 0 {
 			(field, after_tag) = ProtobufWire.read_tag($reader)?
 			$reader = after_tag
@@ -40,12 +49,19 @@ Packet := { count : U64, code : U32, stamp : U64, payload : List(U8) }.{
 				}
 			}
 		}
-		Ok(Packet.($value))
+		Ok((Packet.($value), $reader))
 	}
 
 	encode : Packet, U64 -> Try(List(U8), ProtobufWire.Error)
-	encode = |Packet.(value), max_bytes| {
-		var $writer = ProtobufWire.new_writer(max_bytes)
+	encode = |value, max_bytes| {
+		writer = Packet.encode_into(value, ProtobufWire.new_writer(max_bytes))?
+		Ok(ProtobufWire.output(writer))
+	}
+
+	## Appends fields to the supplied writer, retaining its accumulated output limit.
+	encode_into : Packet, ProtobufWire.Writer -> Try(ProtobufWire.Writer, ProtobufWire.Error)
+	encode_into = |Packet.(value), writer| {
+		var $writer = writer
 		if value.count != 0.U64 {
 			$writer = ProtobufWire.write_tag($writer, { number: 1, kind: Varint })?
 			$writer = ProtobufWire.write_varint($writer, value.count)?
@@ -62,6 +78,6 @@ Packet := { count : U64, code : U32, stamp : U64, payload : List(U8) }.{
 			$writer = ProtobufWire.write_tag($writer, { number: 536870911, kind: Bytes })?
 			$writer = ProtobufWire.write_bytes($writer, value.payload)?
 		}
-		Ok(ProtobufWire.output($writer))
+		Ok($writer)
 	}
 }

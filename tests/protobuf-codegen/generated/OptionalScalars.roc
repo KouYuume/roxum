@@ -10,8 +10,17 @@ OptionalScalars := { unsigned32 : [Absent, Present(U32)], signed32 : [Absent, Pr
 
 	decode : List(U8), ProtobufWire.Limits -> Try(OptionalScalars, ProtobufWire.Error)
 	decode = |input, limits| {
-		var $reader = ProtobufWire.new_reader(input, limits)?
-		var $value = { unsigned32: Absent, signed32: Absent, signed64: Absent, zigzag32: Absent, zigzag64: Absent, signed_fixed32: Absent, signed_fixed64: Absent, enabled: Absent, text: Absent, float_value: Absent, double_value: Absent, unsigned64: Absent, fixed32_value: Absent, fixed64_value: Absent, payload: Absent, implicit_value: 0.U32 }
+		reader = ProtobufWire.new_reader(input, limits)?
+		(value, _) = OptionalScalars.decode_into(reader, OptionalScalars.defaults)?
+		Ok(value)
+	}
+
+	## Consumes the current reader scope and merges wire occurrences into initial.
+	## Thread the returned reader onward; this does not enter or leave a message.
+	decode_into : ProtobufWire.Reader, OptionalScalars -> Try((OptionalScalars, ProtobufWire.Reader), ProtobufWire.Error)
+	decode_into = |reader, OptionalScalars.(initial)| {
+		var $reader = reader
+		var $value = initial
 		while ProtobufWire.remaining($reader) > 0 {
 			(field, after_tag) = ProtobufWire.read_tag($reader)?
 			$reader = after_tag
@@ -101,12 +110,19 @@ OptionalScalars := { unsigned32 : [Absent, Present(U32)], signed32 : [Absent, Pr
 				}
 			}
 		}
-		Ok(OptionalScalars.($value))
+		Ok((OptionalScalars.($value), $reader))
 	}
 
 	encode : OptionalScalars, U64 -> Try(List(U8), ProtobufWire.Error)
-	encode = |OptionalScalars.(value), max_bytes| {
-		var $writer = ProtobufWire.new_writer(max_bytes)
+	encode = |value, max_bytes| {
+		writer = OptionalScalars.encode_into(value, ProtobufWire.new_writer(max_bytes))?
+		Ok(ProtobufWire.output(writer))
+	}
+
+	## Appends fields to the supplied writer, retaining its accumulated output limit.
+	encode_into : OptionalScalars, ProtobufWire.Writer -> Try(ProtobufWire.Writer, ProtobufWire.Error)
+	encode_into = |OptionalScalars.(value), writer| {
+		var $writer = writer
 		match value.unsigned32 {
 			Absent => {}
 			Present(present_value) => {
@@ -216,6 +232,6 @@ OptionalScalars := { unsigned32 : [Absent, Present(U32)], signed32 : [Absent, Pr
 			$writer = ProtobufWire.write_tag($writer, { number: 16, kind: Varint })?
 			$writer = ProtobufScalar.write_uint32($writer, value.implicit_value)?
 		}
-		Ok(ProtobufWire.output($writer))
+		Ok($writer)
 	}
 }

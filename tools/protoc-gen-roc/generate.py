@@ -100,8 +100,15 @@ def emit(symbol):
         '\tis_eq : _', f'\tdefaults : {name}', f'\tdefaults = {name}.{{ {defaults} }}', '',
         f'\tdecode : List(U8), ProtobufWire.Limits -> Try({name}, ProtobufWire.Error)',
         '\tdecode = |input, limits| {',
-        '\t\tvar $reader = ProtobufWire.new_reader(input, limits)?',
-        f'\t\tvar $value = {{ {defaults} }}',
+        '\t\treader = ProtobufWire.new_reader(input, limits)?',
+        f'\t\t(value, _) = {name}.decode_into(reader, {name}.defaults)?',
+        '\t\tOk(value)', '\t}', '',
+        '\t## Consumes the current reader scope and merges wire occurrences into initial.',
+        '\t## Thread the returned reader onward; this does not enter or leave a message.',
+        f'\tdecode_into : ProtobufWire.Reader, {name} -> Try(({name}, ProtobufWire.Reader), ProtobufWire.Error)',
+        f'\tdecode_into = |reader, {name}.(initial)| {{',
+        '\t\tvar $reader = reader',
+        '\t\tvar $value = initial',
         '\t\twhile ProtobufWire.remaining($reader) > 0 {',
         '\t\t\t(field, after_tag) = ProtobufWire.read_tag($reader)?',
         '\t\t\t$reader = after_tag', '\t\t\tmatch (field.number, field.kind) {',
@@ -114,10 +121,15 @@ def emit(symbol):
                   '\t\t\t\t\t$reader = after',
                   f'\t\t\t\t\t$value = {{ ..$value, {f.name}: {"Present(value)" if f.proto3_optional else "value"} }}', '\t\t\t\t}']
     lines += ['\t\t\t\t_ => { $reader = ProtobufWire.skip($reader, field)? }',
-              '\t\t\t}', '\t\t}', f'\t\tOk({name}.($value))', '\t}', '',
+              '\t\t\t}', '\t\t}', f'\t\tOk(({name}.($value), $reader))', '\t}', '',
               f'\tencode : {name}, U64 -> Try(List(U8), ProtobufWire.Error)',
-              f'\tencode = |{name}.({"value" if fields else "_value"}), max_bytes| {{',
-              '\t\tvar $writer = ProtobufWire.new_writer(max_bytes)']
+              '\tencode = |value, max_bytes| {',
+              f'\t\twriter = {name}.encode_into(value, ProtobufWire.new_writer(max_bytes))?',
+              '\t\tOk(ProtobufWire.output(writer))', '\t}', '',
+              '\t## Appends fields to the supplied writer, retaining its accumulated output limit.',
+              f'\tencode_into : {name}, ProtobufWire.Writer -> Try(ProtobufWire.Writer, ProtobufWire.Error)',
+              f'\tencode_into = |{name}.({"value" if fields else "_value"}), writer| {{',
+              '\t\tvar $writer = writer']
     for f in fields:
         _, kind, operation, default = SCALARS[f.type]
         codec = 'ProtobufWire' if f.type in WIRE_TYPES else 'ProtobufScalar'
@@ -134,7 +146,7 @@ def emit(symbol):
             lines += [f'\t\tif {nondefault} {{',
                       f'\t\t\t$writer = ProtobufWire.write_tag($writer, {{ number: {f.number}, kind: {kind} }})?',
                       f'\t\t\t$writer = {codec}.write_{operation}($writer, value.{f.name})?', '\t\t}']
-    lines += ['\t\tOk(ProtobufWire.output($writer))', '\t}', '}', '']
+    lines += ['\t\tOk($writer)', '\t}', '}', '']
     return '\n'.join(lines)
 
 

@@ -14,8 +14,10 @@ payload records on the pinned compiler. The generator retains fully qualified
 message identities, emits scalar-only nested declarations with enclosing names
 concatenated, and supports imports when the complete dependency closure is
 explicitly selected in one invocation. Case-insensitive output collisions fail
-before generation. Message-reference resolution and composite codec semantics
-remain open.
+before generation. Generated scalar codecs expose `decode_into` and
+`encode_into` for existing reader/writer composition, with wire merging and
+shared-budget fixtures. Message-reference resolution and generated composite
+codec semantics remain open.
 This is the next stage of the [gRPC plan](grpc.md), following
 [finite HTTP/2 acceptance](http2-finite-acceptance.md).
 
@@ -129,8 +131,9 @@ input using overflow-safe arithmetic. Bound temporary storage and repeated work,
 not just the final returned value. These are logical codec limits, not a claim
 to measure every allocator byte; host request memory limits remain independent.
 The wire foundation tests lower, exact, and upper boundaries. Its writer bounds
-accumulated output; schema encoders still need to carry that bound through
-message composition before they are usable for gRPC replies.
+accumulated output; generated scalar encoders can append to an existing bounded
+writer. They still need bounded length-delimited message composition before they
+are usable for gRPC replies.
 
 ## Implementation slices and gates
 
@@ -160,7 +163,11 @@ Each slice may require more than one focused PR. Slice 2 has scalar generation,
 including nested declarations and explicit multi-file import closure, with
 collision and deterministic-output fixtures. Package names remain schema
 identities rather than Roc namespaces; ambiguous flattened module names are
-rejected. Generated message references and composite codecs still need fixtures
+rejected. Generated scalar `decode_into`/`encode_into` functions preserve reader
+scopes, existing merge values, and accumulated writer capacity. Handwritten
+parent scope drivers compare repeated child occurrences with official Python
+message decoding and exercise shared limits. Generated message references,
+recursive merge, and bounded length-delimited encoding still need fixtures
 before the matrix expands. The handwritten layout fixture demonstrates bounded
 recursive values with `Box`/`List` and co-located mutually recursive nominal definitions.
 It does not yet define generated recursive module boundaries or validate
