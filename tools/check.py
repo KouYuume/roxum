@@ -81,6 +81,9 @@ def contract_verify(script, *apps):
 CONTRACT_ENV = {"ROXUM_CONTRACT_ALLOC": "{contract}"}
 
 TESTS = [
+    Test("test-protobuf", {"app": "tests/protobuf/app.roc"},
+         ["python3", "tests/protobuf/verify.py", "{exe:app}"],
+         checks=[["bash", "tests/protobuf/unit.sh"]], env=CONTRACT_ENV),
     Test("test-m9p1", {"app": "tests/platform-package/app.roc"}, ["python3", "tests/platform-package/verify.py", "{exe:app}"],
          allocators=ARENA, checks=[["bash", "tests/platform-package/checks.sh"]]),
     Test("test-m9p4", {"app": "integrations/roxum-sse/example/app.roc"},
@@ -192,6 +195,11 @@ COMMANDS = [
     Command("test-http1-release", ["zig", "build", "test-http1-release"], "zig"),
     Command("fuzz", ["tools/fuzz.sh", "10000"], "zig"),
 ]
+# roc-fuzz 0.4.3 ships arm64mac and x64musl hosts only. The pure module and
+# differential tests still run on every supported roxum target.
+if ((sys.platform == "darwin" and os.uname().machine == "arm64") or
+        (sys.platform.startswith("linux") and os.uname().machine == "x86_64")):
+    COMMANDS.append(Command("fuzz-protobuf", ["bash", "tools/fuzz-roc-protobuf.sh"], "cache"))
 # The thread sanitizer runs on Linux only: under some macOS environments a
 # fault never becomes a signal (a parent's exception port takes it), and
 # the sanitized test then spins instead of ending.

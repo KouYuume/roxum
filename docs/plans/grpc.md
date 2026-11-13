@@ -1,7 +1,9 @@
 # gRPC server implementation plan
 
 Status: milestone 1 complete for finite HTTP/2, including concurrent-stream drain.
-Next: milestone 2 codec and generator assessment.
+Milestone 2 inventory is recorded in the [codec and generator assessment](protobuf-codegen.md).
+Bounded pure-Roc wire primitives are implemented. Next: descriptor-to-Roc
+feasibility; schema-aware codecs and generation remain open.
 A reusable gRPC integration is not implemented.
 See the [transport decision and evidence](http2-transport.md). The responsibility
 split is agreed; API names,
@@ -139,7 +141,7 @@ failure. Early replies discard later input while retaining its timeout. Independ
 clients verify metadata-time expiry, body resumption, cancellation and peer progress.
 The [acceptance matrix](http2-finite-acceptance.md) maps this gate to production
 and isolated test evidence, including draining multiple active streams on one
-connection. The next step is the codec/generator inventory. Streaming response
+connection. The codec/generator work follows the milestone 2 assessment. Streaming response
 completion belongs to the later streaming RPC milestones.
 
 Implement explicit opt-in HTTP/2 listeners and bounded stream execution, generic
@@ -156,6 +158,10 @@ HTTP/1.1 and existing integrations retain their contract tests. No public gRPC
 support claim is made yet.
 
 ### 2. Build reusable Protobuf support and code generation
+
+The [codec and generator assessment](protobuf-codegen.md) records the inventory,
+initial schema target, resource contracts, and implementation slices. It does
+not establish runtime support or complete this milestone.
 
 First inventory reusable Roc codecs and generators. If none meets the required
 contracts, implement a pure library under `libraries/` and an independent

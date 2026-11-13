@@ -27,6 +27,7 @@ These documents describe implementation plans, acceptance evidence, and remainin
 gates. Completed evidence is distinguished from proposed capabilities.
 
 - [gRPC server support](plans/grpc.md): host/integration boundaries, Unary RPC first, and staged streaming support
+- [Protobuf codec and generator assessment](plans/protobuf-codegen.md): reuse inventory, schema target, decoder bounds, and milestone 2 implementation slices
 - [Finite HTTP/2 acceptance](plans/http2-finite-acceptance.md): milestone 1 evidence and limits before codec/generator work
 - [HTTP/2 transport decision](plans/http2-transport.md): milestone 0 evidence, engine choice, and proposed ownership/API contracts
 

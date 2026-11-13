@@ -187,6 +187,8 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&run_effect_tests.step);
     test_step.dependOn(&run_http_client_tests.step);
+    const run_protobuf_tests = b.addSystemCommand(&.{ "bash", "tests/protobuf/unit.sh" });
+    test_step.dependOn(&run_protobuf_tests.step);
     addZigTests(b, test_step, &unit_tests, .{});
     addZigTests(b, test_step, &http1_tests, .{});
 
@@ -702,6 +704,13 @@ pub fn build(b: *std.Build) void {
     const test_grpc_probe = b.step("test-grpc-probe", "Verify fixed-byte gRPC interoperability on TCP and Unix listeners");
     const run_grpc_probe = b.addSystemCommand(&.{ "python3", "tools/check.py", "--only", "test-grpc-probe" });
     test_grpc_probe.dependOn(&run_grpc_probe.step);
+
+    const test_protobuf = b.step("test-protobuf", "Check pure Protobuf wire operations in all backend/allocator modes");
+    const run_protobuf = b.addSystemCommand(&.{ "python3", "tools/check.py", "--only", "test-protobuf" });
+    test_protobuf.dependOn(&run_protobuf.step);
+    const fuzz_protobuf = b.step("fuzz-protobuf", "Fuzz pure Protobuf wire parsing with the pinned Roc fuzz runner");
+    const run_protobuf_fuzz = b.addSystemCommand(&.{ "bash", "tools/fuzz-roc-protobuf.sh" });
+    fuzz_protobuf.dependOn(&run_protobuf_fuzz.step);
 
     const test_layered_app = b.step(
         "test-layered-app",
