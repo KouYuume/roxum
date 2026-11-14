@@ -341,30 +341,46 @@ class Generator(unittest.TestCase):
             self.assertFalse(result.file)
 
     def test_repeated_length_fields(self):
-        # No other scalar, message, enum, or group list is enabled by this slice.
-        for kind in set(range(1, 19)) - {9, 12}:
+        # Numeric, enum, and group lists remain unsupported.
+        for kind in set(range(1, 19)) - {9, 12, 11}:
+            req, file, _, field = request()
+            field.type, field.label = kind, 3
+            result = g.generate(req)
+            self.assertTrue(result.error)
+            self.assertFalse(result.file)
+        for kind in [9, 12, 11]:
             req, file, _, field = request()
             field.type, field.label = kind, 3
             if kind == 11:
                 file.message_type.add(name='Child')
                 field.type_name = '.Child'
-            result = g.generate(req)
-            self.assertTrue(result.error)
-            self.assertFalse(result.file)
-        for kind in [9, 12]:
-            req, _, _, field = request()
-            field.type, field.label = kind, 3
             self.assertFalse(g.generate(req).error)
             for mutate in [lambda f: setattr(f, 'proto3_optional', True),
                            lambda f: setattr(f, 'oneof_index', 0),
                            lambda f: setattr(f.options, 'packed', True),
                            lambda f: setattr(f.options, 'packed', False)]:
-                req, _, _, field = request()
+                req, file, _, field = request()
                 field.type, field.label = kind, 3
+                if kind == 11:
+                    file.message_type.add(name='Child')
+                    field.type_name = '.Child'
                 mutate(field)
                 result = g.generate(req)
                 self.assertTrue(result.error)
                 self.assertFalse(result.file)
+
+    def test_repeated_message_cycles(self):
+        req, _, message, field = request()
+        field.type, field.label, field.type_name = 11, 3, '.Sample'
+        result = g.generate(req)
+        self.assertIn('recursive', result.error)
+        self.assertFalse(result.file)
+        child = message.nested_type.add(name='Child')
+        field.type_name = '.Sample.Child'
+        child.field.add(name='parent', number=1, type=11, label=3, type_name='.Sample')
+        result = g.generate(req)
+        self.assertIn('recursive', result.error)
+        self.assertFalse(result.file)
 
     def test_plugin_error_protocol(self):
         output = subprocess.run([sys.executable, g.__file__], input=b'\x80', capture_output=True, check=True)
