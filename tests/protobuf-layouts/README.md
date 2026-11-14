@@ -1,9 +1,9 @@
-# Recursive message layout feasibility
+# Protobuf type layout feasibility
 
 This handwritten fixture checks candidate Roc type layouts before the Protobuf
 generator accepts composite schemas. It is not generated code, a Protobuf
-codec, or an interoperability test. The generator still rejects message-valued
-fields, repeated fields, and recursive schemas.
+codec, or an interoperability test. The generator supports acyclic messages and repeated scalars/messages;
+recursive schemas remain unsupported.
 
 The pure `layouts` package imports no platform or hosted effects. Its types
 exercise these shapes:
@@ -53,6 +53,21 @@ design and fixture before enabling those features.
 This is evidence for the exercised layouts and depth, not proof of arbitrary
 recursion safety. Generated nested-message parsing still needs shared depth,
 field/tag/entry/materialization budgets, duplicate-message merge behavior,
-bounded encoding, and independent wire interoperability. The fixture also does
-not establish map, enum, oneof, or recursive equality behavior. In particular,
+bounded encoding, and independent wire interoperability. The recursive fixture also does
+not establish map, oneof, or recursive equality behavior. In particular,
 `Absent` and a present empty child must remain distinct when codecs are added.
+
+## Open enum candidate
+
+`Status` wraps an `I32` in a distinct nominal type. Named constants can alias the
+same numeric value; `from_number` and `to_number` retain unknown values without
+turning them into the zero default. The fixture imports the type across a module
+boundary and places it in a record, explicit presence, and a list. It observes a
+retained original after replacing the optional/list fields. Python assertions
+cover both signed extremes and their neighbors, declared zero/one values and
+neighboring unknown values. Present zero differs from absence; alias constants
+compare equal. Input length is checked before constructing the value.
+
+This fixture tests the runtime representation only. Generated enum wire codecs,
+descriptor validation, and naming/import rules are tested separately by
+`test-protobuf-codegen`.

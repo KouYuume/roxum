@@ -59,3 +59,13 @@ message Envelope {
   }
   message Empty {}
 }
+
+message EnumPacket {
+  enum Mode { MODE_ZERO = 0; MODE_ON = 1; }
+  catalog.State state = 1;
+  optional catalog.State selected = 2;
+  repeated catalog.State states = 3;
+  repeated catalog.State expanded = 4 [packed = false];
+  Mode mode = 5;
+}
+message EnumEnvelope { EnumPacket child = 1; }

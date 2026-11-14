@@ -123,7 +123,7 @@ class Generator(unittest.TestCase):
         root = pathlib.Path(__file__).resolve().parents[2]
         # Valid messages preceding an unsupported declaration must not be emitted.
         for declaration, diagnostic in [
-                ('message Bad { enum Choice { ZERO = 0; } repeated Choice value = 1; }', b'invalid.proto:.Bad:'),
+                ('message Bad { enum Choice { option deprecated = true; ZERO = 0; } repeated Choice value = 1; }', b'invalid.proto:.Bad.Choice:'),
                 ('message Bad { Bad child = 1; }', b'invalid.proto:.Bad:'),
                 # The diagnostic must identify the cycle, not its acyclic ancestor.
                 ('message Ancestor { Left child = 1; } message Left { Right child = 1; } '
@@ -214,7 +214,7 @@ class Generator(unittest.TestCase):
             (lambda r: r.proto_file[0].public_dependency.append(0), 'public import indices'),
             (lambda r: r.proto_file[-1].dependency.append('test.proto'), 'cyclic imports'),
             (lambda r: r.proto_file[0].dependency.append('test.proto'), 'cyclic imports'),
-            (lambda r: r.proto_file[-1].enum_type.add(name='Choice'), 'enums and extensions'),
+            (lambda r: r.proto_file[-1].enum_type.add(name='Choice'), 'first enum value must be zero'),
         ]
         # Public indices immediately below, at, and above the valid upper bound.
         for index in [-1, 1, 2, 3]:
@@ -400,6 +400,33 @@ class Generator(unittest.TestCase):
         result = g.generate(req)
         self.assertIn('recursive', result.error)
         self.assertFalse(result.file)
+
+    def test_enum_contract(self):
+        req, file, message, field = request()
+        enum = file.enum_type.add(name='State')
+        enum.value.add(name='STATE_ZERO', number=0)
+        enum.value.add(name='STATE_ONE', number=1)
+        field.type, field.type_name = 14, '.State'
+        for label in [1, 3]:
+            field.label = label
+            self.assertFalse(g.generate(req).error)
+        enum.value.add(name='STATE_ALIAS', number=1)
+        self.assertIn('allow_alias', g.generate(req).error)
+        enum.options.allow_alias = True
+        self.assertFalse(g.generate(req).error)
+        for name in ['FROM_NUMBER', 'READ_INT32', 'bad', 'STATE_ONE']:
+            enum.value[-1].name = name
+            result = g.generate(req)
+            self.assertTrue(result.error)
+            self.assertFalse(result.file)
+        enum.value[-1].name = 'STATE_ALIAS'
+        field.type_name = '.Sample'
+        self.assertIn('kind', g.generate(req).error)
+        field.type_name = '.Missing'
+        self.assertTrue(g.generate(req).error)
+        field.type_name = '.State'
+        enum.value[0].number = 1
+        self.assertIn('first enum', g.generate(req).error)
 
     def test_plugin_error_protocol(self):
         output = subprocess.run([sys.executable, g.__file__], input=b'\x80', capture_output=True, check=True)
