@@ -123,7 +123,7 @@ class Generator(unittest.TestCase):
         root = pathlib.Path(__file__).resolve().parents[2]
         # Valid messages preceding an unsupported declaration must not be emitted.
         for declaration, diagnostic in [
-                ('message Bad { repeated int64 value = 1; }', b'invalid.proto:.Bad.value:'),
+                ('message Bad { enum Choice { ZERO = 0; } repeated Choice value = 1; }', b'invalid.proto:.Bad:'),
                 ('message Bad { Bad child = 1; }', b'invalid.proto:.Bad:'),
                 # The diagnostic must identify the cycle, not its acyclic ancestor.
                 ('message Ancestor { Left child = 1; } message Left { Right child = 1; } '
@@ -186,7 +186,7 @@ class Generator(unittest.TestCase):
         for package in ['.pkg', 'pkg.', 'pkg..name', '9pkg', 'pkg/name']:
             self.reject(lambda r, f, m, x: setattr(f, 'package', package))
         for mutate in [lambda n: n.field.add(name='value', number=1, type=11, label=1, type_name='.Missing'),
-                       lambda n: n.field.add(name='value', number=1, type=3, label=3),
+                       lambda n: n.field.add(name='value', number=1, type=14, label=3),
                        lambda n: n.enum_type.add(name='Choice'),
                        lambda n: setattr(n.options, 'map_entry', True),
                        lambda n: setattr(n, 'name', 'bad_name')]:
@@ -341,8 +341,8 @@ class Generator(unittest.TestCase):
             self.assertFalse(result.file)
 
     def test_repeated_length_fields(self):
-        # Signed, floating-point, boolean, enum, and group lists remain unsupported.
-        for kind in set(range(1, 19)) - {9, 12, 11, 4, 6, 7, 13}:
+        # Enum and group lists remain unsupported.
+        for kind in {10, 14}:
             req, file, _, field = request()
             field.type, field.label = kind, 3
             result = g.generate(req)
@@ -369,8 +369,8 @@ class Generator(unittest.TestCase):
                 self.assertTrue(result.error)
                 self.assertFalse(result.file)
 
-    def test_repeated_unsigned_options(self):
-        for kind in [4, 6, 7, 13]:
+    def test_repeated_numeric_options(self):
+        for kind in [1, 2, 3, 4, 5, 6, 7, 8, 13, 15, 16, 17, 18]:
             for packed in [None, False, True]:
                 req, _, _, field = request()
                 field.type, field.label = kind, 3

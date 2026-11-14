@@ -99,6 +99,61 @@ ProtobufScalar := [].{
 	write_double : ProtobufWire.Writer, F64 -> Try(ProtobufWire.Writer, ProtobufWire.Error)
 	write_double = |writer, value| ProtobufWire.write_fixed64(writer, value.to_bits())
 
+	## Packed scalar lists retain wire-reader budgets; elements are already reserved.
+	read_packed_int32 : ProtobufWire.Reader -> Try((List(I32), ProtobufWire.Reader), ProtobufWire.Error)
+	read_packed_int32 = |reader| {
+		(values, after) = ProtobufWire.read_packed_varints(reader)?
+		Ok((values.map(|value| value.to_i32_wrap()), after))
+	}
+
+	read_packed_int64 : ProtobufWire.Reader -> Try((List(I64), ProtobufWire.Reader), ProtobufWire.Error)
+	read_packed_int64 = |reader| {
+		(values, after) = ProtobufWire.read_packed_varints(reader)?
+		Ok((values.map(|value| value.to_i64_wrap()), after))
+	}
+
+	read_packed_sint32 : ProtobufWire.Reader -> Try((List(I32), ProtobufWire.Reader), ProtobufWire.Error)
+	read_packed_sint32 = |reader| {
+		(values, after) = ProtobufWire.read_packed_varints(reader)?
+		Ok((values.map(|value| decode_zigzag32(value.to_u32_wrap())), after))
+	}
+
+	read_packed_sint64 : ProtobufWire.Reader -> Try((List(I64), ProtobufWire.Reader), ProtobufWire.Error)
+	read_packed_sint64 = |reader| {
+		(values, after) = ProtobufWire.read_packed_varints(reader)?
+		Ok((values.map(|value| decode_zigzag64(value)), after))
+	}
+
+	read_packed_sfixed32 : ProtobufWire.Reader -> Try((List(I32), ProtobufWire.Reader), ProtobufWire.Error)
+	read_packed_sfixed32 = |reader| {
+		(values, after) = ProtobufWire.read_packed_fixed32(reader)?
+		Ok((values.map(|value| value.to_i32_wrap()), after))
+	}
+
+	read_packed_sfixed64 : ProtobufWire.Reader -> Try((List(I64), ProtobufWire.Reader), ProtobufWire.Error)
+	read_packed_sfixed64 = |reader| {
+		(values, after) = ProtobufWire.read_packed_fixed64(reader)?
+		Ok((values.map(|value| value.to_i64_wrap()), after))
+	}
+
+	read_packed_bool : ProtobufWire.Reader -> Try((List(Bool), ProtobufWire.Reader), ProtobufWire.Error)
+	read_packed_bool = |reader| {
+		(values, after) = ProtobufWire.read_packed_varints(reader)?
+		Ok((values.map(|value| value != 0), after))
+	}
+
+	read_packed_float : ProtobufWire.Reader -> Try((List(F32), ProtobufWire.Reader), ProtobufWire.Error)
+	read_packed_float = |reader| {
+		(values, after) = ProtobufWire.read_packed_fixed32(reader)?
+		Ok((values.map(|value| F32.from_bits(value)), after))
+	}
+
+	read_packed_double : ProtobufWire.Reader -> Try((List(F64), ProtobufWire.Reader), ProtobufWire.Error)
+	read_packed_double = |reader| {
+		(values, after) = ProtobufWire.read_packed_fixed64(reader)?
+		Ok((values.map(|value| F64.from_bits(value)), after))
+	}
+
 	## Charge both the byte slice and the UTF-8 conversion before materializing a string.
 	read_string : ProtobufWire.Reader -> Try((Str, ProtobufWire.Reader), ProtobufWire.Error)
 	read_string = |reader| {

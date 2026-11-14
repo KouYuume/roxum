@@ -8,6 +8,8 @@ import pf.RequestBody
 import pf.Router
 import pf.Server
 import proto.ProtobufWire
+import generated.ScalarLists
+import generated.ScalarListEnvelope
 import generated.UnsignedLists
 import generated.UnsignedListEnvelope
 import generated.Packet
@@ -43,7 +45,7 @@ init! = |{}| Ok({
 })
 
 routes : Router(Model, [], {})
-routes = Router.new.route("/unsigned-lists", MethodRouter.post(Handler.stateful(unsigned_answer))).route("/unsigned-view", MethodRouter.post(Handler.stateful(unsigned_answer))).route("/unsigned-construct", MethodRouter.post(Handler.stateful(unsigned_answer))).route("/unsigned-envelope", MethodRouter.post(Handler.stateful(unsigned_answer))).route("/unsigned-output", MethodRouter.post(Handler.stateful(unsigned_answer))).route("/unsigned-zero-depth", MethodRouter.post(Handler.stateful(unsigned_answer))).route("/unsigned-merge", MethodRouter.post(Handler.stateful(unsigned_answer))).route("/message-list", MethodRouter.post(Handler.stateful(message_list_answer))).route("/message-list-envelope", MethodRouter.post(Handler.stateful(message_list_answer))).route("/message-list-output", MethodRouter.post(Handler.stateful(message_list_answer))).route("/message-list-construct", MethodRouter.post(Handler.stateful(message_list_answer))).route("/collections", MethodRouter.post(Handler.stateful(collection_answer))).route("/collection-envelope", MethodRouter.post(Handler.stateful(collection_answer))).route("/collections-construct", MethodRouter.post(Handler.stateful(collection_answer))).route("/collections-output", MethodRouter.post(Handler.stateful(collection_answer))).route("/generated-construct", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/generated-message", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/generated-scalar-message", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/generated-top", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/generated-message-limit", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/generated-presence", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/compose-message", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose-scalars", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose-retained", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose-view", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose-output", MethodRouter.post(Handler.stateful(composition_answer))).route("/identity-copy", MethodRouter.post(Handler.stateful(identity_answer))).route("/identity-view", MethodRouter.post(Handler.stateful(identity_answer))).route("/identity-construct", MethodRouter.post(Handler.stateful(identity_answer))).route("/identity-empty", MethodRouter.post(Handler.stateful(identity_answer))).route("/optional", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-view", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-text", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-bytes", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-construct", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-defaults", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-clear", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-limits", MethodRouter.post(Handler.stateful(optional_answer))).route("/scalars", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-view", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-text", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-construct", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-limits", MethodRouter.post(Handler.stateful(scalar_answer))).route("/copy", MethodRouter.post(Handler.stateful(answer))).route("/construct", MethodRouter.post(Handler.stateful(answer))).route("/defaults", MethodRouter.post(Handler.stateful(answer))).route("/view", MethodRouter.post(Handler.stateful(answer))).route("/empty", MethodRouter.post(Handler.stateful(answer))).route("/limits", MethodRouter.post(Handler.stateful(answer)))
+routes = Router.new.route("/scalar-lists", MethodRouter.post(Handler.stateful(scalar_lists_answer))).route("/scalar-lists-view", MethodRouter.post(Handler.stateful(scalar_lists_answer))).route("/scalar-lists-construct", MethodRouter.post(Handler.stateful(scalar_lists_answer))).route("/scalar-lists-envelope", MethodRouter.post(Handler.stateful(scalar_lists_answer))).route("/scalar-lists-output", MethodRouter.post(Handler.stateful(scalar_lists_answer))).route("/scalar-lists-merge", MethodRouter.post(Handler.stateful(scalar_lists_answer))).route("/unsigned-lists", MethodRouter.post(Handler.stateful(unsigned_answer))).route("/unsigned-view", MethodRouter.post(Handler.stateful(unsigned_answer))).route("/unsigned-construct", MethodRouter.post(Handler.stateful(unsigned_answer))).route("/unsigned-envelope", MethodRouter.post(Handler.stateful(unsigned_answer))).route("/unsigned-output", MethodRouter.post(Handler.stateful(unsigned_answer))).route("/unsigned-zero-depth", MethodRouter.post(Handler.stateful(unsigned_answer))).route("/unsigned-merge", MethodRouter.post(Handler.stateful(unsigned_answer))).route("/message-list", MethodRouter.post(Handler.stateful(message_list_answer))).route("/message-list-envelope", MethodRouter.post(Handler.stateful(message_list_answer))).route("/message-list-output", MethodRouter.post(Handler.stateful(message_list_answer))).route("/message-list-construct", MethodRouter.post(Handler.stateful(message_list_answer))).route("/collections", MethodRouter.post(Handler.stateful(collection_answer))).route("/collection-envelope", MethodRouter.post(Handler.stateful(collection_answer))).route("/collections-construct", MethodRouter.post(Handler.stateful(collection_answer))).route("/collections-output", MethodRouter.post(Handler.stateful(collection_answer))).route("/generated-construct", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/generated-message", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/generated-scalar-message", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/generated-top", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/generated-message-limit", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/generated-presence", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/compose-message", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose-scalars", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose-retained", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose-view", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose-output", MethodRouter.post(Handler.stateful(composition_answer))).route("/identity-copy", MethodRouter.post(Handler.stateful(identity_answer))).route("/identity-view", MethodRouter.post(Handler.stateful(identity_answer))).route("/identity-construct", MethodRouter.post(Handler.stateful(identity_answer))).route("/identity-empty", MethodRouter.post(Handler.stateful(identity_answer))).route("/optional", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-view", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-text", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-bytes", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-construct", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-defaults", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-clear", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-limits", MethodRouter.post(Handler.stateful(optional_answer))).route("/scalars", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-view", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-text", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-construct", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-limits", MethodRouter.post(Handler.stateful(scalar_answer))).route("/copy", MethodRouter.post(Handler.stateful(answer))).route("/construct", MethodRouter.post(Handler.stateful(answer))).route("/defaults", MethodRouter.post(Handler.stateful(answer))).route("/view", MethodRouter.post(Handler.stateful(answer))).route("/empty", MethodRouter.post(Handler.stateful(answer))).route("/limits", MethodRouter.post(Handler.stateful(answer)))
 
 answer = |_model, context| {
 	bytes = match context.request.body {
@@ -556,5 +558,92 @@ unsigned_merge = |bytes, limits| {
 	original = UnsignedLists.encode(initial, 4096)?
 	writer = ProtobufWire.write_bytes(ProtobufWire.new_writer(4096), original)?
 	result = UnsignedLists.encode_into(merged, writer)?
+	Ok(ProtobufWire.output(result))
+}
+
+scalar_lists_answer = |_model, context| {
+	bytes = match context.request.body {
+		RequestBody.Bytes(value) => value
+		_ => []
+	}
+	limits = { input_bytes: 4096, field_bytes: 256, depth: 0, tags: 128, entries: 64, materialized_bytes: 0 }
+	if context.request.path == "/scalar-lists-envelope" {
+		return scalar_reply(copy_generated(bytes, { ..limits, depth: 1 }, ScalarListEnvelope.decode, ScalarListEnvelope.encode))
+	}
+	if context.request.path == "/scalar-lists-construct" {
+		value = ScalarLists.{ signed32: [-2147483648, 0, 2147483647], signed64: [-9223372036854775808, 0, 9223372036854775807], zigzag32: [-2147483648, 0, 2147483647], zigzag64: [-9223372036854775808, 0, 9223372036854775807], signed_fixed32: [-2147483648, 0, 2147483647], signed_fixed64: [-9223372036854775808, 0, 9223372036854775807], enabled: [Bool.False, Bool.True], float_value: [0.0.F32, F32.from_bits(0x80000000), F32.infinity, F32.from_bits(0x7fc00001)], double_value: [0.0.F64, F64.from_bits(0x8000000000000000), F64.infinity, F64.from_bits(0x7ff8000000000001)], expanded_signed32: [-2147483648, 0, 2147483647], expanded_signed64: [-9223372036854775808, 0, 9223372036854775807], expanded_zigzag32: [-2147483648, 0, 2147483647], expanded_zigzag64: [-9223372036854775808, 0, 9223372036854775807], expanded_signed_fixed32: [-2147483648, 0, 2147483647], expanded_signed_fixed64: [-9223372036854775808, 0, 9223372036854775807], expanded_enabled: [Bool.False, Bool.True], expanded_float_value: [0.0.F32, F32.from_bits(0x80000000), F32.infinity, F32.from_bits(0x7fc00001)], expanded_double_value: [0.0.F64, F64.from_bits(0x8000000000000000), F64.infinity, F64.from_bits(0x7ff8000000000001)] }
+		return scalar_reply(ScalarLists.encode(value, 4096))
+	}
+	if context.request.path == "/scalar-lists-merge" {
+		return scalar_reply(scalar_lists_merge(bytes, limits))
+	}
+	decoded = match ScalarLists.decode(bytes, limits) {
+		Ok(value) => value
+		Err(error) => return scalar_reply(Err(error))
+	}
+	if context.request.path == "/scalar-lists-view" {
+		ScalarLists.(value) = decoded
+		return Ok(
+			Reply.text(
+				Str.join_with(
+					[
+						Str.join_with(value.signed32.map(|n| n.to_str()), ","),
+						Str.join_with(value.signed64.map(|n| n.to_str()), ","),
+						Str.join_with(value.zigzag32.map(|n| n.to_str()), ","),
+						Str.join_with(value.zigzag64.map(|n| n.to_str()), ","),
+						Str.join_with(value.signed_fixed32.map(|n| n.to_str()), ","),
+						Str.join_with(value.signed_fixed64.map(|n| n.to_str()), ","),
+						Str.join_with(
+							value.enabled.map(
+								|n| if n {
+									"1"
+								} else {
+									"0"
+								},
+							),
+							",",
+						),
+						Str.join_with(value.float_value.map(|n| n.to_bits().to_str()), ","),
+						Str.join_with(value.double_value.map(|n| n.to_bits().to_str()), ","),
+						Str.join_with(value.expanded_signed32.map(|n| n.to_str()), ","),
+						Str.join_with(value.expanded_signed64.map(|n| n.to_str()), ","),
+						Str.join_with(value.expanded_zigzag32.map(|n| n.to_str()), ","),
+						Str.join_with(value.expanded_zigzag64.map(|n| n.to_str()), ","),
+						Str.join_with(value.expanded_signed_fixed32.map(|n| n.to_str()), ","),
+						Str.join_with(value.expanded_signed_fixed64.map(|n| n.to_str()), ","),
+						Str.join_with(
+							value.expanded_enabled.map(
+								|n| if n {
+									"1"
+								} else {
+									"0"
+								},
+							),
+							",",
+						),
+						Str.join_with(value.expanded_float_value.map(|n| n.to_bits().to_str()), ","),
+						Str.join_with(value.expanded_double_value.map(|n| n.to_bits().to_str()), ","),
+					],
+					";",
+				),
+			),
+		)
+	}
+	capacity = if context.request.path == "/scalar-lists-output" {
+		16
+	} else {
+		4096
+	}
+	scalar_reply(ScalarLists.encode(decoded, capacity))
+}
+
+scalar_lists_merge = |bytes, limits| {
+	ScalarLists.(defaults) = ScalarLists.defaults
+	initial = ScalarLists.{ ..defaults, signed32: [-42], float_value: [F32.from_bits(0x80000000)] }
+	reader = ProtobufWire.new_reader(bytes, limits)?
+	(merged, _) = ScalarLists.decode_into(reader, initial)?
+	original = ScalarLists.encode(initial, 4096)?
+	writer = ProtobufWire.write_bytes(ProtobufWire.new_writer(4096), original)?
+	result = ScalarLists.encode_into(merged, writer)?
 	Ok(ProtobufWire.output(result))
 }

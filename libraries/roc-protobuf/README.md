@@ -161,5 +161,13 @@ charged as payload materialization. Tags and all other counters remain shared
 and are never replenished. The caller reads field tags separately. Fixed-width
 payloads must contain complete elements. Errors return no partial list or reader.
 
-Generated unsigned repeated fields use these helpers. Generated signed integer,
-boolean, and floating-point lists remain unsupported.
+Generated numeric and boolean repeated fields use these helpers.
+`ProtobufScalar.read_packed_int32`, `read_packed_int64`, `read_packed_sint32`,
+`read_packed_sint64`, `read_packed_sfixed32`, `read_packed_sfixed64`,
+`read_packed_bool`, `read_packed_float`, and `read_packed_double` add typed list
+conversion without reserving entries a second time. They return the converted
+list and the same advanced reader. The caller consumes the field tag first.
+Their temporary raw and typed lists share the logical entry bound; list storage
+is not charged as materialized byte payloads. Conversion preserves scalar
+semantics, including 32-bit truncation, nonzero booleans, signed zero, and NaN
+canonicalization on encoding. Errors propagate without a partial list or reader.
