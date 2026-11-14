@@ -15,6 +15,7 @@ the same repository revision and the [pinned Roc compiler](../../docs/toolchain.
 - Singular message fields in acyclic type graphs, with explicit presence and wire merge.
 - Repeated `string`, `bytes`, and acyclic messages, represented by `List(Str)`,
   `List(List(U8))`, and `List(Child)`.
+- Repeated `uint32`, `uint64`, `fixed32`, and `fixed64`, with packed and unpacked input.
 - All 15 proto3 scalar types as singular fields, with implicit presence or explicit `optional` presence (see below).
 - Message names matching `[A-Z][A-Za-z0-9]*` and field names matching
   `[a-z][a-z0-9]*(?:_[a-z0-9]+)*`. Roc keywords, conflicting built-in names,
@@ -25,10 +26,11 @@ the same repository revision and the [pinned Roc compiler](../../docs/toolchain.
 - Files may contain services; the plugin ignores service declarations and their
   options. It generates no RPC bindings.
 
-Repeated numeric fields, maps, enums, real `oneof`, recursive message fields, proto2,
+Repeated signed integers, booleans, floats, maps, enums, real `oneof`, recursive message fields, proto2,
 editions, extensions, and weak imports are rejected.
-All file/message/field/oneof options are rejected in this pilot, including options
-for other languages. Validation completes before any output is returned;
+The `packed` field option is accepted only on the supported repeated unsigned
+integer fields. All other file/message/field/oneof options are rejected in this
+pilot, including options for other languages. Validation completes before any output is returned;
 errors identify the file and fully qualified symbol where possible.
 
 ## Schema identities and imports
@@ -83,7 +85,7 @@ call nesting; total temporary memory can scale with schema depth and output
 limit. There is no independent encoder depth/work limit. Do not interpret the
 output bound as a total allocation bound. Message fields with or without explicit
 `optional` use the same presence and merge behavior. Synthetic oneofs remain descriptor metadata and do not introduce
-a user-facing union beyond `Absent / Present`. Repeated numeric fields, maps and real
+a user-facing union beyond `Absent / Present`. Repeated signed integers, booleans, floats, maps and real
 oneofs remain unsupported.
 
 ## Repeated strings and bytes
@@ -98,7 +100,7 @@ appending. Existing string/byte readers enforce field and cumulative materialize
 byte limits; strings charge both their byte read and UTF-8 conversion. List
 storage is bounded logically by entries, not included as exact allocator bytes.
 Encoding emits each element, including empty values, against the accumulated
-writer capacity. Numeric packed fields remain unsupported.
+writer capacity. See below for unsigned packed fields.
 
 ## Repeated messages
 
@@ -112,6 +114,28 @@ Each message element reserves one shared entry before entering its reader scope.
 Nested lists consume the same entry budget, and field, depth, tag, and
 materialization budgets remain shared. Recursive message graphs are still
 rejected, including cycles through repeated fields.
+
+## Repeated unsigned integers
+
+Repeated `uint32`, `uint64`, `fixed32`, and `fixed64` use `List(U32)` or `List(U64)`
+and default to empty lists. Decoders accept both packed length-delimited segments
+and individual unpacked values, regardless of the schema's `packed` option.
+Multiple segments and mixed forms append in wire order, including zero values.
+Merging parent occurrences appends to existing lists. Packed `uint32` conversion
+keeps the low 32 bits, just like its unpacked scalar reader.
+
+Each element consumes one shared entry before allocation. Packed segments do not
+add message depth or materialized-byte charges; their temporary raw-value lists
+and destination lists are bounded logically by the entry budget. Tags count wire
+occurrences, including empty segments. Packed lengths obey the same field limit,
+and an incomplete element cannot read beyond its segment or containing message.
+
+Encoding defaults to one packed segment per nonempty list, also when
+`packed=true` is explicit. `packed=false` emits a tag for each element. Empty lists
+emit nothing. Packed encoding uses a temporary child writer bounded by remaining
+output capacity; the final tag, length prefix, and payload must all fit the
+accumulated writer. This is a logical output bound, not a total allocation limit.
+Signed integer, boolean, and floating-point repeated fields remain unsupported.
 
 ## Scalar representation
 
@@ -339,3 +363,8 @@ fields, an empty codec, and a suffix. The framing is test transport, not itself 
 nested-message encoder. Generated envelope codecs are additionally compared
 with the same Python oracle for presence, merge, shared limits, nested levels,
 and length-delimited output.
+
+Unsigned-list fixtures compare all four types and explicit packing options with
+Python in both directions, inspect decoded Roc lists directly, and test mixed
+segments, zero values, width limits, uint32 truncation, parent merges, retained
+initial values, malformed boundaries, shared entry/tag limits, and output limits.

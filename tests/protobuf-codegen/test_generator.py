@@ -77,7 +77,7 @@ class Generator(unittest.TestCase):
         for kind in range(1, 19):
             if kind not in g.SCALARS:
                 self.reject(lambda r, f, m, x: setattr(x, 'type', kind))
-        for attribute, value in [('label', 2), ('label', 3), ('proto3_optional', True),
+        for attribute, value in [('label', 2), ('proto3_optional', True),
                                  ('oneof_index', 0), ('default_value', '0'),
                                  ('type_name', '.Other'), ('extendee', '.Other')]:
             self.reject(lambda r, f, m, x: setattr(x, attribute, value))
@@ -123,7 +123,7 @@ class Generator(unittest.TestCase):
         root = pathlib.Path(__file__).resolve().parents[2]
         # Valid messages preceding an unsupported declaration must not be emitted.
         for declaration, diagnostic in [
-                ('message Bad { repeated uint64 value = 1; }', b'invalid.proto:.Bad.value:'),
+                ('message Bad { repeated int64 value = 1; }', b'invalid.proto:.Bad.value:'),
                 ('message Bad { Bad child = 1; }', b'invalid.proto:.Bad:'),
                 # The diagnostic must identify the cycle, not its acyclic ancestor.
                 ('message Ancestor { Left child = 1; } message Left { Right child = 1; } '
@@ -186,7 +186,7 @@ class Generator(unittest.TestCase):
         for package in ['.pkg', 'pkg.', 'pkg..name', '9pkg', 'pkg/name']:
             self.reject(lambda r, f, m, x: setattr(f, 'package', package))
         for mutate in [lambda n: n.field.add(name='value', number=1, type=11, label=1, type_name='.Missing'),
-                       lambda n: n.field.add(name='value', number=1, type=4, label=3),
+                       lambda n: n.field.add(name='value', number=1, type=3, label=3),
                        lambda n: n.enum_type.add(name='Choice'),
                        lambda n: setattr(n.options, 'map_entry', True),
                        lambda n: setattr(n, 'name', 'bad_name')]:
@@ -341,8 +341,8 @@ class Generator(unittest.TestCase):
             self.assertFalse(result.file)
 
     def test_repeated_length_fields(self):
-        # Numeric, enum, and group lists remain unsupported.
-        for kind in set(range(1, 19)) - {9, 12, 11}:
+        # Signed, floating-point, boolean, enum, and group lists remain unsupported.
+        for kind in set(range(1, 19)) - {9, 12, 11, 4, 6, 7, 13}:
             req, file, _, field = request()
             field.type, field.label = kind, 3
             result = g.generate(req)
@@ -368,6 +368,25 @@ class Generator(unittest.TestCase):
                 result = g.generate(req)
                 self.assertTrue(result.error)
                 self.assertFalse(result.file)
+
+    def test_repeated_unsigned_options(self):
+        for kind in [4, 6, 7, 13]:
+            for packed in [None, False, True]:
+                req, _, _, field = request()
+                field.type, field.label = kind, 3
+                if packed is not None:
+                    field.options.packed = packed
+                result = g.generate(req)
+                self.assertFalse(result.error, result.error)
+                self.assertEqual(result.SerializeToString(), g.generate(req).SerializeToString())
+                # A recognized option must not hide another option or unknown bytes.
+                for extra in [b'\x18\x01', b'\x80\x80\x04\x01']:
+                    field.options.MergeFromString(extra)
+                    result = g.generate(req)
+                    self.assertTrue(result.error)
+                    self.assertFalse(result.file)
+                    field.options.Clear()
+                    field.options.packed = True
 
     def test_repeated_message_cycles(self):
         req, _, message, field = request()

@@ -27,6 +27,8 @@ SCALARS = {
 MESSAGE = d.FieldDescriptorProto.TYPE_MESSAGE
 WIRE_TYPES = {d.FieldDescriptorProto.TYPE_UINT64, d.FieldDescriptorProto.TYPE_FIXED32,
               d.FieldDescriptorProto.TYPE_FIXED64, d.FieldDescriptorProto.TYPE_BYTES}
+PACKABLE_TYPES = {d.FieldDescriptorProto.TYPE_UINT32, d.FieldDescriptorProto.TYPE_UINT64,
+                  d.FieldDescriptorProto.TYPE_FIXED32, d.FieldDescriptorProto.TYPE_FIXED64}
 FLOAT_TYPES = {d.FieldDescriptorProto.TYPE_FLOAT, d.FieldDescriptorProto.TYPE_DOUBLE}
 KEYWORDS = set('app package platform provides exposes imports import as if then else match when is expect dbg crash return var for in while and or not where type alias implements with exposing generates has hosted interface module packages requires targets break'.split())
 RESERVED = {'Builtin', 'ProtobufScalar', 'ProtobufWire', 'List', 'Try', 'U64', 'U32', 'U8', 'Bool', 'Str', 'Main', 'Box', 'Dec', 'F32', 'F64', 'I8', 'I16', 'I32', 'I64', 'I128', 'U16', 'U128', 'Set', 'Dict'}
@@ -78,17 +80,21 @@ def validate(request):
             require(1 <= field.number <= 536870911 and not 19000 <= field.number <= 19999,
                     where, 'invalid field number')
             require((field.type in SCALARS or field.type == MESSAGE) and (field.label == d.FieldDescriptorProto.LABEL_OPTIONAL
-                         or (repeated(field) and field.type in {d.FieldDescriptorProto.TYPE_STRING, d.FieldDescriptorProto.TYPE_BYTES, MESSAGE}))
+                         or (repeated(field) and field.type in PACKABLE_TYPES | {d.FieldDescriptorProto.TYPE_STRING, d.FieldDescriptorProto.TYPE_BYTES, MESSAGE}))
                     and not field.HasField('default_value') and not field.extendee
                     and (field.type == MESSAGE or not field.type_name),
-                    where, 'only singular fields and repeated string/bytes/message fields are supported')
+                    where, 'only singular fields and repeated unsigned/string/bytes/message fields are supported')
             require(not repeated(field) or not field.proto3_optional, where, 'repeated fields cannot be optional')
             if field.proto3_optional:
                 require(field.HasField('oneof_index') and 0 <= field.oneof_index < len(message.oneof_decl),
                         where, 'optional field requires a synthetic oneof')
             else:
                 require(not field.HasField('oneof_index'), where, 'real oneofs are not supported')
-            require(not field.options.SerializeToString(), where, 'field options are not supported')
+            options = d.FieldOptions()
+            options.CopyFrom(field.options)
+            if repeated(field) and field.type in PACKABLE_TYPES:
+                options.ClearField('packed')
+            require(not options.SerializeToString(), where, 'only packed on supported repeated numeric fields is accepted')
     return messages, schema.references(files, messages)
 
 
@@ -163,6 +169,15 @@ def emit(symbol, identities):
                       '\t\t\t\t\t$reader = after',
                       f'\t\t\t\t\t$value = {{ ..$value, {f.name}: $value.{f.name}.append(value) }}',
                       '\t\t\t\t}']
+            if f.type in PACKABLE_TYPES:
+                packed_reader = {'Varint': 'varints', 'Fixed32': 'fixed32', 'Fixed64': 'fixed64'}[kind]
+                converted = 'item.to_u32_wrap()' if f.type == d.FieldDescriptorProto.TYPE_UINT32 else 'item'
+                lines += [f'\t\t\t\t({f.number}, Bytes) => {{',
+                          f'\t\t\t\t\t(items, after) = ProtobufWire.read_packed_{packed_reader}($reader)?',
+                          '\t\t\t\t\t$reader = after',
+                          '\t\t\t\t\tfor item in items {',
+                          f'\t\t\t\t\t\t$value = {{ ..$value, {f.name}: $value.{f.name}.append({converted}) }}',
+                          '\t\t\t\t\t}', '\t\t\t\t}']
             continue
         lines += [f'\t\t\t\t({f.number}, {kind}) => {{',
                   f'\t\t\t\t\t(value, after) = {codec}.read_{operation}($reader)?',
@@ -181,7 +196,18 @@ def emit(symbol, identities):
     for f in fields:
         _, kind, operation, default = info(f)
         codec = 'ProtobufWire' if f.type in WIRE_TYPES else 'ProtobufScalar'
-        if repeated(f):
+        if repeated(f) and f.type in PACKABLE_TYPES and (not f.options.HasField('packed') or f.options.packed):
+            lines += [f'\t\tif value.{f.name}.len() > 0 {{',
+                      f'\t\t\t$writer = ProtobufWire.write_tag($writer, {{ number: {f.number}, kind: Bytes }})?',
+                      f'\t\t\tencode_items : List({info(f)[0]}), ProtobufWire.Writer -> Try(ProtobufWire.Writer, ProtobufWire.Error)',
+                      '\t\t\tencode_items = |items, child| {',
+                      '\t\t\t\tvar $child = child',
+                      '\t\t\t\tfor item in items {',
+                      f'\t\t\t\t\t$child = {codec}.write_{operation}($child, item)?',
+                      '\t\t\t\t}', '\t\t\t\tOk($child)', '\t\t\t}',
+                      f'\t\t\t$writer = ProtobufWire.write_message($writer, value.{f.name}, encode_items)?',
+                      '\t\t}']
+        elif repeated(f):
             lines += [f'\t\tfor item in value.{f.name} {{',
                       f'\t\t\t$writer = ProtobufWire.write_tag($writer, {{ number: {f.number}, kind: {kind} }})?',
                       (f'\t\t\t$writer = ProtobufWire.write_message($writer, item, {info(f)[0]}.encode_into)?' if f.type == MESSAGE else f'\t\t\t$writer = {codec}.write_{operation}($writer, item)?'), '\t\t}']
