@@ -6,6 +6,7 @@ import random
 import subprocess
 import sys
 import tempfile
+from packed_cases import verify_packed
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'support'))
 from roxum_process import read_port, stop
@@ -170,6 +171,7 @@ def main():
                     expected = reference(data, discard)
                     assert actual == expected, (data.hex(), discard, actual, expected)
                     count += 1
+            verify_packed(client, varint)
             client.close()
             client = None
             assert stop(server) == 0
