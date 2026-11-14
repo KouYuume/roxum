@@ -10,8 +10,9 @@ signed zero and NaN canonicalization. Optional scalar fields use
 `[Absent, Present(T)]`, with present-default values retained on the wire.
 Singular message fields in acyclic type graphs are supported with explicit
 presence and duplicate-occurrence wire merge, with or without explicit `optional`.
-Recursive schemas, repeated
-fields, maps, enums, and real oneofs remain unsupported.
+Repeated string and bytes fields preserve order and share collection-entry and
+materialization limits. Recursive schemas, repeated numeric/message fields,
+maps, enums, and real oneofs remain unsupported.
 A [handwritten layout fixture](../../tests/protobuf-layouts/README.md)
 checks bounded self-recursion, mutual recursion, recursive lists, and imported
 payload records on the pinned compiler. The generator retains fully qualified

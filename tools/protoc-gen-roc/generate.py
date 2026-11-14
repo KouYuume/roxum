@@ -32,6 +32,10 @@ KEYWORDS = set('app package platform provides exposes imports import as if then 
 RESERVED = {'Builtin', 'ProtobufScalar', 'ProtobufWire', 'List', 'Try', 'U64', 'U32', 'U8', 'Bool', 'Str', 'Main', 'Box', 'Dec', 'F32', 'F64', 'I8', 'I16', 'I32', 'I64', 'I128', 'U16', 'U128', 'Set', 'Dict'}
 
 
+def repeated(field):
+    return field.label == d.FieldDescriptorProto.LABEL_REPEATED
+
+
 def require(condition, location, reason):
     if not condition:
         raise ValueError(f'{location}: {reason}')
@@ -73,10 +77,12 @@ def validate(request):
             numbers.add(field.number)
             require(1 <= field.number <= 536870911 and not 19000 <= field.number <= 19999,
                     where, 'invalid field number')
-            require((field.type in SCALARS or field.type == MESSAGE) and field.label == d.FieldDescriptorProto.LABEL_OPTIONAL
+            require((field.type in SCALARS or field.type == MESSAGE) and (field.label == d.FieldDescriptorProto.LABEL_OPTIONAL
+                         or (repeated(field) and field.type in {d.FieldDescriptorProto.TYPE_STRING, d.FieldDescriptorProto.TYPE_BYTES}))
                     and not field.HasField('default_value') and not field.extendee
                     and (field.type == MESSAGE or not field.type_name),
-                    where, 'only singular scalar or message fields are supported')
+                    where, 'only singular fields and repeated string/bytes fields are supported')
+            require(not repeated(field) or not field.proto3_optional, where, 'repeated fields cannot be optional')
             if field.proto3_optional:
                 require(field.HasField('oneof_index') and 0 <= field.oneof_index < len(message.oneof_decl),
                         where, 'optional field requires a synthetic oneof')
@@ -98,8 +104,13 @@ def emit(symbol, identities):
     def present(field):
         return field.proto3_optional or field.type == MESSAGE
 
-    shape = ', '.join(f'{f.name} : ' + (f'[Absent, Present({info(f)[0]})]' if present(f) else info(f)[0]) for f in fields)
-    defaults = ', '.join(f'{f.name}: ' + ('Absent' if present(f) else info(f)[3]) for f in fields)
+    def field_type(field):
+        if repeated(field):
+            return f'List({info(field)[0]})'
+        return f'[Absent, Present({info(field)[0]})]' if present(field) else info(field)[0]
+
+    shape = ', '.join(f'{f.name} : ' + field_type(f) for f in fields)
+    defaults = ', '.join(f'{f.name}: ' + ('[]' if repeated(f) else 'Absent' if present(f) else info(f)[3]) for f in fields)
     imports = ['import wire.ProtobufWire']
     if any(f.type in SCALARS and f.type not in WIRE_TYPES for f in fields):
         imports.append('import wire.ProtobufScalar')
@@ -136,6 +147,14 @@ def emit(symbol, identities):
             continue
         _, kind, operation, _ = info(f)
         codec = 'ProtobufWire' if f.type in WIRE_TYPES else 'ProtobufScalar'
+        if repeated(f):
+            lines += [f'\t\t\t\t({f.number}, {kind}) => {{',
+                      '\t\t\t\t\treserved = ProtobufWire.reserve($reader, 1, 0)?',
+                      f'\t\t\t\t\t(value, after) = {codec}.read_{operation}(reserved)?',
+                      '\t\t\t\t\t$reader = after',
+                      f'\t\t\t\t\t$value = {{ ..$value, {f.name}: $value.{f.name}.append(value) }}',
+                      '\t\t\t\t}']
+            continue
         lines += [f'\t\t\t\t({f.number}, {kind}) => {{',
                   f'\t\t\t\t\t(value, after) = {codec}.read_{operation}($reader)?',
                   '\t\t\t\t\t$reader = after',
@@ -153,7 +172,11 @@ def emit(symbol, identities):
     for f in fields:
         _, kind, operation, default = info(f)
         codec = 'ProtobufWire' if f.type in WIRE_TYPES else 'ProtobufScalar'
-        if present(f):
+        if repeated(f):
+            lines += [f'\t\tfor item in value.{f.name} {{',
+                      f'\t\t\t$writer = ProtobufWire.write_tag($writer, {{ number: {f.number}, kind: {kind} }})?',
+                      f'\t\t\t$writer = {codec}.write_{operation}($writer, item)?', '\t\t}']
+        elif present(f):
             lines += [f'\t\tmatch value.{f.name} {{', '\t\t\tAbsent => {}',
                       '\t\t\tPresent(present_value) => {',
                       f'\t\t\t\t$writer = ProtobufWire.write_tag($writer, {{ number: {f.number}, kind: {kind} }})?',
