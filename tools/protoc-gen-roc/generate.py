@@ -78,10 +78,10 @@ def validate(request):
             require(1 <= field.number <= 536870911 and not 19000 <= field.number <= 19999,
                     where, 'invalid field number')
             require((field.type in SCALARS or field.type == MESSAGE) and (field.label == d.FieldDescriptorProto.LABEL_OPTIONAL
-                         or (repeated(field) and field.type in {d.FieldDescriptorProto.TYPE_STRING, d.FieldDescriptorProto.TYPE_BYTES}))
+                         or (repeated(field) and field.type in {d.FieldDescriptorProto.TYPE_STRING, d.FieldDescriptorProto.TYPE_BYTES, MESSAGE}))
                     and not field.HasField('default_value') and not field.extendee
                     and (field.type == MESSAGE or not field.type_name),
-                    where, 'only singular fields and repeated string/bytes fields are supported')
+                    where, 'only singular fields and repeated string/bytes/message fields are supported')
             require(not repeated(field) or not field.proto3_optional, where, 'repeated fields cannot be optional')
             if field.proto3_optional:
                 require(field.HasField('oneof_index') and 0 <= field.oneof_index < len(message.oneof_decl),
@@ -138,6 +138,15 @@ def emit(symbol, identities):
     for f in fields:
         if f.type == MESSAGE:
             child = info(f)[0]
+            if repeated(f):
+                lines += [f'\t\t\t\t({f.number}, Bytes) => {{',
+                          '\t\t\t\t\treserved = ProtobufWire.reserve($reader, 1, 0)?',
+                          '\t\t\t\t\tinside = ProtobufWire.enter_message(reserved)?',
+                          f'\t\t\t\t\t(value, after) = {child}.decode_into(inside, {child}.defaults)?',
+                          '\t\t\t\t\t$reader = ProtobufWire.leave_message(after)?',
+                          f'\t\t\t\t\t$value = {{ ..$value, {f.name}: $value.{f.name}.append(value) }}',
+                          '\t\t\t\t}']
+                continue
             lines += [f'\t\t\t\t({f.number}, Bytes) => {{',
                       f'\t\t\t\t\tprevious = match $value.{f.name} {{\n\t\t\t\t\t\tAbsent => {child}.defaults\n\t\t\t\t\t\tPresent(value) => value\n\t\t\t\t\t}}',
                       '\t\t\t\t\tinside = ProtobufWire.enter_message($reader)?',
@@ -175,7 +184,7 @@ def emit(symbol, identities):
         if repeated(f):
             lines += [f'\t\tfor item in value.{f.name} {{',
                       f'\t\t\t$writer = ProtobufWire.write_tag($writer, {{ number: {f.number}, kind: {kind} }})?',
-                      f'\t\t\t$writer = {codec}.write_{operation}($writer, item)?', '\t\t}']
+                      (f'\t\t\t$writer = ProtobufWire.write_message($writer, item, {info(f)[0]}.encode_into)?' if f.type == MESSAGE else f'\t\t\t$writer = {codec}.write_{operation}($writer, item)?'), '\t\t}']
         elif present(f):
             lines += [f'\t\tmatch value.{f.name} {{', '\t\t\tAbsent => {}',
                       '\t\t\tPresent(present_value) => {',

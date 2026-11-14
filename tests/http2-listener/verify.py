@@ -17,7 +17,7 @@ from h2.config import H2Configuration
 from h2.connection import H2Connection
 from h2.events import DataReceived, TrailersReceived, ResponseReceived, StreamEnded, StreamReset, ConnectionTerminated
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'support'))
-from roxum_process import stop
+from roxum_process import stop, STOP_TIMEOUT_SECONDS
 
 
 def verify(executable, unix, debug=False):
@@ -355,7 +355,8 @@ def verify(executable, unix, debug=False):
                         assert dict(response.headers)[':status'] == '200'
                         assert b''.join(event.data for event in drain_events if isinstance(event, DataReceived) and event.stream_id == sid) == payload
                         drained.close()
-                assert stop(process) == 0
+                # SIGTERM was already sent to begin draining; wait without escalating.
+                assert process.wait(timeout=STOP_TIMEOUT_SECONDS) == 0
                 errors.seek(0)
                 entries = [json.loads(line) for line in errors if line.startswith('{')]
                 assert any(entry.get('request_id') == 'trusted-id' for entry in entries), entries

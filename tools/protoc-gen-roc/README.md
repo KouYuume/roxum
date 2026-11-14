@@ -13,7 +13,8 @@ the same repository revision and the [pinned Roc compiler](../../docs/toolchain.
 - Proto3 top-level and lexically nested messages, including empty messages.
   Nesting declares independent codecs; singular message fields may reference them.
 - Singular message fields in acyclic type graphs, with explicit presence and wire merge.
-- Repeated `string` and `bytes`, represented by `List(Str)` and `List(List(U8))`.
+- Repeated `string`, `bytes`, and acyclic messages, represented by `List(Str)`,
+  `List(List(U8))`, and `List(Child)`.
 - All 15 proto3 scalar types as singular fields, with implicit presence or explicit `optional` presence (see below).
 - Message names matching `[A-Z][A-Za-z0-9]*` and field names matching
   `[a-z][a-z0-9]*(?:_[a-z0-9]+)*`. Roc keywords, conflicting built-in names,
@@ -24,7 +25,7 @@ the same repository revision and the [pinned Roc compiler](../../docs/toolchain.
 - Files may contain services; the plugin ignores service declarations and their
   options. It generates no RPC bindings.
 
-Repeated numeric/message fields, maps, enums, real `oneof`, recursive message fields, proto2,
+Repeated numeric fields, maps, enums, real `oneof`, recursive message fields, proto2,
 editions, extensions, and weak imports are rejected.
 All file/message/field/oneof options are rejected in this pilot, including options
 for other languages. Validation completes before any output is returned;
@@ -82,7 +83,7 @@ call nesting; total temporary memory can scale with schema depth and output
 limit. There is no independent encoder depth/work limit. Do not interpret the
 output bound as a total allocation bound. Message fields with or without explicit
 `optional` use the same presence and merge behavior. Synthetic oneofs remain descriptor metadata and do not introduce
-a user-facing union beyond `Absent / Present`. Repeated numeric/message fields, maps and real
+a user-facing union beyond `Absent / Present`. Repeated numeric fields, maps and real
 oneofs remain unsupported.
 
 ## Repeated strings and bytes
@@ -97,7 +98,20 @@ appending. Existing string/byte readers enforce field and cumulative materialize
 byte limits; strings charge both their byte read and UTF-8 conversion. List
 storage is bounded logically by entries, not included as exact allocator bytes.
 Encoding emits each element, including empty values, against the accumulated
-writer capacity. Numeric packed fields and repeated messages remain unsupported.
+writer capacity. Numeric packed fields remain unsupported.
+
+## Repeated messages
+
+Acyclic message lists use `List(Child)`. Each wire occurrence decodes from
+`Child.defaults` and appends a separate element; adjacent occurrences never merge
+with each other. Empty messages remain elements. Merging an enclosing singular
+message appends to its existing list. Encoding writes each element with its own
+tag and length prefix using the bounded child writer.
+
+Each message element reserves one shared entry before entering its reader scope.
+Nested lists consume the same entry budget, and field, depth, tag, and
+materialization budgets remain shared. Recursive message graphs are still
+rejected, including cycles through repeated fields.
 
 ## Scalar representation
 
@@ -170,8 +184,9 @@ materialization budgets through the whole message. Replacing a `bytes` field
 does not refund the copied-byte budget. A string charges twice its UTF-8 byte
 length: once for the wire byte slice and once before conversion to `Str`. This
 conservative accounting applies even if the compiler can reuse storage. Empty
-strings charge zero bytes; duplicates still consume tag budget. This subset
-creates no repeated/map entries, so `entries` is not consumed. The record has a schema-fixed size.
+strings charge zero bytes; duplicates still consume tag budget. Each repeated
+element, including an empty message or payload, also consumes one shared
+`entries` unit. Singular fields do not consume collection entries.
 `encode` takes a maximum output length and returns
 `Try(List(U8), ProtobufWire.Error)`; it omits absent fields and implicit default-valued fields, and writes in
 field-number order. String encoding checks capacity for the full length-prefixed

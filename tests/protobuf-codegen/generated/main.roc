@@ -1,1 +1,1 @@
-package [CollectionEnvelope, Collections, Empty, Entry, EntryDetail, Envelope, EnvelopeEmpty, EnvelopePayload, OptionalEnvelope, OptionalScalars, Packet, ScalarEnvelope, Scalars, Top] { wire: "../../../libraries/roc-protobuf/package/main.roc" }
+package [CollectionEnvelope, Collections, Empty, Entry, EntryDetail, Envelope, EnvelopeEmpty, EnvelopePayload, MessageList, MessageListEnvelope, OptionalEnvelope, OptionalScalars, Packet, ScalarEnvelope, Scalars, Top] { wire: "../../../libraries/roc-protobuf/package/main.roc" }

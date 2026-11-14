@@ -15,6 +15,8 @@ import generated.OptionalScalars
 import generated.OptionalEnvelope
 import generated.ScalarEnvelope
 import generated.Top
+import generated.MessageList
+import generated.MessageListEnvelope
 import generated.Collections
 import generated.CollectionEnvelope
 import generated.Envelope
@@ -39,7 +41,7 @@ init! = |{}| Ok({
 })
 
 routes : Router(Model, [], {})
-routes = Router.new.route("/collections", MethodRouter.post(Handler.stateful(collection_answer))).route("/collection-envelope", MethodRouter.post(Handler.stateful(collection_answer))).route("/collections-construct", MethodRouter.post(Handler.stateful(collection_answer))).route("/collections-output", MethodRouter.post(Handler.stateful(collection_answer))).route("/generated-construct", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/generated-message", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/generated-scalar-message", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/generated-top", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/generated-message-limit", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/generated-presence", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/compose-message", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose-scalars", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose-retained", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose-view", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose-output", MethodRouter.post(Handler.stateful(composition_answer))).route("/identity-copy", MethodRouter.post(Handler.stateful(identity_answer))).route("/identity-view", MethodRouter.post(Handler.stateful(identity_answer))).route("/identity-construct", MethodRouter.post(Handler.stateful(identity_answer))).route("/identity-empty", MethodRouter.post(Handler.stateful(identity_answer))).route("/optional", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-view", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-text", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-bytes", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-construct", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-defaults", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-clear", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-limits", MethodRouter.post(Handler.stateful(optional_answer))).route("/scalars", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-view", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-text", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-construct", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-limits", MethodRouter.post(Handler.stateful(scalar_answer))).route("/copy", MethodRouter.post(Handler.stateful(answer))).route("/construct", MethodRouter.post(Handler.stateful(answer))).route("/defaults", MethodRouter.post(Handler.stateful(answer))).route("/view", MethodRouter.post(Handler.stateful(answer))).route("/empty", MethodRouter.post(Handler.stateful(answer))).route("/limits", MethodRouter.post(Handler.stateful(answer)))
+routes = Router.new.route("/message-list", MethodRouter.post(Handler.stateful(message_list_answer))).route("/message-list-envelope", MethodRouter.post(Handler.stateful(message_list_answer))).route("/message-list-output", MethodRouter.post(Handler.stateful(message_list_answer))).route("/message-list-construct", MethodRouter.post(Handler.stateful(message_list_answer))).route("/collections", MethodRouter.post(Handler.stateful(collection_answer))).route("/collection-envelope", MethodRouter.post(Handler.stateful(collection_answer))).route("/collections-construct", MethodRouter.post(Handler.stateful(collection_answer))).route("/collections-output", MethodRouter.post(Handler.stateful(collection_answer))).route("/generated-construct", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/generated-message", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/generated-scalar-message", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/generated-top", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/generated-message-limit", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/generated-presence", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/compose-message", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose-scalars", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose-retained", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose-view", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose-output", MethodRouter.post(Handler.stateful(composition_answer))).route("/identity-copy", MethodRouter.post(Handler.stateful(identity_answer))).route("/identity-view", MethodRouter.post(Handler.stateful(identity_answer))).route("/identity-construct", MethodRouter.post(Handler.stateful(identity_answer))).route("/identity-empty", MethodRouter.post(Handler.stateful(identity_answer))).route("/optional", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-view", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-text", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-bytes", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-construct", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-defaults", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-clear", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-limits", MethodRouter.post(Handler.stateful(optional_answer))).route("/scalars", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-view", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-text", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-construct", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-limits", MethodRouter.post(Handler.stateful(scalar_answer))).route("/copy", MethodRouter.post(Handler.stateful(answer))).route("/construct", MethodRouter.post(Handler.stateful(answer))).route("/defaults", MethodRouter.post(Handler.stateful(answer))).route("/view", MethodRouter.post(Handler.stateful(answer))).route("/empty", MethodRouter.post(Handler.stateful(answer))).route("/limits", MethodRouter.post(Handler.stateful(answer)))
 
 answer = |_model, context| {
 	bytes = match context.request.body {
@@ -465,4 +467,28 @@ collection_answer = |_model, context| {
 		4096
 	}
 	scalar_reply(Collections.encode(decoded, capacity))
+}
+
+message_list_answer = |_model, context| {
+	bytes = match context.request.body {
+		RequestBody.Bytes(value) => value
+		_ => []
+	}
+	limits = { input_bytes: 4096, field_bytes: 256, depth: 2, tags: 128, entries: 4, materialized_bytes: 512 }
+	if context.request.path == "/message-list-construct" {
+		return scalar_reply(MessageList.encode(MessageList.{ children: [Collections.defaults, Collections.{ texts: ["a"], chunks: [] }, Collections.defaults] }, 4096))
+	}
+	if context.request.path == "/message-list-envelope" {
+		return scalar_reply(copy_generated(bytes, limits, MessageListEnvelope.decode, MessageListEnvelope.encode))
+	}
+	decoded = match MessageList.decode(bytes, limits) {
+		Ok(value) => value
+		Err(error) => return scalar_reply(Err(error))
+	}
+	capacity = if context.request.path == "/message-list-output" {
+		16
+	} else {
+		4096
+	}
+	scalar_reply(MessageList.encode(decoded, capacity))
 }

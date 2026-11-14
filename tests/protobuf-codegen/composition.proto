@@ -18,3 +18,6 @@ message Top { OptionalEnvelope envelope = 1; }
 
 message Collections { repeated string texts = 1; repeated bytes chunks = 2; }
 message CollectionEnvelope { Collections child = 1; }
+
+message MessageList { repeated Collections children = 1; }
+message MessageListEnvelope { MessageList child = 1; }

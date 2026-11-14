@@ -17,6 +17,7 @@ from optional_cases import verify_optional
 from identity_cases import verify_identities
 from composition_cases import verify_composition
 from collection_cases import verify_collections
+from message_list_cases import verify_message_lists
 
 
 def varint(number):
@@ -100,6 +101,7 @@ def verify(executable):
             verify_identities(call, reference, catalog)
             verify_composition(call, reference, composition)
             verify_collections(call, composition)
+            verify_message_lists(call, composition)
             for data in valid_cases():
                 valid(data)
             status, encoded = call('/construct', b'')
