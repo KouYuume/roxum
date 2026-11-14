@@ -27,8 +27,7 @@ SCALARS = {
 MESSAGE = d.FieldDescriptorProto.TYPE_MESSAGE
 WIRE_TYPES = {d.FieldDescriptorProto.TYPE_UINT64, d.FieldDescriptorProto.TYPE_FIXED32,
               d.FieldDescriptorProto.TYPE_FIXED64, d.FieldDescriptorProto.TYPE_BYTES}
-PACKABLE_TYPES = {d.FieldDescriptorProto.TYPE_UINT32, d.FieldDescriptorProto.TYPE_UINT64,
-                  d.FieldDescriptorProto.TYPE_FIXED32, d.FieldDescriptorProto.TYPE_FIXED64}
+PACKABLE_TYPES = set(SCALARS) - {d.FieldDescriptorProto.TYPE_STRING, d.FieldDescriptorProto.TYPE_BYTES}
 FLOAT_TYPES = {d.FieldDescriptorProto.TYPE_FLOAT, d.FieldDescriptorProto.TYPE_DOUBLE}
 KEYWORDS = set('app package platform provides exposes imports import as if then else match when is expect dbg crash return var for in while and or not where type alias implements with exposing generates has hosted interface module packages requires targets break'.split())
 RESERVED = {'Builtin', 'ProtobufScalar', 'ProtobufWire', 'List', 'Try', 'U64', 'U32', 'U8', 'Bool', 'Str', 'Main', 'Box', 'Dec', 'F32', 'F64', 'I8', 'I16', 'I32', 'I64', 'I128', 'U16', 'U128', 'Set', 'Dict'}
@@ -83,7 +82,7 @@ def validate(request):
                          or (repeated(field) and field.type in PACKABLE_TYPES | {d.FieldDescriptorProto.TYPE_STRING, d.FieldDescriptorProto.TYPE_BYTES, MESSAGE}))
                     and not field.HasField('default_value') and not field.extendee
                     and (field.type == MESSAGE or not field.type_name),
-                    where, 'only singular fields and repeated unsigned/string/bytes/message fields are supported')
+                    where, 'only singular fields and repeated scalar/message fields are supported')
             require(not repeated(field) or not field.proto3_optional, where, 'repeated fields cannot be optional')
             if field.proto3_optional:
                 require(field.HasField('oneof_index') and 0 <= field.oneof_index < len(message.oneof_decl),
@@ -171,9 +170,12 @@ def emit(symbol, identities):
                       '\t\t\t\t}']
             if f.type in PACKABLE_TYPES:
                 packed_reader = {'Varint': 'varints', 'Fixed32': 'fixed32', 'Fixed64': 'fixed64'}[kind]
+                packed_codec = 'ProtobufWire'
+                if f.type not in WIRE_TYPES and f.type != d.FieldDescriptorProto.TYPE_UINT32:
+                    packed_codec, packed_reader = 'ProtobufScalar', operation
                 converted = 'item.to_u32_wrap()' if f.type == d.FieldDescriptorProto.TYPE_UINT32 else 'item'
                 lines += [f'\t\t\t\t({f.number}, Bytes) => {{',
-                          f'\t\t\t\t\t(items, after) = ProtobufWire.read_packed_{packed_reader}($reader)?',
+                          f'\t\t\t\t\t(items, after) = {packed_codec}.read_packed_{packed_reader}($reader)?',
                           '\t\t\t\t\t$reader = after',
                           '\t\t\t\t\tfor item in items {',
                           f'\t\t\t\t\t\t$value = {{ ..$value, {f.name}: $value.{f.name}.append({converted}) }}',

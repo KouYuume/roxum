@@ -33,3 +33,25 @@ message UnsignedLists {
   repeated fixed64 expanded_fixed64 = 8 [packed = false];
 }
 message UnsignedListEnvelope { UnsignedLists child = 1; uint32 tail = 2; }
+
+message ScalarLists {
+  repeated int32 signed32 = 1;
+  repeated int64 signed64 = 2;
+  repeated sint32 zigzag32 = 3;
+  repeated sint64 zigzag64 = 4;
+  repeated sfixed32 signed_fixed32 = 5;
+  repeated sfixed64 signed_fixed64 = 6;
+  repeated bool enabled = 7;
+  repeated float float_value = 8;
+  repeated double double_value = 9;
+  repeated int32 expanded_signed32 = 10 [packed = false];
+  repeated int64 expanded_signed64 = 11 [packed = false];
+  repeated sint32 expanded_zigzag32 = 12 [packed = false];
+  repeated sint64 expanded_zigzag64 = 13 [packed = false];
+  repeated sfixed32 expanded_signed_fixed32 = 14 [packed = false];
+  repeated sfixed64 expanded_signed_fixed64 = 15 [packed = false];
+  repeated bool expanded_enabled = 16 [packed = false];
+  repeated float expanded_float_value = 17 [packed = false];
+  repeated double expanded_double_value = 18 [packed = false];
+}
+message ScalarListEnvelope { ScalarLists child = 1; uint32 tail = 2; }

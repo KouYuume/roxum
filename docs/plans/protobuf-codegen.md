@@ -10,11 +10,10 @@ signed zero and NaN canonicalization. Optional scalar fields use
 `[Absent, Present(T)]`, with present-default values retained on the wire.
 Singular message fields in acyclic type graphs are supported with explicit
 presence and duplicate-occurrence wire merge, with or without explicit `optional`.
-Repeated string, bytes, acyclic message, and unsigned integer fields preserve order
+Repeated scalar and acyclic message fields preserve order
 and share collection-entry limits. String/byte payloads also share materialization
-limits. Unsigned integer lists accept packed and unpacked input.
-Recursive schemas, repeated signed integers, booleans, floats,
-maps, enums, and real oneofs remain unsupported.
+limits. Numeric and boolean lists accept packed and unpacked input.
+Recursive schemas, maps, enums, and real oneofs remain unsupported.
 A [handwritten layout fixture](../../tests/protobuf-layouts/README.md)
 checks bounded self-recursion, mutual recursion, recursive lists, and imported
 payload records on the pinned compiler. The generator retains fully qualified
@@ -146,9 +145,9 @@ matrix are still prerequisites for completing composite gRPC support.
 
 Packed varint, fixed32, and fixed64 payload readers share entry limits and
 containing-reader bounds without increasing message depth. Generated repeated
-`uint32`, `uint64`, `fixed32`, and `fixed64` fields accept mixed packed/unpacked
-input and encode according to the `packed` option (packed by default). Signed
-integer, boolean, and floating-point repeated generation remains pending.
+numeric and boolean fields accept mixed packed/unpacked input and encode
+according to the `packed` option (packed by default). Typed packed readers use
+the same signed, ZigZag, boolean, and IEEE conversions as singular fields.
 
 ## Implementation slices and gates
 
