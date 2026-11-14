@@ -92,6 +92,17 @@ ProtobufWire := [].{
 		Ok((value, ProtobufWire.Reader.({ ..state, position: state.position + length, materialized_left: state.materialized_left - length })))
 	}
 
+	## Reads one length-delimited packed payload; the caller consumes its field tag.
+	## Elements share the entry budget; a packed payload does not add message depth.
+	read_packed_varints : ProtobufWire.Reader -> Try((List(U64), ProtobufWire.Reader), ProtobufWire.Error)
+	read_packed_varints = |reader| read_packed(reader, ProtobufWire.read_varint)
+
+	read_packed_fixed32 : ProtobufWire.Reader -> Try((List(U32), ProtobufWire.Reader), ProtobufWire.Error)
+	read_packed_fixed32 = |reader| read_packed(reader, ProtobufWire.read_fixed32)
+
+	read_packed_fixed64 : ProtobufWire.Reader -> Try((List(U64), ProtobufWire.Reader), ProtobufWire.Error)
+	read_packed_fixed64 = |reader| read_packed(reader, ProtobufWire.read_fixed64)
+
 	## Enters a length-delimited message without copying. Root depth is zero.
 	enter_message : ProtobufWire.Reader -> Try(ProtobufWire.Reader, ProtobufWire.Error)
 	enter_message = |reader| {
@@ -251,6 +262,22 @@ fixed = |ProtobufWire.Reader.(state), width| {
 		$index = $index + 1
 	}
 	Ok(($value, ProtobufWire.Reader.({ ..state, position: state.position + width })))
+}
+
+# Only internal scalar readers are passed here; each consumes at least one byte.
+read_packed : ProtobufWire.Reader, (ProtobufWire.Reader -> Try((value, ProtobufWire.Reader), ProtobufWire.Error)) -> Try((List(value), ProtobufWire.Reader), ProtobufWire.Error)
+read_packed = |reader, read_element| {
+	(length, ProtobufWire.Reader.(initial)) = length_prefix(reader)?
+	var $reader = ProtobufWire.Reader.({ ..initial, end: initial.position + length })
+	var $values = []
+	while ProtobufWire.remaining($reader) > 0 {
+		reserved = ProtobufWire.reserve($reader, 1, 0)?
+		(value, after) = read_element(reserved)?
+		$values = $values.append(value)
+		$reader = after
+	}
+	ProtobufWire.Reader.(final) = $reader
+	Ok(($values, ProtobufWire.Reader.({ ..final, end: initial.end })))
 }
 
 length_prefix : ProtobufWire.Reader -> Try((U64, ProtobufWire.Reader), ProtobufWire.Error)
@@ -701,4 +728,36 @@ expect {
 	# No capacity means the encoder is not called, even for an empty message.
 	ProtobufWire.write_message(parent, {}, |_, _| Err(InvalidTag)) == Err(OutputLimit)
 		and ProtobufWire.write_message(ProtobufWire.new_writer(1), {}, |_, _| Err(InvalidTag)) == Err(InvalidTag)
+}
+
+# Packed payloads preserve counters and parent bounds without adding depth.
+expect {
+	r = ProtobufWire.new_reader([2, 1, 2, 1, 3], { ..ProtobufWire.default_limits, depth: 0, entries: 2, materialized_bytes: 0, tags: 0 })?
+	(values, after) = ProtobufWire.read_packed_varints(r)?
+	values == [1, 2] and ProtobufWire.remaining(after) == 2
+		and ProtobufWire.read_packed_varints(after) == Err(EntryLimit)
+		and ProtobufWire.read_tag(after) == Err(TagLimit)
+		and ProtobufWire.remaining(r) == 5
+}
+
+# A scalar ending outside the packed payload cannot borrow bytes from its parent.
+expect {
+	r = ProtobufWire.new_reader([1, 128, 1], ProtobufWire.default_limits)?
+	ProtobufWire.read_packed_varints(r) == Err(Truncated)
+}
+
+expect {
+	r = ProtobufWire.new_reader([0], { ..ProtobufWire.default_limits, depth: 0, entries: 0 })?
+	(values, after) = ProtobufWire.read_packed_fixed64(r)?
+	values.is_empty() and ProtobufWire.remaining(after) == 0
+}
+
+# Leaving a packed field restores the containing message, not the root scope.
+expect {
+	r = ProtobufWire.new_reader([3, 1, 7, 9, 42], { ..ProtobufWire.default_limits, depth: 1 })?
+	inside = ProtobufWire.enter_message(r)?
+	(values, after) = ProtobufWire.read_packed_varints(inside)?
+	(tail, complete) = ProtobufWire.read_varint(after)?
+	outside = ProtobufWire.leave_message(complete)?
+	values == [7] and tail == 9 and ProtobufWire.remaining(outside) == 1
 }

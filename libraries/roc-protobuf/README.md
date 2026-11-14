@@ -143,3 +143,23 @@ schema support still requires an explicit depth/work policy. Generated acyclic
 message-valued fields use this helper. The composition fixture verifies generated
 and handwritten outer encoders against Python, including prefix-width
 transitions and total output boundaries.
+
+## Packed scalar payloads
+
+`read_packed_varints`, `read_packed_fixed32`, and `read_packed_fixed64` read one
+length-prefixed payload after its field tag. They return a list of raw unsigned
+values and the advanced reader. Signed, boolean, and floating-point conversions
+belong to schema-aware codecs. Empty segments yield empty lists; non-minimal
+varints are accepted, while overflowing or truncated values fail.
+
+A packed payload does not add message depth. Its boundary temporarily narrows
+the current reader without copying bytes, and completion restores the containing
+scope's end. Elements cannot borrow bytes from the next field or segment. Input
+and field-length limits still apply. Each element reserves one shared collection
+entry before reading; numeric list slots are bounded by entries rather than
+charged as payload materialization. Tags and all other counters remain shared
+and are never replenished. The caller reads field tags separately. Fixed-width
+payloads must contain complete elements. Errors return no partial list or reader.
+
+These helpers establish bounded packed reads; generated numeric repeated fields
+and their signed/float mappings are not yet supported.

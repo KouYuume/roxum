@@ -142,6 +142,10 @@ writer. `write_message` adds buffered length-delimited composition bounded by
 the remaining output capacity. Recursive encoding depth/work limits and the remaining schema
 matrix are still prerequisites for completing composite gRPC support.
 
+Packed varint, fixed32, and fixed64 payload readers share entry limits and
+containing-reader bounds without increasing message depth. Numeric repeated
+field generation and packed/unpacked schema integration remain pending.
+
 ## Implementation slices and gates
 
 1. **Wire primitives and budgets (implemented).** The pure library foundation covers varints,

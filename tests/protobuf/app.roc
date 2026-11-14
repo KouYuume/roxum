@@ -25,7 +25,7 @@ init! = |{}| Ok({
 })
 
 routes : Router(Model, [], {})
-routes = Router.new.route("/copy", MethodRouter.post(Handler.stateful(answer))).route("/skip", MethodRouter.post(Handler.stateful(answer)))
+routes = Router.new.route("/packed-varints", MethodRouter.post(Handler.stateful(packed_answer))).route("/packed-fixed32", MethodRouter.post(Handler.stateful(packed_answer))).route("/packed-fixed64", MethodRouter.post(Handler.stateful(packed_answer))).route("/copy", MethodRouter.post(Handler.stateful(answer))).route("/skip", MethodRouter.post(Handler.stateful(answer)))
 
 answer = |_model, context| {
 	bytes = match context.request.body {
@@ -73,6 +73,45 @@ scan = |input, skip| {
 					$writer = ProtobufWire.write_bytes($writer, value)?
 				}
 				_ => return Err(UnexpectedEndGroup)
+			}
+		}
+	}
+	Ok(ProtobufWire.output($writer))
+}
+
+packed_answer = |_model, context| {
+	bytes = match context.request.body {
+		RequestBody.Bytes(value) => value
+		_ => []
+	}
+	match packed_scan(bytes, context.request.path) {
+		Ok(value) => Ok(Reply.bytes(value, "application/octet-stream"))
+		Err(error) => Ok(Reply.text(Str.inspect(error)).with_status(400))
+	}
+}
+
+packed_scan = |input, path| {
+	limits = { input_bytes: 4096, field_bytes: 256, depth: 0, tags: 0, entries: 64, materialized_bytes: 0 }
+	var $reader = ProtobufWire.new_reader(input, limits)?
+	var $writer = ProtobufWire.new_writer(4096)
+	while ProtobufWire.remaining($reader) > 0 {
+		if path == "/packed-fixed32" {
+			(values, after) = ProtobufWire.read_packed_fixed32($reader)?
+			$reader = after
+			for value in values {
+				$writer = ProtobufWire.write_fixed32($writer, value)?
+			}
+		} else if path == "/packed-fixed64" {
+			(values, after) = ProtobufWire.read_packed_fixed64($reader)?
+			$reader = after
+			for value in values {
+				$writer = ProtobufWire.write_fixed64($writer, value)?
+			}
+		} else {
+			(values, after) = ProtobufWire.read_packed_varints($reader)?
+			$reader = after
+			for value in values {
+				$writer = ProtobufWire.write_varint($writer, value)?
 			}
 		}
 	}
