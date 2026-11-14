@@ -161,5 +161,5 @@ charged as payload materialization. Tags and all other counters remain shared
 and are never replenished. The caller reads field tags separately. Fixed-width
 payloads must contain complete elements. Errors return no partial list or reader.
 
-These helpers establish bounded packed reads; generated numeric repeated fields
-and their signed/float mappings are not yet supported.
+Generated unsigned repeated fields use these helpers. Generated signed integer,
+boolean, and floating-point lists remain unsupported.
