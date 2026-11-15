@@ -1,5 +1,10 @@
 app [program] { grpc: "../../integrations/roxum-grpc/package/main.roc", pf: platform "../../platform/main.roc", service: "generated/main.roc", wire: "../../libraries/roc-protobuf/package/main.roc" }
 
+import pf.Log
+import pf.Middleware
+import pf.HeaderName
+import pf.RequestHeader
+import pf.Sleep
 import pf.Config
 import pf.IpAddr
 import pf.Router
@@ -36,9 +41,30 @@ init! = |{}| {
 	})
 }
 
-routes = GreeterService.register(Router.new, { call_greet!: greet! }, { request_bytes: 64, response_bytes: 64, status_bytes: 128, metadata: GrpcMetadata.defaults }, ProtobufWire.default_limits)
+routes = GreeterService.register(Router.new, { call_greet!: greet! }, { request_bytes: 64, response_bytes: 64, status_bytes: 128, metadata: GrpcMetadata.defaults }, ProtobufWire.default_limits).layer([
+	Middleware.Stage.BeforeBody(
+		|_model, head| {
+			for RequestHeader.(header) in head.headers {
+				if HeaderName.inner(header.name) == "x-delay-before-timeout" {
+					Sleep.millis!(100)
+				}
+			}
+			Ok(head)
+		},
+	),
+])
 
 greet! = |_model, Greeting.(input), metadata| {
+	if input.name == "must-not-start" {
+		Log.error!("forbidden-start")
+		crash "expired RPC began application work"
+	}
+	if input.name == "must-cancel" or input.name == "must-timeout" {
+		Log.info!("started-${input.name}")
+		Sleep.millis!(1000)
+		Log.error!("forbidden-resume")
+		crash "cancelled RPC resumed application work"
+	}
 	if input.name == "error" {
 		return Err(GrpcUnary.failure(GrpcStatus.Code.InvalidArgument, " bad name "))
 	}

@@ -3,7 +3,8 @@
 This package provides finite Unary wire helpers using roxum's HTTP/2 capabilities.
 It is the protocol foundation for the planned typed Unary integration, not a
 complete RPC server API. Opt-in generated service bindings and finite typed Unary handlers are available.
-Deadline application and final proxy/client acceptance remain separate work. No new host effect or
+Timeout installation is supported; final deadline status delivery and proxy/client
+acceptance remain separate work. No new host effect or
 Protobuf dependency is required by these byte-oriented helpers.
 
 The contract follows [gRPC over HTTP/2](https://grpc.github.io/grpc/core/md_doc__p_r_o_t_o_c_o_l-_h_t_t_p2.html).
@@ -63,7 +64,7 @@ encoding or `identity` is accepted; message and HTTP body compression are
 rejected. Duplicate or empty singleton protocol fields are rejected.
 
 This call does not parse or apply `grpc-timeout`. It does not authenticate,
-route, or decode Protobuf. A future Unary layer must run metadata/deadline
+route, or decode Protobuf. The Unary route layer must run metadata/deadline
 handling before waiting for the body; calling these finite helpers after body
 assembly does not provide that guarantee.
 
@@ -134,7 +135,29 @@ Response encoding errors, invalid application status or output metadata become
 INTERNAL without exposing codec diagnostics. Application failures return `Err`
 to preserve the platform middleware rejection path.
 
-These handlers run after finite body assembly. They do not yet apply
-`grpc-timeout` or establish the final cancellation/deadline release contract.
+These handlers run after finite body assembly. Generated registration installs
+`GrpcTimeout.layer` before body reception. Manual `GrpcUnary.handler` users must
+attach that layer themselves; the handler alone does not install deadlines.
 See `tests/grpc-unary/app.roc` for runnable registration and handlers.
 Verify with `python3 tools/check.py --only test-grpc-unary`.
+
+## Timeout and cancellation
+
+`GrpcTimeout.parse` accepts one to eight ASCII digits and the case-sensitive
+units H/M/S/m/u/n. Zero expires immediately. Large valid durations saturate at
+U64 nanoseconds. Duplicate, empty, signed, fractional or malformed fields are
+INVALID_ARGUMENT; a missing field leaves the server execution cap unchanged.
+The layer validates protocol headers before installing a duration through
+`RequestExecution.limit_nanoseconds!`. The host anchors it at initial header
+completion, so time spent queued or in earlier middleware is not added back.
+
+Host expiry and client reset abandon suspended request execution and release
+request resources. They cannot preempt arbitrary pure computation. A committed
+response wins over later execution expiry; output still has its write timeout.
+
+**Remaining release gate:** host expiry currently emits an HTTP/2 stream reset,
+not a `grpc-status: 4` trailer. A client with its own matching deadline can report
+DEADLINE_EXCEEDED locally; a raw timeout-header caller observes a reset (which
+may map to CANCELLED). This is transport enforcement, not complete gRPC deadline
+status delivery. A generic host expiry-response capability and integration status
+mapping must be resolved before claiming the first Unary release complete.

@@ -1,4 +1,10 @@
 """Typed Unary interoperability using protoc-generated Python messages and grpcio."""
+import os
+import socket
+import time
+import struct
+from h2.connection import H2Connection
+from h2.events import StreamReset, StreamEnded, DataReceived, TrailersReceived
 import json
 import pathlib
 import select
@@ -53,7 +59,81 @@ def verify(executable, unix):
                     except grpc.RpcError as error: assert error.code() == grpc.StatusCode.UNIMPLEMENTED
                     else: raise AssertionError('unknown method accepted')
                     assert call(service_pb2.Greeting(name='peer'), timeout=5).greeting == 'Hello peer'
+                with socket.socket(socket.AF_UNIX if unix else socket.AF_INET) as sock:
+                    sock.settimeout(3)
+                    sock.connect(path if unix else ('127.0.0.1', int(endpoint)))
+                    h2 = H2Connection()
+                    h2.initiate_connection()
+                    sock.sendall(h2.data_to_send())
+                    def begin(stream, timeout, body=None, delayed=False):
+                        headers = [(':method', 'POST'), (':scheme', 'http'), (':authority', 'localhost'), (':path', '/unary.Greeter/Greet'), ('content-type', 'application/grpc'), ('te', 'trailers')]
+                        if timeout is not None: headers.append(('grpc-timeout', timeout))
+                        if delayed: headers.append(("x-delay-before-timeout", "yes"))
+                        h2.send_headers(stream, headers)
+                        if body is not None: h2.send_data(stream, b'\0'+struct.pack('>I',len(body))+body,end_stream=True)
+                        sock.sendall(h2.data_to_send())
+                    def log_text():
+                        return os.pread(errors.fileno(), 1 << 20, 0).decode()
+                    def started(name):
+                        end = time.monotonic() + 3
+                        while '[INFO] started-' + name not in log_text():
+                            assert time.monotonic() < end, 'handler did not start: ' + name
+                            time.sleep(.005)
+                    def no_forbidden_work():
+                        text = log_text()
+                        assert 'forbidden-' not in text and 'Roc crashed:' not in text, text
+                    def reset(stream):
+                        while True:
+                            packet = sock.recv(65536)
+                            assert packet, "unexpected connection close"
+                            events = h2.receive_data(packet)
+                            for event in events:
+                                if isinstance(event, StreamReset) and event.stream_id == stream:
+                                    assert event.error_code == 8, event
+                                    return
+                                assert not (isinstance(event, StreamEnded) and event.stream_id == stream), 'expired request returned a reply'
+                    # Zero and a finite deadline both expire while input is incomplete.
+                    begin(1, '0n')
+                    reset(1)
+                    begin(3, '50m')
+                    reset(3)
+                    # Deadline expiry and client RST both abandon suspended application work.
+                    payload = service_pb2.Greeting(name='must-timeout').SerializeToString()
+                    begin(5, '500m', payload)
+                    started('must-timeout')
+                    reset(5)
+                    begin(7, None, service_pb2.Greeting(name='must-cancel').SerializeToString())
+                    started('must-cancel')
+                    h2.reset_stream(7)
+                    sock.sendall(h2.data_to_send())
+                    time.sleep(1.1)
+                    no_forbidden_work()
+                    assert process.poll() is None, 'cancelled handler resumed'
+                    begin(9, '20m', service_pb2.Greeting(name='must-not-start').SerializeToString(), delayed=True)
+                    reset(9)
+                    begin(11, None, service_pb2.Greeting(name='after').SerializeToString())
+                    output = b''
+                    status = None
+                    done = False
+                    while not done:
+                        packet = sock.recv(65536)
+                        assert packet, "unexpected connection close"
+                        for event in h2.receive_data(packet):
+                            assert not isinstance(event, StreamReset), event
+                            if isinstance(event, TrailersReceived):
+                                assert event.stream_id == 11
+                                status = dict(event.headers).get(b'grpc-status')
+                            if isinstance(event, DataReceived):
+                                assert event.stream_id == 11
+                                output += event.data
+                                h2.acknowledge_received_data(event.flow_controlled_length, event.stream_id)
+                            if isinstance(event, StreamEnded) and event.stream_id == 11: done = True
+                    assert status == b'0', status
+                    assert output[0] == 0 and int.from_bytes(output[1:5], 'big') == len(output)-5
+                    assert service_pb2.ReplyText.FromString(output[5:]).greeting == 'Hello after'
+                    no_forbidden_work()
                 assert stop(process) == 0
+                no_forbidden_work()
             except BaseException:
                 stop(process)
                 errors.seek(0)

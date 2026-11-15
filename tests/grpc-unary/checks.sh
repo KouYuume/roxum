@@ -3,7 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 venv=zig-out/grpc-unary/venv
 if [[ ! -x "$venv/bin/python" ]]; then python3 -m venv "$venv"; fi
-"$venv/bin/python" -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r tests/grpc-probe/requirements.txt -r tools/protoc-gen-roc/requirements.txt
+"$venv/bin/python" -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r tests/grpc-probe/requirements.txt -r tests/http2-engine/requirements.txt -r tools/protoc-gen-roc/requirements.txt
 output=$("${ROC_BIN:-roc}" test integrations/roxum-grpc/package/main.roc 2>&1) || { echo "$output"; exit 1; }
 echo "$output"
 # The pinned compiler can exit zero after failed expectations.

@@ -8,7 +8,9 @@ Roc output byte-for-byte after formatting; `--write` updates it.
 checks decoded values, binary trailers, application status text, malformed and
 oversized requests, invalid application outputs, unknown methods, and successful
 calls after failures. Framing and metadata parser corpora remain in
-`tests/grpc-wire`; deadlines and proxy deployment acceptance are subsequent work.
+`tests/grpc-wire`; timeout parsing, pre-body expiry, stale metadata-time deadlines, and suspended
+handler cancellation are covered here. Final deadline-status delivery and proxy
+deployment acceptance remain subsequent work.
 
 Run `python3 tools/check.py --only test-grpc-unary` for all backend/allocator
 combinations. `test_generator.py` covers opt-in generation and atomic rejection
