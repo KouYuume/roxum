@@ -233,7 +233,8 @@
       "version": "0.1.0",
       "package_root": "integrations/roxum-grpc/package/main.roc",
       "applications": [
-        "tests/grpc-wire/app.roc"
+        "tests/grpc-wire/app.roc",
+        "tests/grpc-unary/app.roc"
       ],
       "platform_versions": "^0.1",
       "requires_platform_sha256": "42dad44504128f55396b374fbd8996a338fd37aaef311a8270c89ea498ee496b",
@@ -242,9 +243,27 @@
         "tests/grpc-wire/verify.py",
         "tests/grpc-probe/requirements.txt",
         "tests/http2-engine/requirements.txt",
-        "tests/support/roxum_process.py"
+        "tests/support/roxum_process.py",
+        "tests/grpc-unary/checks.sh",
+        "tests/grpc-unary/verify.py",
+        "tests/grpc-unary/regenerate.py",
+        "tests/grpc-unary/test_generator.py",
+        "tests/grpc-unary/service.proto",
+        "tools/protoc-gen-roc/requirements.txt",
+        "tests/grpc-unary/generated/GreeterService.roc",
+        "tests/grpc-unary/generated/Greeting.roc",
+        "tests/grpc-unary/generated/main.roc",
+        "tools/protoc-gen-roc/enums.py",
+        "tools/protoc-gen-roc/generate.py",
+        "tools/protoc-gen-roc/maps.py",
+        "tools/protoc-gen-roc/oneofs.py",
+        "tools/protoc-gen-roc/recursion.py",
+        "tools/protoc-gen-roc/schema.py",
+        "tools/protoc-gen-roc/services.py",
+        "tools/protoc-gen-roc/setup.py",
+        "tests/grpc-unary/generated/ReplyText.roc"
       ],
-      "compatibility_sha256": "e68fe47d450da443f7f1dff4c95d860cc9e07b58a1bcdd3334520935b221237f",
+      "compatibility_sha256": "2a09e35089beba1a20cff4adfa3b765d4cd93a841e5208bd81a7c0c70c3c01db",
       "max_unpacked_bytes": 65536
     }
   ]

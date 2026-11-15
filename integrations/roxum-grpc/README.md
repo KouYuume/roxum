@@ -2,8 +2,8 @@
 
 This package provides finite Unary wire helpers using roxum's HTTP/2 capabilities.
 It is the protocol foundation for the planned typed Unary integration, not a
-complete RPC server API. Service generation, dispatch, deadline application,
-and final proxy/client acceptance remain separate work. No new host effect or
+complete RPC server API. Opt-in generated service bindings and finite typed Unary handlers are available.
+Deadline application and final proxy/client acceptance remain separate work. No new host effect or
 Protobuf dependency is required by these byte-oriented helpers.
 
 The contract follows [gRPC over HTTP/2](https://grpc.github.io/grpc/core/md_doc__p_r_o_t_o_c_o_l-_h_t_t_p2.html).
@@ -103,3 +103,38 @@ Deterministic arbitrary-byte and structured framing/Base64 corpora exercise the
 new parsers against independent Python models. A valid call after failures
 checks connection survival. The fixture supplies bytes without generated
 service bindings; it is not the final Unary release acceptance test.
+
+## Typed Unary services
+
+Generate codecs alone with the existing `wire=<path>` option. To also generate
+roxum service modules, use `wire=<path>,grpc=<integration path>,pf=<platform path>`
+with protoc-gen-roc. All paths are relative to the generated package root.
+The application and generated package must use the same platform identity.
+
+A service `Greeter` generates `GreeterService.register(router, handlers, limits,
+codec_limits)`. Its `Greet` method requires a typed `call_greet!` callback receiving
+application model, decoded request, and metadata. The callback returns
+`Try(GrpcUnary.Response(Output), GrpcUnary.Failure)`. `GrpcUnary.response(value)`
+and `GrpcUnary.failure(code, message)` construct the common cases; response
+records also support initial and trailing metadata.
+
+Registration adds exact POST routes using the original fully qualified service
+and method names. Callback field names use `call_` plus the lowercase method
+name and `!`; collisions are rejected. Existing router fallbacks continue to
+handle unknown routes (the default HTTP 404 is mapped by gRPC clients to
+UNIMPLEMENTED). Service and method options, streaming RPCs, missing or invisible
+message types, and module/binding name collisions fail generation atomically.
+This includes `Handlers`, the generated callback record type.
+Codec-only generation retains its platform-free package and ignores services.
+
+`GrpcUnary.Limits` separates request/response payload bytes, encoded status bytes,
+and metadata limits. Generated codec callbacks also enforce `ProtobufWire.Limits`.
+Malformed input is INVALID_ARGUMENT; oversized envelopes are RESOURCE_EXHAUSTED.
+Response encoding errors, invalid application status or output metadata become
+INTERNAL without exposing codec diagnostics. Application failures return `Err`
+to preserve the platform middleware rejection path.
+
+These handlers run after finite body assembly. They do not yet apply
+`grpc-timeout` or establish the final cancellation/deadline release contract.
+See `tests/grpc-unary/app.roc` for runnable registration and handlers.
+Verify with `python3 tools/check.py --only test-grpc-unary`.

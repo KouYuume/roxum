@@ -7,8 +7,8 @@ including recursive messages. Milestone 2 includes standalone distribution,
 matched tool/library compatibility metadata, and independent interoperability
 acceptance. The next milestone is the Unary integration.
 The [gRPC protocol foundation](../../integrations/roxum-grpc/README.md) provides
-finite framing, metadata and status helpers. Typed Unary dispatch, deadline
-integration and final release acceptance are not implemented.
+finite framing, metadata and status helpers. Finite typed Unary handlers and opt-in service registration generation are implemented.
+Deadline integration and final release acceptance remain open.
 See the [transport decision and evidence](http2-transport.md). The responsibility
 split is agreed; API names,
 dependencies, and the detailed implementation below remain proposals until their
@@ -192,11 +192,11 @@ See the [Protobuf encoding specification](https://protobuf.dev/programming-guide
 
 The protocol foundation is implemented in `integrations/roxum-grpc`: finite
 Unary envelopes, bounded ASCII/binary metadata, status messages and HTTP reply
-construction. Independent clients verify TCP/Unix behavior across compiler
+construction, typed Unary handlers, and opt-in generated service registration.
+Independent clients verify TCP/Unix behavior across compiler
 backends and allocators, including malformed input and connection survival.
-This does not satisfy the full milestone gate below: typed service registration,
-generated dispatch, pre-body deadlines/cancellation integration and final
-proxy/client acceptance remain open.
+This does not satisfy the full milestone gate below: pre-body
+deadlines/cancellation integration and final proxy/client acceptance remain open.
 
 Add a separately versioned `roxum-grpc` integration using the core capabilities
 and generated codecs. Provide typed service registration, exactly one request

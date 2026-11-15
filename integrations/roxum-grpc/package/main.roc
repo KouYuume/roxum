@@ -1,1 +1,1 @@
-package [GrpcFrame, GrpcMetadata, GrpcStatus, GrpcWire] { pf: platform "../../../platform/main.roc" }
+package [GrpcFrame, GrpcMetadata, GrpcStatus, GrpcUnary, GrpcWire] { pf: platform "../../../platform/main.roc" }

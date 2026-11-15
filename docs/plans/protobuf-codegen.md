@@ -92,7 +92,7 @@ with [field presence](https://protobuf.dev/programming-guides/field_presence/).
 | Enums | Preserve unknown numeric values and support declared aliases; do not conflate an unknown value with zero. |
 | `oneof` | Explicit unset state and one active case. Repeated occurrences of the same message case merge; switching cases replaces the prior case. Synthetic oneofs for proto3 optional fields are presence metadata, not user-facing unions. |
 | Recursive schemas | Target bounded recursive values. Compile self-recursive and mutually recursive fixtures before committing to generated Roc type layouts. |
-| Services | Codec generation can process messages in a file containing services without generating RPC bindings. Service generation is a separate later mode. |
+| Services | Codec generation can process messages in a file containing services without generating RPC bindings. Opt-in finite Unary service generation is available through the roxum-grpc integration mode. |
 
 Proto2 schemas, editions, extensions, custom-option behavior, JSON/text codecs,
 and special APIs for well-known types are outside this initial target. Reject

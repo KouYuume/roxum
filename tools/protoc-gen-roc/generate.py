@@ -9,6 +9,7 @@ import enums
 import maps
 import oneofs
 import recursion
+import services
 
 # Roc type, wire tag, primitive suffix, default expression.
 SCALARS = {
@@ -322,7 +323,16 @@ def emit(symbol, identities, paths, components):
 def generate(request):
     response = p.CodeGeneratorResponse()
     try:
-        messages, identities = validate(request)
+        options = request.parameter.split(',')
+        bindings = None
+        if len(options) != 1:
+            require(len(options) == 3 and options[0].startswith('wire=') and options[1].startswith('grpc=') and options[2].startswith('pf='), 'parameter', 'expected wire=<path>,grpc=<path>,pf=<platform path>')
+            require(all(re.fullmatch(r'[A-Za-z0-9_./:-]+', value.split('=', 1)[1]) for value in options), 'parameter', 'invalid package path')
+            bindings = (options[1][5:], options[2][3:])
+        codec_request = p.CodeGeneratorRequest()
+        codec_request.CopyFrom(request)
+        codec_request.parameter = options[0]
+        messages, identities = validate(codec_request)
         response.supported_features = p.CodeGeneratorResponse.FEATURE_PROTO3_OPTIONAL
         paths, components = recursion.layout(messages, identities)
         output = {}
@@ -342,8 +352,14 @@ def generate(request):
             else:
                 content = sources[0]
             response.file.add(name=module + '.roc', content=content)
+        if bindings:
+            for module, content in services.emit(request, messages, identities, require):
+                response.file.add(name=module + '.roc', content=content)
+                output[module] = [content]
         modules = ', '.join(sorted(output))
-        response.file.add(name='main.roc', content=f'package\n    [{modules}]\n    {{ wire: "{request.parameter[5:]}" }}\n')
+        response.file.add(name='main.roc', content=f'package\n    [{modules}]\n    {{ wire: "{options[0][5:]}" }}\n')
+        if bindings:
+            response.file[-1].content = f'package [{modules}] {{ wire: "{options[0][5:]}", grpc: "{bindings[0]}", pf: platform "{bindings[1]}" }}\n'
     except ValueError as error:
         response.ClearField('file')
         response.error = str(error)
