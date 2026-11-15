@@ -8,6 +8,7 @@ import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'support'))
 from roxum_process import read_port, stop
+from map_cases import verify_maps
 
 
 def expected(path, depth, seed):
@@ -36,6 +37,8 @@ def verify(executable):
                 client.request('POST', path, data)
                 response = client.getresponse()
                 return response.status, response.read()
+
+            verify_maps(call)
 
             # Signed extremes, neighbors of declared 0/1, and unknown values.
             for number in [-(1 << 31), -(1 << 31)+1, -1, 0, 1, 2, (1 << 31)-2, (1 << 31)-1]:
@@ -83,7 +86,7 @@ def verify(executable):
                 client.close()
             stop(server)
             server.stdout.close()
-    print(f'PASS recursive Protobuf layout feasibility ({count} requests)')
+    print(f'PASS Protobuf layout feasibility ({count} requests)')
 
 
 if __name__ == '__main__':

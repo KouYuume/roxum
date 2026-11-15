@@ -428,6 +428,56 @@ class Generator(unittest.TestCase):
         enum.value[0].number = 1
         self.assertIn('first enum', g.generate(req).error)
 
+    def test_map_descriptors(self):
+        def map_request():
+            req, file, message, field = request()
+            field.name, field.type, field.label, field.type_name = 'items', 11, 3, '.Sample.ItemsEntry'
+            entry = message.nested_type.add(name='ItemsEntry')
+            entry.options.map_entry = True
+            entry.field.add(name='key', number=1, type=9, label=1)
+            entry.field.add(name='value', number=2, type=5, label=1)
+            return req, file, message, field, entry
+
+        # Independent contract matrix: every legal key encoding and scalar value.
+        for key in {3,4,5,6,7,8,9,13,15,16,17,18}:
+            for value in {1,2,3,4,5,6,7,8,9,12,13,15,16,17,18}:
+                req, _, _, _, entry = map_request()
+                entry.field[0].type, entry.field[1].type = key, value
+                result = g.generate(req)
+                self.assertFalse(result.error, result.error)
+                self.assertIn('Dict(', next(f.content for f in result.file if f.name == 'Sample.roc'))
+        mutations = [
+            lambda r,f,m,x,e: setattr(e.field[0], 'type', 1),
+            lambda r,f,m,x,e: setattr(e.field[0], 'type', 2),
+            lambda r,f,m,x,e: setattr(e.field[0], 'type', 12),
+            lambda r,f,m,x,e: setattr(e.field[0], 'name', 'other'),
+            lambda r,f,m,x,e: setattr(e.field[1], 'number', 3),
+            lambda r,f,m,x,e: e.field.pop(),
+            lambda r,f,m,x,e: e.field.add(name='extra', number=3, type=5, label=1),
+            lambda r,f,m,x,e: setattr(e.field[0], 'label', 3),
+            lambda r,f,m,x,e: setattr(e.field[1], 'proto3_optional', True),
+            lambda r,f,m,x,e: setattr(x, 'label', 1),
+            lambda r,f,m,x,e: m.field.clear(),
+            lambda r,f,m,x,e: m.field.add(name='alias', number=2, type=11, label=3, type_name=x.type_name),
+            lambda r,f,m,x,e: e.nested_type.add(name='Nested'),
+            lambda r,f,m,x,e: e.reserved_name.append('reserved'),
+            lambda r,f,m,x,e: setattr(e.options, 'deprecated', True),
+            lambda r,f,m,x,e: setattr(e.field[1], 'default_value', '0'),
+            lambda r,f,m,x,e: setattr(e.field[1].options, 'packed', True),
+            lambda r,f,m,x,e: setattr(x, 'name', 'different'),
+            lambda r,f,m,x,e: f.message_type.add(name='Other').field.add(name='items', number=1, type=11, label=3, type_name=x.type_name),
+        ]
+        for mutate in mutations:
+            req, file, message, field, entry = map_request()
+            mutate(req, file, message, field, entry)
+            result = g.generate(req)
+            self.assertTrue(result.error)
+            self.assertFalse(result.file)
+        # Recursive map values keep the existing acyclic codec restriction.
+        req, _, _, _, entry = map_request()
+        entry.field[1].type, entry.field[1].type_name = 11, '.Sample'
+        self.assertIn('recursive', g.generate(req).error)
+
     def test_plugin_error_protocol(self):
         output = subprocess.run([sys.executable, g.__file__], input=b'\x80', capture_output=True, check=True)
         response = g.p.CodeGeneratorResponse.FromString(output.stdout)

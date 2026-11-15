@@ -14,8 +14,9 @@ Repeated scalar and acyclic message fields preserve order
 and share collection-entry limits. String/byte payloads also share materialization
 limits. Numeric and boolean lists accept packed and unpacked input.
 Proto3 enums support nominal numeric values, aliases, unknown numbers, optional
-presence, and repeated packed/unpacked fields. Recursive schemas, maps, and real
-oneofs remain unsupported.
+presence, and repeated packed/unpacked fields. Maps use typed dictionaries with
+entry defaults, last-key-wins replacement, and shared wire budgets. Recursive
+schemas and real oneofs remain unsupported.
 A [handwritten layout fixture](../../tests/protobuf-layouts/README.md)
 checks bounded self-recursion, mutual recursion, recursive lists, and imported
 payload records on the pinned compiler. The generator retains fully qualified
@@ -248,4 +249,23 @@ numbers survive decode and encode. Generated message fields use the enum codec
 for implicit, optional, and repeated values, sharing existing wire budgets.
 Python interoperability covers values, presence, mixed packing, merge, malformed
 input and resource limits. Enum naming and composition APIs are documented in
-the generator guide. Maps, real oneofs and recursive schemas remain separate gates.
+the generator guide. Real oneofs and recursive schemas remain separate gates.
+
+## Map representation and codecs
+
+The handwritten layout fixture verifies `Dict` with all six Roc key types
+needed by proto3 maps: `I32`, `I64`, `U32`, `U64`, `Bool`, and `Str`. Imported
+message values, enum values, strings, and byte lists are observed across modules,
+including retained originals after duplicate-key replacement. The generator uses
+these typed dictionaries while preserving each schema key's wire encoding in its
+synthetic entry codec.
+
+Validated map entries start from defaults; duplicate keys replace complete
+values. Message occurrences merge within an entry, while separate entries replace
+the previous message. Shared budgets charge every decoded entry and its fields,
+including overwritten keys and values. Bounded writers compose entry payloads;
+dictionary order does not imply deterministic serialization. The codegen fixture
+compares all legal key encodings, defaults, merge, unknown fields, malformed input,
+and resource/output limits with Python Protobuf. Generated helper identities
+participate in the existing import, naming, and collision rules. See the
+[map API and wire contract](../../tools/protoc-gen-roc/README.md#maps).

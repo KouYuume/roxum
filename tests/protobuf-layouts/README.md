@@ -2,7 +2,7 @@
 
 This handwritten fixture checks candidate Roc type layouts before the Protobuf
 generator accepts composite schemas. It is not generated code, a Protobuf
-codec, or an interoperability test. The generator supports acyclic messages and repeated scalars/messages;
+codec, or an interoperability test. The generator supports acyclic messages, repeated scalars/messages, enums, and maps;
 recursive schemas remain unsupported.
 
 The pure `layouts` package imports no platform or hosted effects. Its types
@@ -54,7 +54,7 @@ This is evidence for the exercised layouts and depth, not proof of arbitrary
 recursion safety. Generated nested-message parsing still needs shared depth,
 field/tag/entry/materialization budgets, duplicate-message merge behavior,
 bounded encoding, and independent wire interoperability. The recursive fixture also does
-not establish map, oneof, or recursive equality behavior. In particular,
+not establish map wire semantics, oneof, or recursive equality behavior. In particular,
 `Absent` and a present empty child must remain distinct when codecs are added.
 
 ## Open enum candidate
@@ -71,3 +71,27 @@ compare equal. Input length is checked before constructing the value.
 This fixture tests the runtime representation only. Generated enum wire codecs,
 descriptor validation, and naming/import rules are tested separately by
 `test-protobuf-codegen`.
+
+## Map candidate
+
+`Maps` stores each legal proto3 key representation in a typed `Dict`: `I32`,
+`I64`, `U32`, `U64`, `Bool`, and `Str`. Integer encodings with the same signedness
+and width share the Roc key type; generated entry codecs preserve each field's
+wire encoding. Values exercise imported nominal messages with heap-backed text
+and bytes, open enums (including unknown numbers), byte lists, and strings.
+
+The `/maps` fixture accepts zero to 64 little-endian `U64` words and derives each
+key representation from their bits. These words are test input, not Protobuf
+bytes. It builds the dictionaries, replaces the last key's values (or inserts
+zero/false/empty-string keys for empty input), and observes the original again.
+A separate Roc module traverses every dictionary and looks up each key. Python
+compares the entries with its own dictionaries without depending on iteration
+order. Tests include defaults, signed/unsigned width transitions, duplicate keys,
+empty maps, the 63/64/65 entry bound, malformed word lengths, and repeated requests
+with 64 heap-backed keys. Tracking mode checks release for every request.
+
+This verifies the `Dict` layouts and value retention used by generated maps.
+Generated wire semantics, descriptor validation, shared decode budgets, and
+bounded output are tested separately by `test-protobuf-codegen`. Iteration order
+is not a Protobuf ordering contract; deterministic serialization is not
+established by this fixture.
