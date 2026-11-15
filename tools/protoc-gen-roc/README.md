@@ -16,6 +16,7 @@ the same repository revision and the [pinned Roc compiler](../../docs/toolchain.
 - Repeated `string`, `bytes`, and acyclic messages, represented by `List(Str)`,
   `List(List(U8))`, and `List(Child)`.
 - All numeric and boolean scalar types as repeated fields, with packed and unpacked input.
+- Proto3 maps with all legal key types and scalar, enum, or acyclic message values.
 - All 15 proto3 scalar types as singular fields, with implicit presence or explicit `optional` presence (see below).
 - Message names matching `[A-Z][A-Za-z0-9]*` and field names matching
   `[a-z][a-z0-9]*(?:_[a-z0-9]+)*`. Roc keywords, conflicting built-in names,
@@ -26,10 +27,10 @@ the same repository revision and the [pinned Roc compiler](../../docs/toolchain.
 - Files may contain services; the plugin ignores service declarations and their
   options. It generates no RPC bindings.
 
-Maps, real `oneof`, recursive message fields, proto2,
+Real `oneof`, recursive message fields, proto2,
 editions, extensions, and weak imports are rejected.
 The `packed` field option is accepted only on the supported repeated numeric, enum,
-and boolean fields. The enum option `allow_alias` is also accepted. All other file/message/field/oneof options are rejected in this
+and boolean fields. The enum option `allow_alias` and validated synthetic `map_entry` message option are also accepted. All other file/message/field/oneof options are rejected in this
 pilot, including options for other languages. Validation completes before any output is returned;
 errors identify the file and fully qualified symbol where possible.
 
@@ -85,7 +86,7 @@ call nesting; total temporary memory can scale with schema depth and output
 limit. There is no independent encoder depth/work limit. Do not interpret the
 output bound as a total allocation bound. Message fields with or without explicit
 `optional` use the same presence and merge behavior. Synthetic oneofs remain descriptor metadata and do not introduce
-a user-facing union beyond `Absent / Present`. Maps and real oneofs remain unsupported.
+a user-facing union beyond `Absent / Present`. Real oneofs remain unsupported.
 
 ## Repeated strings and bytes
 
@@ -404,3 +405,46 @@ Generated enum modules expose `read_int32`, `write_int32`, and
 The enum fixtures compare Python and Roc values and presence, imported/nested
 types, aliases, unknown signed extremes, mixed packing, parent merge, malformed
 input, and entry/tag/output limits across all backends and allocators.
+
+## Maps
+
+A `map<K, V>` field becomes `Dict(K, V)` with `Dict.empty()` as its default.
+The declared integer width and signedness determine the Roc key type; the entry
+codec preserves its declared varint, ZigZag, or fixed-width encoding. String and
+boolean keys remain `Str` and `Bool`. Enum values retain their nominal wrapper
+and unknown numbers. Message values are direct `Child` values, not presence tags.
+
+Following the [proto3 map contract](https://protobuf.dev/programming-guides/proto3/#maps),
+each entry starts from defaults. Missing keys use zero, false, or the empty string;
+missing values use the scalar/enum default or `Child.defaults`. Duplicate keys
+replace the complete preceding value, including when the new entry omits its
+value. Duplicate message value occurrences within a single entry merge. Merging
+parent messages applies the same last-entry-wins behavior to their maps.
+
+Each recognized entry reserves one shared collection entry before entering its
+message scope, even if it replaces an existing key. Entry and message-value
+scopes count toward depth. Tags and materialized key/value bytes share the same
+reader budgets, including overwritten values; string materialization retains the
+wire library's byte-read and UTF-8 conversion charges. Unknown entry members and
+wrong-wire members are validated and skipped without changing known members.
+
+Encoding emits one length-delimited entry per dictionary item using the bounded
+writer. Scalar defaults may be omitted inside entries; message values, including
+empty messages, are emitted. Dictionary traversal order is not a serialization
+ordering guarantee. Compare decoded values, not byte identity; this is not a
+canonical or deterministic serialization API.
+
+Synthetic entry descriptors must have exactly the singular `key=1` and `value=2`
+fields, legal key types, and one repeated field in their enclosing message.
+Their names must match the parent field's generated `Entry` name; nested
+entry declarations, direct map-valued entries, and unsupported options fail
+before any output. Entry helper modules are emitted with ordinary flattened
+names and participate in package-wide collision checks. Applications use the
+parent's `Dict` field; helper modules are not additional application message
+schemas. The generator still rejects recursive type graphs.
+
+Interoperability fixtures exercise all 12 legal key encodings, defaults, unknown
+enum values, scalar and message values, duplicate entries and members, parent
+merge, unknown/wrong-wire members, malformed inputs, and shared resource/output
+boundaries. A separate Roc construction case verifies encoding independently of
+decoding. Python comparisons ignore map ordering.

@@ -7,6 +7,7 @@ import pf.Reply
 import pf.RequestBody
 import pf.Router
 import pf.Server
+import layouts.Maps
 import layouts.Status
 import layouts.Graph
 import layouts.Leaf
@@ -28,7 +29,7 @@ init! = |{}| Ok({
 })
 
 routes : Router(Model, [], {})
-routes = Router.new.route("/enum", MethodRouter.post(Handler.stateful(enum_answer))).route("/node", MethodRouter.post(Handler.stateful(answer))).route("/mutual", MethodRouter.post(Handler.stateful(answer))).route("/tree", MethodRouter.post(Handler.stateful(answer)))
+routes = Router.new.route("/maps", MethodRouter.post(Handler.stateful(map_answer))).route("/enum", MethodRouter.post(Handler.stateful(enum_answer))).route("/node", MethodRouter.post(Handler.stateful(answer))).route("/mutual", MethodRouter.post(Handler.stateful(answer))).route("/tree", MethodRouter.post(Handler.stateful(answer)))
 
 # Bound construction before allocating recursive values; this is not a wire decoder.
 answer = |_model, context| {
@@ -106,4 +107,35 @@ enum_view = |EnumFields.(record)| {
 		"different"
 	}
 	"${Status.to_number(record.value).to_str()}|${presence}|${values}|${aliases_equal}"
+}
+
+# Each input word selects all six legal Roc map key representations.
+map_answer = |_model, context| {
+	input = match context.request.body {
+		RequestBody.Bytes(bytes) => bytes
+		_ => []
+	}
+	if input.len() % 8 != 0 {
+		return Ok(Reply.text("InputLength").with_status(400))
+	}
+	if input.len() / 8 > 64 {
+		return Ok(Reply.text("EntryLimit").with_status(400))
+	}
+	var $keys = []
+	var $raw = 0.U64
+	var $shift = 0.U8
+	for byte in input {
+		$raw = $raw.bitwise_or(byte.to_u64().shl_wrap($shift))
+		if $shift == 56 {
+			$keys = $keys.append($raw)
+			$raw = 0
+			$shift = 0
+		} else {
+			$shift = $shift + 8
+		}
+	}
+	original = Maps.new($keys)
+	before = Observe.maps(original)
+	replacement = Maps.replace(original, $keys.last() ?? 0)
+	Ok(Reply.text("${before};${Observe.maps(replacement)};${Observe.maps(original)}"))
 }

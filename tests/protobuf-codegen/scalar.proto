@@ -69,3 +69,19 @@ message EnumPacket {
   Mode mode = 5;
 }
 message EnumEnvelope { EnumPacket child = 1; }
+
+message MapPacket {
+  map<int32, string> signed32 = 1;
+  map<int64, catalog.State> signed64 = 2;
+  map<uint32, bytes> unsigned32 = 3;
+  map<uint64, string> unsigned64 = 4;
+  map<bool, Packet> flags = 5;
+  map<string, Packet> strings = 6;
+  map<sint32, int32> zigzag32 = 7;
+  map<sint64, int64> zigzag64 = 8;
+  map<fixed32, float> fixed32 = 9;
+  map<fixed64, double> fixed64 = 10;
+  map<sfixed32, bool> sfixed32 = 11;
+  map<sfixed64, uint64> sfixed64 = 12;
+}
+message MapEnvelope { MapPacket child = 1; }

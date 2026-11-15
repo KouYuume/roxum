@@ -1,8 +1,65 @@
 import Graph
 import Leaf
+import Maps
+import Status
 
 # Cross-module traversal exercises public nominal identities and Box/List payloads.
 Observe := [].{
+	# Iterate and look up from a separate module; do not rely on Dict order.
+	maps : Maps -> Str
+	maps = |Maps.(record)| {
+		var $lines = []
+		for (key, value) in record.signed32 {
+			lookup = match Dict.get(record.signed32, key) {
+				Ok(found) => map_leaf(found)
+				Err(_) => "missing"
+			}
+			key_text = key.to_str()
+			$lines = $lines.append("signed32:${key_text}=${map_leaf(value)}~${lookup}")
+		}
+		for (key, value) in record.signed64 {
+			lookup = match Dict.get(record.signed64, key) {
+				Ok(found) => map_status(found)
+				Err(_) => "missing"
+			}
+			key_text = key.to_str()
+			$lines = $lines.append("signed64:${key_text}=${map_status(value)}~${lookup}")
+		}
+		for (key, value) in record.unsigned32 {
+			lookup = match Dict.get(record.unsigned32, key) {
+				Ok(found) => map_bytes(found)
+				Err(_) => "missing"
+			}
+			key_text = key.to_str()
+			$lines = $lines.append("unsigned32:${key_text}=${map_bytes(value)}~${lookup}")
+		}
+		for (key, value) in record.unsigned64 {
+			lookup = match Dict.get(record.unsigned64, key) {
+				Ok(found) => map_text(found)
+				Err(_) => "missing"
+			}
+			key_text = key.to_str()
+			$lines = $lines.append("unsigned64:${key_text}=${map_text(value)}~${lookup}")
+		}
+		for (key, value) in record.flags {
+			lookup = match Dict.get(record.flags, key) {
+				Ok(found) => map_leaf(found)
+				Err(_) => "missing"
+			}
+			key_text = if key { "true" } else { "false" }
+			$lines = $lines.append("flags:${key_text}=${map_leaf(value)}~${lookup}")
+		}
+		for (key, value) in record.strings {
+			lookup = match Dict.get(record.strings, key) {
+				Ok(found) => map_leaf(found)
+				Err(_) => "missing"
+			}
+			key_text = key
+			$lines = $lines.append("strings:${key_text}=${map_leaf(value)}~${lookup}")
+		}
+		Str.join_with($lines, "\n")
+	}
+
 	Stats : { nodes : U64, sum : U64, bytes : U64 }
 
 	node : Graph.Node -> Stats
@@ -53,3 +110,11 @@ one = |value, Leaf.(leaf)| {
 
 add : Observe.Stats, Observe.Stats -> Observe.Stats
 add = |left, right| { nodes: left.nodes + right.nodes, sum: left.sum + right.sum, bytes: left.bytes + right.bytes }
+
+map_leaf = |Leaf.(record)| "${record.text}/${map_bytes(record.payload)}"
+
+map_status = |value| Status.to_number(value).to_str()
+
+map_bytes = |bytes| Str.join_with(bytes.map(|byte| byte.to_str()), ",")
+
+map_text = |text| text
