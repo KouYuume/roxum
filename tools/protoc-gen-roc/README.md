@@ -26,10 +26,10 @@ the same repository revision and the [pinned Roc compiler](../../docs/toolchain.
 - Files may contain services; the plugin ignores service declarations and their
   options. It generates no RPC bindings.
 
-Maps, enums, real `oneof`, recursive message fields, proto2,
+Maps, real `oneof`, recursive message fields, proto2,
 editions, extensions, and weak imports are rejected.
-The `packed` field option is accepted only on the supported repeated numeric
-and boolean fields. All other file/message/field/oneof options are rejected in this
+The `packed` field option is accepted only on the supported repeated numeric, enum,
+and boolean fields. The enum option `allow_alias` is also accepted. All other file/message/field/oneof options are rejected in this
 pilot, including options for other languages. Validation completes before any output is returned;
 errors identify the file and fully qualified symbol where possible.
 
@@ -377,3 +377,30 @@ direct Roc views cover signed extremes, ZigZag transitions, 32-bit truncation,
 noncanonical booleans, signed zeros, subnormal/normal transitions, infinities, and
 NaNs by class. Parent merges, retained initial lists, malformed segment lengths,
 and shared entry/tag/field/output bounds run across the backend/allocator matrix.
+
+## Open enums
+
+Proto3 enums generate nominal `I32` wrappers in separate modules. Top-level,
+nested and imported enum identities follow the same visibility, flattened naming
+and collision rules as messages. Enum-only files may be generation targets.
+Enum names use the message type-name pattern. Value names must use uppercase
+snake case and become lowercase constants without stripping a prefix:
+`STATE_READY` becomes `State.state_ready`. Names colliding with Roc keywords or
+the enum's generated methods are rejected. The first value must be zero;
+duplicate numbers require `allow_alias=true`. Other enum/value options are rejected.
+
+`State.from_number(number)` and `State.to_number(value)` preserve unknown signed
+32-bit values. Aliases compare equal because they carry the same number. Fields
+use the nominal enum type, `[Absent, Present(State)]`, or `List(State)`. Implicit
+zero is omitted, present zero is encoded, and repeated values retain order.
+Both packed and unpacked enum input are accepted; packing options govern output.
+Wire conversion uses the int32 codec, including sign-extended negative output and
+low-32-bit conversion after bounded varint parsing. Unknown enum numbers remain
+in known fields; this differs from discarded unknown fields. See the official
+[open enum contract](https://protobuf.dev/programming-guides/enum/).
+
+Generated enum modules expose `read_int32`, `write_int32`, and
+`read_packed_int32` for codec composition, retaining shared wire-reader budgets.
+The enum fixtures compare Python and Roc values and presence, imported/nested
+types, aliases, unknown signed extremes, mixed packing, parent merge, malformed
+input, and entry/tag/output limits across all backends and allocators.

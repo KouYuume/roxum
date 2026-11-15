@@ -13,7 +13,9 @@ presence and duplicate-occurrence wire merge, with or without explicit `optional
 Repeated scalar and acyclic message fields preserve order
 and share collection-entry limits. String/byte payloads also share materialization
 limits. Numeric and boolean lists accept packed and unpacked input.
-Recursive schemas, maps, enums, and real oneofs remain unsupported.
+Proto3 enums support nominal numeric values, aliases, unknown numbers, optional
+presence, and repeated packed/unpacked fields. Recursive schemas, maps, and real
+oneofs remain unsupported.
 A [handwritten layout fixture](../../tests/protobuf-layouts/README.md)
 checks bounded self-recursion, mutual recursion, recursive lists, and imported
 payload records on the pinned compiler. The generator retains fully qualified
@@ -235,3 +237,15 @@ selects depth and heap-backed payloads at runtime. Closed-form Python assertions
 cover node/payload summaries, depth and input boundaries, and repeated deep
 requests; tracking mode requires one allocator success marker per request.
 This closes the bounded type-layout experiment, not recursive schema support.
+
+## Enum representation and codecs
+
+The handwritten layout fixture verifies a nominal `I32` wrapper across module
+boundaries, including presence and list fields. The generator uses this layout
+for proto3 open enums. Top-level, nested, and imported declarations share the
+message identity and collision checks. Aliases require `allow_alias`; unknown
+numbers survive decode and encode. Generated message fields use the enum codec
+for implicit, optional, and repeated values, sharing existing wire budgets.
+Python interoperability covers values, presence, mixed packing, merge, malformed
+input and resource limits. Enum naming and composition APIs are documented in
+the generator guide. Maps, real oneofs and recursive schemas remain separate gates.

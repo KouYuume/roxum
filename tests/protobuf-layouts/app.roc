@@ -7,6 +7,7 @@ import pf.Reply
 import pf.RequestBody
 import pf.Router
 import pf.Server
+import layouts.Status
 import layouts.Graph
 import layouts.Leaf
 import layouts.Observe
@@ -27,7 +28,7 @@ init! = |{}| Ok({
 })
 
 routes : Router(Model, [], {})
-routes = Router.new.route("/node", MethodRouter.post(Handler.stateful(answer))).route("/mutual", MethodRouter.post(Handler.stateful(answer))).route("/tree", MethodRouter.post(Handler.stateful(answer)))
+routes = Router.new.route("/enum", MethodRouter.post(Handler.stateful(enum_answer))).route("/node", MethodRouter.post(Handler.stateful(answer))).route("/mutual", MethodRouter.post(Handler.stateful(answer))).route("/tree", MethodRouter.post(Handler.stateful(answer)))
 
 # Bound construction before allocating recursive values; this is not a wire decoder.
 answer = |_model, context| {
@@ -69,3 +70,40 @@ answer = |_model, context| {
 
 render : Observe.Stats -> Str
 render = |stats| "${stats.nodes.to_str()},${stats.sum.to_str()},${stats.bytes.to_str()}"
+
+EnumFields := { value : Status, optional : [Absent, Present(Status)], values : List(Status) }
+
+enum_answer = |_model, context| {
+	input = match context.request.body {
+		RequestBody.Bytes(bytes) => bytes
+		_ => []
+	}
+	if input.len() != 4 {
+		return Ok(Reply.text("InputLength").with_status(400))
+	}
+	var $raw = 0.U32
+	var $shift = 0.U8
+	for byte in input {
+		$raw = $raw.bitwise_or(byte.to_u32().shl_wrap($shift))
+		$shift = $shift + 8
+	}
+	value = Status.from_number($raw.to_i32_wrap())
+	original = EnumFields.{ value, optional: Present(value), values: [Status.unspecified, value, Status.ready, Status.available] }
+	EnumFields.(record) = original
+	replacement = EnumFields.{ ..record, optional: Absent, values: [] }
+	Ok(Reply.text("${enum_view(original)};${enum_view(replacement)};${enum_view(original)}"))
+}
+
+enum_view = |EnumFields.(record)| {
+	presence = match record.optional {
+		Absent => "absent"
+		Present(value) => "present:${Status.to_number(value).to_str()}"
+	}
+	values = Str.join_with(record.values.map(|value| Status.to_number(value).to_str()), ",")
+	aliases_equal = if (record.value == Status.ready) == (record.value == Status.available) {
+		"equal"
+	} else {
+		"different"
+	}
+	"${Status.to_number(record.value).to_str()}|${presence}|${values}|${aliases_equal}"
+}

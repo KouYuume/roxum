@@ -37,6 +37,14 @@ def verify(executable):
                 response = client.getresponse()
                 return response.status, response.read()
 
+            # Signed extremes, neighbors of declared 0/1, and unknown values.
+            for number in [-(1 << 31), -(1 << 31)+1, -1, 0, 1, 2, (1 << 31)-2, (1 << 31)-1]:
+                original = f'{number}|present:{number}|0,{number},1,1|equal'
+                changed = f'{number}|absent||equal'
+                wanted = f'{original};{changed};{original}'.encode()
+                assert call('/enum', number.to_bytes(4, 'little', signed=True)) == (200, wanted)
+            for size in [0, 3, 5]:
+                assert call('/enum', b'\0'*size) == (400, b'InputLength')
             for path in ['/node', '/mutual', '/tree']:
                 # Empty edges, both mutual-recursion terminal types, and nearest
                 # values on either side of the fixture's inclusive depth bound.

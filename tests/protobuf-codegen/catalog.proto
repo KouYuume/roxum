@@ -7,3 +7,5 @@ message Entry {
     bytes payload = 1;
   }
 }
+
+enum State { option allow_alias = true; STATE_ZERO = 0; STATE_READY = 1; STATE_AVAILABLE = 1; STATE_NEGATIVE = -1; }

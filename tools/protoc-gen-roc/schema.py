@@ -1,7 +1,8 @@
 """Descriptor identities and deterministic Roc module names for one invocation."""
 from dataclasses import dataclass
+from typing import Union
 import re
-from google.protobuf.descriptor_pb2 import DescriptorProto, FieldDescriptorProto
+from google.protobuf.descriptor_pb2 import DescriptorProto, EnumDescriptorProto, FieldDescriptorProto
 
 
 @dataclass(frozen=True)
@@ -9,7 +10,11 @@ class Message:
     full_name: str
     roc_name: str
     file_name: str
-    descriptor: DescriptorProto
+    descriptor: Union[DescriptorProto, EnumDescriptorProto]
+
+    @property
+    def is_enum(self):
+        return isinstance(self.descriptor, EnumDescriptorProto)
 
     @property
     def location(self):
@@ -61,7 +66,7 @@ def index(request, reserved):
     reserved_names = {name.lower() for name in reserved}
     for filename in sorted(targets):
         file = files[filename]
-        pending = [(message, ()) for message in reversed(file.message_type)]
+        pending = [(message, ()) for message in reversed([*file.message_type, *file.enum_type])]
         while pending:
             descriptor, parents = pending.pop()
             path = (*parents, descriptor.name)
@@ -83,7 +88,8 @@ def index(request, reserved):
             symbol = Message(full_name, roc_name, filename, descriptor)
             identities[full_name] = symbol
             modules[roc_name.lower()] = symbol
-            pending.extend((nested, path) for nested in reversed(descriptor.nested_type))
+            if not symbol.is_enum:
+                pending.extend((nested, path) for nested in reversed([*descriptor.nested_type, *descriptor.enum_type]))
     require(identities, 'request', 'no messages requested')
     return files, sorted(identities.values(), key=lambda symbol: symbol.roc_name)
 
@@ -103,14 +109,16 @@ def references(files, messages):
             file = files[filename]
             pending.extend(file.dependency[i] for i in file.public_dependency)
         edges = set()
-        for field in message.descriptor.field:
-            if field.type != FieldDescriptorProto.TYPE_MESSAGE:
+        for field in ([] if message.is_enum else message.descriptor.field):
+            if field.type not in (FieldDescriptorProto.TYPE_MESSAGE, FieldDescriptorProto.TYPE_ENUM):
                 continue
             location = message.location + '.' + field.name
             target = identities.get(field.type_name)
             require(target is not None, location, 'unknown fully qualified message type: ' + field.type_name)
             require(target.file_name in visible, location, 'message type is not visible through imports')
-            edges.add(target.full_name)
+            require(target.is_enum == (field.type == FieldDescriptorProto.TYPE_ENUM), location, 'referenced type kind does not match field')
+            if not target.is_enum:
+                edges.add(target.full_name)
         graph[message.full_name] = edges
     remaining = dict(graph)
     while remaining:
