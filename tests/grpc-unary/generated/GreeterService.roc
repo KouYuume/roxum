@@ -2,6 +2,7 @@
 import pf.Router
 import pf.MethodRouter
 import grpc.GrpcUnary
+import grpc.GrpcTimeout
 import grpc.GrpcMetadata
 import wire.ProtobufWire
 import Greeting
@@ -14,7 +15,7 @@ GreeterService := [].{
 	register : Router(model, tag, provided), GreeterService.Handlers(model), GrpcUnary.Limits, ProtobufWire.Limits -> Router(model, tag, provided)
 	register = |router, handlers, limits, codec_limits| {
 		var $router = router
-		$router = $router.route("/unary.Greeter/Greet", MethodRouter.post(GrpcUnary.handler(|bytes| Greeting.decode(bytes, codec_limits), ReplyText.encode, handlers.call_greet!, limits)))
+		$router = $router.route("/unary.Greeter/Greet", MethodRouter.post(GrpcUnary.handler(|bytes| Greeting.decode(bytes, codec_limits), ReplyText.encode, handlers.call_greet!, limits)).layer(GrpcTimeout.layer(limits.metadata)))
 		$router
 	}
 }

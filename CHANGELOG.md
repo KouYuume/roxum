@@ -14,9 +14,11 @@ Changes to the roxum platform and its integrations, newest first. The platform a
 
 ### Added
 
+- roxum-grpc: timeout parsing and pre-body execution-limit installation for generated Unary routes, with receipt-time deadline and client cancellation checks. Deadline status trailers remain pending.
+
 - roxum-grpc: finite typed Unary handlers and opt-in protoc service registration bindings, with independent client interoperability checks.
 
-- roxum-grpc: finite Unary framing, bounded ASCII/binary metadata, status encoding and HTTP/2 reply helpers; deadline integration remains pending.
+- roxum-grpc: finite Unary framing, bounded ASCII/binary metadata, status encoding and HTTP/2 reply helpers; deadline status delivery remains pending.
 
 - roc-protobuf: standalone pure Roc bundle and matched protoc-gen-roc source distribution, with compiler compatibility metadata and bounded proto3 codecs including recursive messages.
 

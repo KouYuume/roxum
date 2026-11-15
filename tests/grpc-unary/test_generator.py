@@ -27,6 +27,7 @@ class Services(unittest.TestCase):
         self.assertIn('model, Input, List(GrpcMetadata.Entry)', binding)
         self.assertIn('GrpcUnary.Response(Output)', binding)
         self.assertIn('Output.encode', binding)
+        self.assertIn('.layer(GrpcTimeout.layer(limits.metadata))', binding)
         self.assertIn('ExampleService.roc', [f.name for f in result.file])
         req.parameter = 'wire=wire/main.roc'
         result = generate.generate(req)

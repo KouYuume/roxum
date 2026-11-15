@@ -263,7 +263,7 @@
         "tools/protoc-gen-roc/setup.py",
         "tests/grpc-unary/generated/ReplyText.roc"
       ],
-      "compatibility_sha256": "2a09e35089beba1a20cff4adfa3b765d4cd93a841e5208bd81a7c0c70c3c01db",
+      "compatibility_sha256": "1fb2f58f70e176aaadceb85f0841844932a02d9232c00f8a5001dd7957595895",
       "max_unpacked_bytes": 65536
     }
   ]
