@@ -124,10 +124,7 @@ class Generator(unittest.TestCase):
         # Valid messages preceding an unsupported declaration must not be emitted.
         for declaration, diagnostic in [
                 ('message Bad { enum Choice { option deprecated = true; ZERO = 0; } repeated Choice value = 1; }', b'invalid.proto:.Bad.Choice:'),
-                ('message Bad { Bad child = 1; }', b'invalid.proto:.Bad:'),
-                # The diagnostic must identify the cycle, not its acyclic ancestor.
-                ('message Ancestor { Left child = 1; } message Left { Right child = 1; } '
-                 'message Right { Left child = 1; }', b'invalid.proto:.Left:'),
+                ('message Bad { Bad child = 1; } message BadRecursive {}', b'recursive component module name collision'),
                 ('message Bad { oneof choice { uint64 unset = 1; } }', b'invalid.proto:.Bad.choice:'),
                 ('message Builtin { uint64 value = 1; }', b'invalid.proto:.Builtin:'),
                 ('message BUILTIN { uint64 value = 1; }', b'invalid.proto:.BUILTIN:')]:
@@ -280,14 +277,14 @@ class Generator(unittest.TestCase):
         child.field.add(name='value', number=1, type=4, label=1)
         field.type, field.type_name = 11, '.Sample.Child'
         self.assertFalse(g.generate(req).error)
-        for target in ['', 'Sample.Child', '.Missing', '.Sample']:
+        for target in ['', 'Sample.Child', '.Missing']:
             field.type_name = target
             result = g.generate(req)
             self.assertTrue(result.error, target)
             self.assertFalse(result.file)
         field.type_name = '.Sample.Child'
         child.field[0].type, child.field[0].type_name = 11, '.Sample'
-        self.assertIn('recursive', g.generate(req).error)
+        self.assertFalse(g.generate(req).error)
         req, file, message, field = request()
         other = req.proto_file.add(name='other.proto', syntax='proto3')
         other.message_type.add(name='Other')
@@ -323,13 +320,12 @@ class Generator(unittest.TestCase):
         explicit = g.generate(req)
         self.assertFalse(explicit.error)
         self.assertEqual(ordinary.SerializeToString(), explicit.SerializeToString())
-        # Optional metadata must not bypass oneof, reference, or cycle validation.
+        # Optional metadata must not bypass oneof or reference validation.
         for mutate in [lambda m, f: f.ClearField('oneof_index'),
                        lambda m, f: setattr(f, 'oneof_index', -1),
                        lambda m, f: setattr(f, 'oneof_index', 1),
                        lambda m, f: setattr(f, 'proto3_optional', False),
                        lambda m, f: setattr(f, 'type_name', '.Missing'),
-                       lambda m, f: setattr(f, 'type_name', '.Sample'),
                        lambda m, f: m.field.add(name='other', number=2, type=11,
                                                label=1, type_name='.Child', oneof_index=0)]:
             req, message, field = sample()
@@ -392,14 +388,14 @@ class Generator(unittest.TestCase):
         req, _, message, field = request()
         field.type, field.label, field.type_name = 11, 3, '.Sample'
         result = g.generate(req)
-        self.assertIn('recursive', result.error)
-        self.assertFalse(result.file)
+        self.assertFalse(result.error)
+        self.assertIn('SampleRecursive.roc', [f.name for f in result.file])
         child = message.nested_type.add(name='Child')
         field.type_name = '.Sample.Child'
         child.field.add(name='parent', number=1, type=11, label=3, type_name='.Sample')
         result = g.generate(req)
-        self.assertIn('recursive', result.error)
-        self.assertFalse(result.file)
+        self.assertFalse(result.error)
+        self.assertIn('SampleRecursive.roc', [f.name for f in result.file])
 
     def test_enum_contract(self):
         req, file, message, field = request()
@@ -518,10 +514,39 @@ class Generator(unittest.TestCase):
             result = g.generate(req)
             self.assertTrue(result.error)
             self.assertFalse(result.file)
-        # Recursive map values keep the existing acyclic codec restriction.
+        # Recursive map values share a component with their synthetic entry codec.
         req, _, _, _, entry = map_request()
         entry.field[1].type, entry.field[1].type_name = 11, '.Sample'
-        self.assertIn('recursive', g.generate(req).error)
+        self.assertFalse(g.generate(req).error)
+
+    def test_recursive_component_layout(self):
+        req, file, message, field = request()
+        field.type, field.type_name = 11, '.Sample'
+        result = g.generate(req)
+        self.assertFalse(result.error)
+        source = next(f.content for f in result.file if f.name == 'SampleRecursive.roc')
+        self.assertIn('Present(Box(SampleRecursive.Sample))', source)
+        self.assertNotIn('import SampleRecursive', source)
+        self.assertNotIn('is_eq', source)
+        file.message_type.add(name='SampleRecursive')
+        rejected = g.generate(req)
+        self.assertIn('module name collision', rejected.error)
+        self.assertFalse(rejected.file)
+        file.message_type.pop()
+        other = file.message_type.add(name='Other')
+        field.type_name = '.Other'
+        other.field.add(name='back',number=1,type=11,label=1,type_name='.Sample')
+        acyclic = file.message_type.add(name='Wrapper')
+        acyclic.field.add(name='child',number=1,type=11,label=1,type_name='.Sample')
+        before = g.generate(req)
+        self.assertFalse(before.error)
+        names = {f.name for f in before.file}
+        self.assertEqual(names, {'OtherRecursive.roc','Wrapper.roc','main.roc'})
+        wrapper = next(f.content for f in before.file if f.name == 'Wrapper.roc')
+        self.assertIn('Present(OtherRecursive.Sample)',wrapper)
+        self.assertNotIn('is_eq',wrapper)
+        file.message_type.reverse()
+        self.assertEqual(before.SerializeToString(),g.generate(req).SerializeToString())
 
     def test_plugin_error_protocol(self):
         output = subprocess.run([sys.executable, g.__file__], input=b'\x80', capture_output=True, check=True)

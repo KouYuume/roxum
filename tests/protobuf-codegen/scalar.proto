@@ -117,3 +117,14 @@ message ChoicePacket {
   uint32 outside = 21;
 }
 message ChoiceEnvelope { ChoicePacket child = 1; }
+
+message RecursiveNode {
+  uint32 value = 1;
+  RecursiveNode next = 2;
+  repeated RecursiveNode children = 3;
+  oneof choice { RecursiveNode selected = 4; string text = 5; }
+  map<string, RecursiveNode> lookup = 6;
+}
+message MutualLeft { uint32 value = 1; MutualRight right = 2; }
+message MutualRight { uint32 value = 1; MutualLeft left = 2; }
+message RecursiveEnvelope { RecursiveNode node = 1; MutualLeft mutual = 2; }

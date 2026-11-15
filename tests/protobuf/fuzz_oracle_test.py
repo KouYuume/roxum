@@ -40,7 +40,7 @@ class ScalarOracle(unittest.TestCase):
              'faulty_write = |_writer, _value| Err(OutputLimit)',
              'scalar encode unexpectedly failed'),
             ('malformed encoding',
-             'faulty_write = |_writer, _value| Ok(ProtobufWire.Writer.{ bytes: [128], limit: 4106 })',
+             'faulty_write = |_writer, _value| Ok(ProtobufWire.Writer.{ bytes: [128], limit: 4106, depth: 0, max_depth: 64, messages_left: 65536 })',
              'scalar encoding could not be decoded'),
             ('re-encode rejection',
              'faulty_write = |writer, value| if value == 0 { Err(OutputLimit) } else { ProtobufWire.write_varint(writer, 0) }',

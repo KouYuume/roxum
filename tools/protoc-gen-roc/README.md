@@ -12,12 +12,12 @@ the same repository revision and the [pinned Roc compiler](../../docs/toolchain.
 
 - Proto3 top-level and lexically nested messages, including empty messages.
   Nesting declares independent codecs; singular message fields may reference them.
-- Singular message fields in acyclic type graphs, with explicit presence and wire merge.
-- Repeated `string`, `bytes`, and acyclic messages, represented by `List(Str)`,
+- Singular message fields in acyclic and recursive type graphs, with explicit presence and wire merge.
+- Repeated `string`, `bytes`, and messages, represented by `List(Str)`,
   `List(List(U8))`, and `List(Child)`.
 - All numeric and boolean scalar types as repeated fields, with packed and unpacked input.
-- Proto3 maps with all legal key types and scalar, enum, or acyclic message values.
-- Real oneofs containing scalar, enum, or acyclic message fields, with explicit unset state.
+- Proto3 maps with all legal key types and scalar, enum, or message values.
+- Real oneofs containing scalar, enum, or message fields, with explicit unset state.
 - All 15 proto3 scalar types as singular fields, with implicit presence or explicit `optional` presence (see below).
 - Message names matching `[A-Z][A-Za-z0-9]*` and field names matching
   `[a-z][a-z0-9]*(?:_[a-z0-9]+)*`. Roc keywords, conflicting built-in names,
@@ -28,7 +28,7 @@ the same repository revision and the [pinned Roc compiler](../../docs/toolchain.
 - Files may contain services; the plugin ignores service declarations and their
   options. It generates no RPC bindings.
 
-Recursive message fields, proto2,
+Proto2,
 editions, extensions, and weak imports are rejected.
 The `packed` field option is accepted only on the supported repeated numeric, enum,
 and boolean fields. The enum option `allow_alias` and validated synthetic `map_entry` message option are also accepted. All other file/message/field/oneof options are rejected in this
@@ -68,8 +68,8 @@ invocation must contain at least one message.
 
 Message fields resolve canonical fully qualified descriptor names. Targets must
 be in the same file, a direct import, or an import exposed transitively through
-public imports. Unknown or invisible targets and cycles in the message-field
-graph fail before output. Recursive schemas and well-known types remain unsupported.
+public imports. Unknown or invisible targets fail before output. Cyclic message components use
+the module layout described below. Well-known types remain unsupported.
 
 ## Singular message fields
 
@@ -78,13 +78,13 @@ field, an empty wire occurrence sets `Present(Child.defaults)`, and encoding a p
 child writes its tag and zero length. Wrong-wire occurrences do not change
 presence. Duplicate occurrences merge into the existing child, retaining absent
 fields and replacing scalar wire occurrences, including explicit defaults.
-This also applies through multiple acyclic message levels.
+This also applies through bounded recursive message levels.
 
 Generated decoders enter/leave scopes on the same reader; input, field, depth,
 tag and materialization limits remain shared. Encoders use `write_message` and
-buffer children within remaining output capacity. Acyclic schema depth bounds
-call nesting; total temporary memory can scale with schema depth and output
-limit. There is no independent encoder depth/work limit. Do not interpret the
+buffer children within remaining output capacity. Writer depth and visited-message
+limits bound recursive traversal; total temporary memory can scale with the
+active depth and output limit. Do not interpret the
 output bound as a total allocation bound. Message fields with or without explicit
 `optional` use the same presence and merge behavior. Synthetic oneofs remain descriptor metadata and do not introduce
 a user-facing union beyond `Absent / Present`. Real oneofs use the tagged selection described below.
@@ -105,7 +105,7 @@ writer capacity. See below for numeric and boolean packed fields.
 
 ## Repeated messages
 
-Acyclic message lists use `List(Child)`. Each wire occurrence decodes from
+Message lists use `List(Child)`. Each wire occurrence decodes from
 `Child.defaults` and appends a separate element; adjacent occurrences never merge
 with each other. Empty messages remain elements. Merging an enclosing singular
 message appends to its existing list. Encoding writes each element with its own
@@ -113,8 +113,7 @@ tag and length prefix using the bounded child writer.
 
 Each message element reserves one shared entry before entering its reader scope.
 Nested lists consume the same entry budget, and field, depth, tag, and
-materialization budgets remain shared. Recursive message graphs are still
-rejected, including cycles through repeated fields.
+materialization budgets remain shared, including cycles through repeated fields.
 
 ## Repeated numeric and boolean fields
 
@@ -262,14 +261,13 @@ replays its input and budget; these are pure values rather than linear handles.
 `encode_into` returns `Try(ProtobufWire.Writer, ProtobufWire.Error)`. It appends
 fields to the supplied writer and preserves its existing bytes and total output
 limit. It writes neither an enclosing tag nor a length prefix. Empty messages
-leave the writer unchanged. Errors return no partially advanced reader/writer;
+leave output unchanged but consume one message visit. Errors return no partially advanced reader/writer;
 retained inputs remain available to the caller.
 
-Generated acyclic message fields use these helpers for shared reader state and
-wire merge. Recursive schemas remain unsupported. The wire
-library provides `write_message(writer, value, Message.encode_into)` for bounded,
-buffered child output; the caller writes the field tag first. Recursive encoding
-still needs a depth/work policy.
+Generated message fields use these helpers for shared reader state and wire
+merge. The wire library provides `write_message(writer, value, Message.encode_into)` for bounded,
+buffered child output; the caller writes the field tag first. Generated message
+codecs enter and leave a writer scope, sharing depth and visited-message limits.
 
 ## Toolchain and generation
 
@@ -288,8 +286,9 @@ zig-out/protobuf-codegen/bin/protoc \
 
 The required `wire` parameter is the package path as seen from generated
 `main.roc`. Only letters, digits, `_`, `.`, `/`, `:`, and `-` are accepted in that
-parameter; use a local path for this pilot. The output is one module per message
-and `main.roc`. Keep each invocation's output in its own directory. The plugin
+parameter; use a local path for this pilot. The output contains `main.roc` and
+one module per enum, acyclic message, or cyclic message component. Keep each
+invocation's output in its own directory. The plugin
 uses stdout only for the binary `CodeGeneratorResponse`.
 
 `setup.py` installs under ignored `zig-out/protobuf-codegen`. It checks official
@@ -347,14 +346,15 @@ construct present-default values in Roc, clear fields, and exercise duplicates,
 wrong wire types, malformed values, and cumulative/output bounds.
 A separate [handwritten layout fixture](../../tests/protobuf-layouts/README.md)
 checks bounded self/mutual recursion, recursive lists, and cross-module nominal
-payloads. It does not generate codecs or enable recursive schemas.
+payloads. It checks layouts independently of the generated recursive codec fixtures.
 
 Generated nested and imported scalar codecs are checked against Python bindings,
 including direct Roc value views and independent construction. Descriptor and
 real `protoc` tests cover import closure, flattening/package/case collisions,
 atomic rejection, and deterministic output. Acyclic message references, shared
 reader budgets, duplicate-child merges, and bounded composition are covered by
-generated envelope codecs. Recursive schemas remain unsupported. This pilot does not complete
+generated envelope codecs. Recursive codecs have the additional fixtures below.
+This pilot does not complete
 milestone 2 or make Unary gRPC available.
 
 The composition fixture uses handwritten outer scope handling with generated
@@ -442,7 +442,7 @@ entry declarations, direct map-valued entries, and unsupported options fail
 before any output. Entry helper modules are emitted with ordinary flattened
 names and participate in package-wide collision checks. Applications use the
 parent's `Dict` field; helper modules are not additional application message
-schemas. The generator still rejects recursive type graphs.
+schemas. Recursive components follow the layout below.
 
 Interoperability fixtures exercise all 12 legal key encodings, defaults, unknown
 enum values, scalar and message values, duplicate entries and members, parent
@@ -484,4 +484,46 @@ transitions, selected defaults, multiple groups beside ordinary/optional fields,
 message merge and reset, retained original values after clearing, malformed input,
 and cumulative limits. Direct Roc construction separately checks encoding.
 Real members must be singular and cannot carry proto3 optional metadata; synthetic
-groups must follow real groups. Recursive message graphs remain unsupported.
+groups must follow real groups. Recursive message graphs use the layout below.
+
+## Recursive messages and encoder limits
+
+Mutually reachable messages form a strongly connected component. Each cyclic
+component is emitted in one module named after its lexicographically first
+flattened message name plus `Recursive`. For example, self-recursive `Node`
+becomes `NodeRecursive.Node`; mutually recursive `Left` and `Right` become
+`LeftRecursive.Left` and `LeftRecursive.Right`. Module collisions are rejected
+before output. Acyclic messages retain their existing module/type names and
+import the component when necessary. Synthetic map entries participate in the
+same graph. File imports must still form an acyclic, explicitly selected closure.
+
+Singular message and oneof edges within a cyclic component use `Box(Child)`.
+Presence remains `[Absent, Present(Box(Child))]`; a selected oneof case carries
+`Box(Child)`. Repeated fields use `List(Child)` and maps use `Dict(Key, Child)`.
+Their heap storage supplies indirection; map entry helper codecs box their
+singular cyclic value internally. Edges from outside a component remain direct
+`Child` values with their existing presence wrapper. Applications use `Box.box`
+and `Box.unbox` when constructing or matching boxed fields.
+
+The pinned compiler cannot derive equality for these recursive records. The
+generator therefore omits `is_eq` for cyclic messages and all messages that
+contain them transitively. Acyclic graphs without recursive descendants retain
+their existing equality declaration. This limitation does not affect wire
+comparison against independent decoded values.
+
+`encode(value, max_bytes)` retains its signature and uses maximum depth 64 and
+65,536 visited messages. For explicit limits, call `encode_into` with
+`ProtobufWire.new_writer_with_limits({ output_bytes, depth, messages })`.
+The root has depth zero and consumes one visit, including an empty root. Every
+nested generated message, including synthetic map entries, consumes another
+visit; shared subtrees count on every traversal. Sibling visits never replenish
+work. Packed scalar payloads do not create message scopes. Exhaustion returns
+`DepthLimit` or `MessageLimit`; output overflow still returns `OutputLimit`.
+
+`decode` continues to use the shared reader's limits; recursive defaults contain
+no child values until a recognized wire occurrence supplies them. Fixtures cover
+self/mutual recursion, lists/maps/oneofs, duplicate merge and replacement,
+retained originals, default depth 63/64/65, sibling work bounds, and an application
+constructed shared tree whose exponential traversal is stopped by its visit
+budget. These logical limits are not an exact total-allocation or CPU-time quota.
+Keep caller-supplied limits finite and appropriate for the execution environment.

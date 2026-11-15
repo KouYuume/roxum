@@ -46,11 +46,11 @@ Entry := { count : U64 }.{
 	## Appends fields to the supplied writer, retaining its accumulated output limit.
 	encode_into : Entry, ProtobufWire.Writer -> Try(ProtobufWire.Writer, ProtobufWire.Error)
 	encode_into = |Entry.(value), writer| {
-		var $writer = writer
+		var $writer = ProtobufWire.begin_message(writer)?
 		if value.count != 0.U64 {
 			$writer = ProtobufWire.write_tag($writer, { number: 1, kind: Varint })?
 			$writer = ProtobufWire.write_varint($writer, value.count)?
 		}
-		Ok($writer)
+		ProtobufWire.end_message($writer)
 	}
 }

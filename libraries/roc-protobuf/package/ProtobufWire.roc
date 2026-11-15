@@ -5,7 +5,7 @@ ProtobufWire := [].{
 	default_limits : ProtobufWire.Limits
 	default_limits = { input_bytes: 4194304, field_bytes: 4194304, depth: 64, tags: 65536, entries: 65536, materialized_bytes: 8388608 }
 
-	Error : [Truncated, VarintOverflow, InvalidTag, InvalidWireType, UnexpectedEndGroup, MismatchedGroup, UnclosedGroup, InputLimit, FieldLimit, DepthLimit, TagLimit, EntryLimit, MaterializationLimit, UnfinishedMessage, NoParent, OutputLimit, InvalidUtf8]
+	Error : [Truncated, VarintOverflow, InvalidTag, InvalidWireType, UnexpectedEndGroup, MismatchedGroup, UnclosedGroup, InputLimit, FieldLimit, DepthLimit, TagLimit, EntryLimit, MaterializationLimit, UnfinishedMessage, NoParent, OutputLimit, MessageLimit, InvalidUtf8]
 	Kind : [Varint, Fixed64, Bytes, StartGroup, EndGroup, Fixed32]
 	Tag : { number : U32, kind : ProtobufWire.Kind }
 
@@ -182,12 +182,37 @@ ProtobufWire := [].{
 		Ok($reader)
 	}
 
-	Writer := { bytes : List(U8), limit : U64 }.{
+	EncodeLimits : { output_bytes : U64, depth : U64, messages : U64 }
+
+	Writer := { bytes : List(U8), limit : U64, depth : U64, max_depth : U64, messages_left : U64 }.{
 		is_eq : _
 	}
 
 	new_writer : U64 -> ProtobufWire.Writer
-	new_writer = |limit| ProtobufWire.Writer.{ bytes: [], limit }
+	new_writer = |limit| ProtobufWire.new_writer_with_limits({ output_bytes: limit, depth: 64, messages: 65536 })
+
+	new_writer_with_limits : ProtobufWire.EncodeLimits -> ProtobufWire.Writer
+	new_writer_with_limits = |limits| ProtobufWire.Writer.{ bytes: [], limit: limits.output_bytes, depth: 0, max_depth: limits.depth, messages_left: limits.messages }
+
+	## Generated codecs charge each message visit, including the root and empty messages.
+	begin_message : ProtobufWire.Writer -> Try(ProtobufWire.Writer, ProtobufWire.Error)
+	begin_message = |ProtobufWire.Writer.(state)| {
+		if state.depth > state.max_depth or state.depth == 18446744073709551615 {
+			return Err(DepthLimit)
+		}
+		if state.messages_left == 0 {
+			return Err(MessageLimit)
+		}
+		Ok(ProtobufWire.Writer.{ ..state, depth: state.depth + 1, messages_left: state.messages_left - 1 })
+	}
+
+	end_message : ProtobufWire.Writer -> Try(ProtobufWire.Writer, ProtobufWire.Error)
+	end_message = |ProtobufWire.Writer.(state)| {
+		if state.depth == 0 {
+			return Err(NoParent)
+		}
+		Ok(ProtobufWire.Writer.{ ..state, depth: state.depth - 1 })
+	}
 
 	output : ProtobufWire.Writer -> List(U8)
 	output = |ProtobufWire.Writer.(state)| state.bytes
@@ -231,8 +256,12 @@ ProtobufWire := [].{
 			return Err(OutputLimit)
 		}
 		# Reserve at least one prefix byte; write_bytes checks the actual prefix.
-		child = encode_into(value, ProtobufWire.new_writer(available - 1))?
-		ProtobufWire.write_bytes(writer, ProtobufWire.output(child))
+		ProtobufWire.Writer.(parent) = writer
+		ProtobufWire.Writer.(child) = encode_into(value, ProtobufWire.Writer.{ ..parent, bytes: [], limit: available - 1 })?
+		if child.depth != parent.depth {
+			return Err(UnfinishedMessage)
+		}
+		ProtobufWire.write_bytes(ProtobufWire.Writer.{ ..parent, messages_left: child.messages_left }, child.bytes)
 	}
 
 	write_bytes : ProtobufWire.Writer, List(U8) -> Try(ProtobufWire.Writer, ProtobufWire.Error)
@@ -761,3 +790,76 @@ expect {
 	outside = ProtobufWire.leave_message(complete)?
 	values == [7] and tail == 9 and ProtobufWire.remaining(outside) == 1
 }
+
+# A root plus two empty children consumes three visits, even though the payloads
+# themselves contain no fields. Sibling scopes restore depth, never visit budget.
+expect {
+	var $ok = Bool.True
+	for messages in [2.U64, 3, 4] {
+		writer = ProtobufWire.new_writer_with_limits({ output_bytes: 2, depth: 1, messages })
+		result = encode_empty_children(writer)
+		$ok = $ok and if messages < 3 {
+			result == Err(MessageLimit)
+		} else {
+			match result {
+				Ok(done) => ProtobufWire.output(done) == [0, 0]
+				Err(_) => Bool.False
+			}
+		}
+	}
+	$ok
+}
+
+encode_empty_children = |writer| {
+	parent = ProtobufWire.begin_message(writer)?
+	first = ProtobufWire.write_message(parent, {}, encode_empty)?
+	second = ProtobufWire.write_message(first, {}, encode_empty)?
+	ProtobufWire.end_message(second)
+}
+
+encode_empty = |{}, writer| {
+	entered = ProtobufWire.begin_message(writer)?
+	ProtobufWire.end_message(entered)
+}
+
+# Root depth is zero. One child needs a maximum depth of at least one.
+expect {
+	var $ok = Bool.True
+	for depth in [0.U64, 1, 2] {
+		writer = ProtobufWire.new_writer_with_limits({ output_bytes: 2, depth, messages: 3 })
+		result = encode_empty_children(writer)
+		$ok = $ok and if depth == 0 {
+			result == Err(DepthLimit)
+		} else {
+			match result {
+				Ok(_) => Bool.True
+				Err(_) => Bool.False
+			}
+		}
+	}
+	$ok
+}
+
+# Empty roots consume one visit; packed payload composition consumes no message
+# visit unless its callback explicitly enters a message scope.
+expect {
+	var $ok = Bool.True
+	for messages in [0.U64, 1, 2] {
+		writer = ProtobufWire.new_writer_with_limits({ output_bytes: 1, depth: 0, messages })
+		result = encode_empty({}, writer)
+		$ok = $ok and if messages == 0 {
+			result == Err(MessageLimit)
+		} else {
+			match result {
+				Ok(done) => ProtobufWire.output(done).is_empty()
+				Err(_) => Bool.False
+			}
+		}
+		packed = ProtobufWire.write_message(writer, {}, |{}, child| Ok(child))?
+		$ok = $ok and ProtobufWire.output(packed) == [0]
+	}
+	$ok
+}
+
+expect ProtobufWire.end_message(ProtobufWire.new_writer(0)) == Err(NoParent)
+expect ProtobufWire.write_message(ProtobufWire.new_writer(1), {}, |{}, child| ProtobufWire.begin_message(child)) == Err(UnfinishedMessage)

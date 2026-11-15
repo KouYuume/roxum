@@ -95,9 +95,8 @@ def index(request, reserved):
 
 
 def references(files, messages):
-    """Resolve canonical descriptor references and reject recursive codec graphs."""
+    """Resolve canonical descriptor references and enforce import visibility."""
     identities = {message.full_name: message for message in messages}
-    graph = {}
     for message in messages:
         visible = {message.file_name}
         pending = list(files[message.file_name].dependency)
@@ -108,7 +107,6 @@ def references(files, messages):
             visible.add(filename)
             file = files[filename]
             pending.extend(file.dependency[i] for i in file.public_dependency)
-        edges = set()
         for field in ([] if message.is_enum else message.descriptor.field):
             if field.type not in (FieldDescriptorProto.TYPE_MESSAGE, FieldDescriptorProto.TYPE_ENUM):
                 continue
@@ -117,20 +115,4 @@ def references(files, messages):
             require(target is not None, location, 'unknown fully qualified message type: ' + field.type_name)
             require(target.file_name in visible, location, 'message type is not visible through imports')
             require(target.is_enum == (field.type == FieldDescriptorProto.TYPE_ENUM), location, 'referenced type kind does not match field')
-            if not target.is_enum:
-                edges.add(target.full_name)
-        graph[message.full_name] = edges
-    remaining = dict(graph)
-    while remaining:
-        leaves = {name for name, edges in remaining.items() if not edges}
-        if not leaves:
-            # Every remaining node reaches a cycle; report a cycle member,
-            # not an acyclic ancestor that merely depends on one.
-            node = min(remaining)
-            visited = set()
-            while node not in visited:
-                visited.add(node)
-                node = min(remaining[node])
-            require(False, identities[node].location, 'recursive message fields are not supported')
-        remaining = {name: edges - leaves for name, edges in remaining.items() if name not in leaves}
     return identities
