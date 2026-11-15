@@ -701,6 +701,10 @@ pub fn build(b: *std.Build) void {
     const run_http2_listener = b.addSystemCommand(&.{ "python3", "tools/check.py", "--only", "test-http2-listener" });
     test_http2_listener.dependOn(&run_http2_listener.step);
 
+    const test_grpc_unary = b.step("test-grpc-unary", "Verify generated typed Unary service bindings");
+    const run_grpc_unary = b.addSystemCommand(&.{ "python3", "tools/check.py", "--only", "test-grpc-unary" });
+    test_grpc_unary.dependOn(&run_grpc_unary.step);
+
     const test_grpc_probe = b.step("test-grpc-probe", "Verify fixed-byte gRPC interoperability on TCP and Unix listeners");
     const run_grpc_probe = b.addSystemCommand(&.{ "python3", "tools/check.py", "--only", "test-grpc-probe" });
     test_grpc_probe.dependOn(&run_grpc_probe.step);

@@ -14,7 +14,9 @@ Changes to the roxum platform and its integrations, newest first. The platform a
 
 ### Added
 
-- roxum-grpc: finite Unary framing, bounded ASCII/binary metadata, status encoding and HTTP/2 reply helpers; typed service dispatch and deadline integration remain pending.
+- roxum-grpc: finite typed Unary handlers and opt-in protoc service registration bindings, with independent client interoperability checks.
+
+- roxum-grpc: finite Unary framing, bounded ASCII/binary metadata, status encoding and HTTP/2 reply helpers; deadline integration remains pending.
 
 - roc-protobuf: standalone pure Roc bundle and matched protoc-gen-roc source distribution, with compiler compatibility metadata and bounded proto3 codecs including recursive messages.
 

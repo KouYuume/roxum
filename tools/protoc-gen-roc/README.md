@@ -25,7 +25,7 @@ the same repository revision and the [pinned Roc compiler](../../docs/toolchain.
   collisions are rejected.
 - Reserved schema names/ranges and source metadata do not change codec behavior.
   `protoc` validates schema declarations before invoking the plugin.
-- Files may contain services; the plugin ignores service declarations and their
+- In codec-only mode, files may contain services; the plugin ignores service declarations and their
   options. It generates no RPC bindings.
 
 Proto2,
@@ -552,3 +552,10 @@ Local artifacts default to unpublished placeholder URLs. `zig build release`
 also builds these artifacts and includes their versions, compiler contract, URLs,
 and hashes under `protobuf` in `release.json` and in `protobuf.json`. A build does
 not publish a release.
+
+## Optional roxum Unary bindings
+
+Use `wire=<path>,grpc=<integration package path>,pf=<platform path>` to generate
+typed service registration modules alongside codecs. Without these options the
+output remains platform-free. See [the integration contract](../../integrations/roxum-grpc/README.md#typed-unary-services)
+for supported RPCs, callbacks, limits and deferred deadline guarantees.
