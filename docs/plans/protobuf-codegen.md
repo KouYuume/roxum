@@ -15,8 +15,9 @@ and share collection-entry limits. String/byte payloads also share materializati
 limits. Numeric and boolean lists accept packed and unpacked input.
 Proto3 enums support nominal numeric values, aliases, unknown numbers, optional
 presence, and repeated packed/unpacked fields. Maps use typed dictionaries with
-entry defaults, last-key-wins replacement, and shared wire budgets. Recursive
-schemas and real oneofs remain unsupported.
+entry defaults, last-key-wins replacement, and shared wire budgets. Real oneofs
+use tagged selections with an explicit unset state, message merge, and case
+replacement. Recursive schemas remain unsupported.
 A [handwritten layout fixture](../../tests/protobuf-layouts/README.md)
 checks bounded self-recursion, mutual recursion, recursive lists, and imported
 payload records on the pinned compiler. The generator retains fully qualified
@@ -225,7 +226,7 @@ round trips, and exact output limits. Optional scalar fixtures verify all 15
 payload layouts across the backend/allocator matrix, compare Python `HasField`
 with direct Roc presence/value views, and check present defaults, clearing,
 duplicates, wrong-wire skipping, malformed values, and cumulative/output bounds.
-Synthetic oneof metadata is validated; real oneofs remain rejected. The reference
+Synthetic oneof metadata is validated separately from real oneof selections. The reference
 implementation's overlong-tag limitation is recorded in the [generator verification notes](../../tools/protoc-gen-roc/README.md#verification).
 These checks do not establish support for the rest of the target matrix or
 complete milestone 2; the fixed-byte gRPC probe still supplies no generated
@@ -249,7 +250,7 @@ numbers survive decode and encode. Generated message fields use the enum codec
 for implicit, optional, and repeated values, sharing existing wire budgets.
 Python interoperability covers values, presence, mixed packing, merge, malformed
 input and resource limits. Enum naming and composition APIs are documented in
-the generator guide. Real oneofs and recursive schemas remain separate gates.
+the generator guide. Recursive schemas remain a separate gate.
 
 ## Map representation and codecs
 
@@ -269,3 +270,20 @@ compares all legal key encodings, defaults, merge, unknown fields, malformed inp
 and resource/output limits with Python Protobuf. Generated helper identities
 participate in the existing import, naming, and collision rules. See the
 [map API and wire contract](../../tools/protoc-gen-roc/README.md#maps).
+
+## Oneof representation and codecs
+
+Real oneof groups use a closed tag union in the containing message record, with
+`Unset` and one payload tag per member. Generated codecs and application-side
+matching verify all scalar layouts, imported open enums, and message payloads on
+the pinned compiler. Each group has one active case; selected defaults remain
+present on the wire. Synthetic optional groups retain the existing presence API.
+
+Repeated occurrences of a message case merge while that case remains selected.
+Switching cases replaces the previous payload; switching back starts from defaults.
+Unknown/wrong-wire fields leave the selection alone. Shared wire budgets remain
+consumed after replacement. The codegen fixture compares every case-pair switch,
+parent merge, multiple independent groups, retained original values, malformed
+input and budget boundaries with Python Protobuf. Naming rules and the public
+selection API are documented in the [generator guide](../../tools/protoc-gen-roc/README.md#oneofs).
+Recursive schema generation and encoder work/depth limits remain separate gates.

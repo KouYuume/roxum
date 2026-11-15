@@ -7,6 +7,7 @@ from google.protobuf.message import DecodeError
 import schema
 import enums
 import maps
+import oneofs
 
 # Roc type, wire tag, primitive suffix, default expression.
 SCALARS = {
@@ -67,16 +68,7 @@ def validate(request):
         if maps.is_entry(symbol):
             options.ClearField('map_entry')
         require(not options.SerializeToString(), loc, 'message options are not supported')
-        oneof_names = set()
-        for index, oneof in enumerate(message.oneof_decl):
-            where = loc + '.' + oneof.name
-            require(re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', oneof.name)
-                    and oneof.name not in oneof_names, where, 'invalid or duplicate oneof name')
-            oneof_names.add(oneof.name)
-            members = [f for f in message.field if f.HasField('oneof_index') and f.oneof_index == index]
-            require(len(members) == 1 and members[0].proto3_optional, where,
-                    'only synthetic oneofs for proto3 optional fields are supported')
-            require(not oneof.options.SerializeToString(), where, 'oneof options are not supported')
+        oneofs.validate(symbol, KEYWORDS)
         fields = set()
         numbers = set()
         for field in message.field:
@@ -94,11 +86,6 @@ def validate(request):
                     and (field.type in (MESSAGE, ENUM) or not field.type_name),
                     where, 'only singular fields and repeated scalar/message fields are supported')
             require(not repeated(field) or not field.proto3_optional, where, 'repeated fields cannot be optional')
-            if field.proto3_optional:
-                require(field.HasField('oneof_index') and 0 <= field.oneof_index < len(message.oneof_decl),
-                        where, 'optional field requires a synthetic oneof')
-            else:
-                require(not field.HasField('oneof_index'), where, 'real oneofs are not supported')
             options = d.FieldOptions()
             options.CopyFrom(field.options)
             if repeated(field) and field.type in PACKABLE_TYPES:
@@ -139,8 +126,17 @@ def emit(symbol, identities):
             return f'List({info(field)[0]})'
         return f'[Absent, Present({info(field)[0]})]' if present(field) else info(field)[0]
 
-    shape = ', '.join(f'{f.name} : ' + field_type(f) for f in fields)
-    defaults = ', '.join(f'{f.name}: ' + ('Dict.empty()' if map_entry(f) else '[]' if repeated(f) else 'Absent' if present(f) else info(f)[3]) for f in fields)
+    ordinary = [f for f in fields if not oneofs.real(f)]
+    groups = {index: [f for f in fields if oneofs.real(f) and f.oneof_index == index]
+              for index in range(len(message.oneof_decl))}
+    groups = {index: members for index, members in groups.items() if members}
+    shape_parts = [f'{f.name} : ' + field_type(f) for f in ordinary]
+    for index, members in groups.items():
+        cases = ', '.join(f'{oneofs.tag(f)}({info(f)[0]})' for f in members)
+        shape_parts.append(f'{message.oneof_decl[index].name} : [Unset, {cases}]')
+    shape = ', '.join(shape_parts)
+    defaults = ', '.join(f'{f.name}: ' + ('Dict.empty()' if map_entry(f) else '[]' if repeated(f) else 'Absent' if present(f) else info(f)[3]) for f in ordinary)
+    defaults = ', '.join(filter(None, [defaults, ', '.join(message.oneof_decl[i].name + ': Unset' for i in groups)]))
     imports = ['import wire.ProtobufWire']
     if any(f.type in SCALARS and f.type not in WIRE_TYPES for f in fields):
         imports.append('import wire.ProtobufScalar')
@@ -167,6 +163,22 @@ def emit(symbol, identities):
         '\t\t\t$reader = after_tag', '\t\t\tmatch (field.number, field.kind) {',
     ]
     for f in fields:
+        if oneofs.real(f):
+            group = message.oneof_decl[f.oneof_index].name
+            case = oneofs.tag(f)
+            child, kind, operation, _ = info(f)
+            lines += [f'\t\t\t\t({f.number}, {kind}) => {{']
+            if f.type == MESSAGE:
+                lines += [f'\t\t\t\t\tprevious = match $value.{group} {{\n\t\t\t\t\t\t{case}(value) => value\n\t\t\t\t\t\t_ => {child}.defaults\n\t\t\t\t\t}}',
+                          '\t\t\t\t\tinside = ProtobufWire.enter_message($reader)?',
+                          f'\t\t\t\t\t(value, after) = {child}.decode_into(inside, previous)?',
+                          '\t\t\t\t\t$reader = ProtobufWire.leave_message(after)?']
+            else:
+                codec = child if f.type == ENUM else 'ProtobufWire' if f.type in WIRE_TYPES else 'ProtobufScalar'
+                lines += [f'\t\t\t\t\t(value, after) = {codec}.read_{operation}($reader)?',
+                          '\t\t\t\t\t$reader = after']
+            lines += [f'\t\t\t\t\t$value = {{ ..$value, {group}: {case}(value) }}', '\t\t\t\t}']
+            continue
         entry = map_entry(f)
         if entry:
             _, value_field = entry_fields(entry)
@@ -238,6 +250,16 @@ def emit(symbol, identities):
               f'\tencode_into = |{name}.({"value" if fields else "_value"}), writer| {{',
               '\t\tvar $writer = writer']
     for f in fields:
+        if oneofs.real(f):
+            group = message.oneof_decl[f.oneof_index].name
+            child, kind, operation, _ = info(f)
+            codec = child if f.type == ENUM else 'ProtobufWire' if f.type in WIRE_TYPES else 'ProtobufScalar'
+            lines += [f'\t\tmatch value.{group} {{',
+                      f'\t\t\t{oneofs.tag(f)}(item) => {{',
+                      f'\t\t\t\t$writer = ProtobufWire.write_tag($writer, {{ number: {f.number}, kind: {kind} }})?',
+                      (f'\t\t\t\t$writer = ProtobufWire.write_message($writer, item, {child}.encode_into)?' if f.type == MESSAGE else f'\t\t\t\t$writer = {codec}.write_{operation}($writer, item)?'),
+                      '\t\t\t}', '\t\t\t_ => {}', '\t\t}']
+            continue
         entry = map_entry(f)
         if entry:
             _, value_field = entry_fields(entry)

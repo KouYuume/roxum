@@ -12,6 +12,9 @@ import generated.ScalarLists
 import generated.ScalarListEnvelope
 import generated.UnsignedLists
 import generated.UnsignedListEnvelope
+import generated.ChoicePacket
+import generated.ChoiceChild
+import generated.ChoiceEnvelope
 import generated.MapPacket
 import generated.MapEnvelope
 import generated.EnumPacket
@@ -51,7 +54,7 @@ init! = |{}| Ok({
 })
 
 routes : Router(Model, [], {})
-routes = Router.new.route("/maps-material", MethodRouter.post(Handler.stateful(map_answer))).route("/maps-depth", MethodRouter.post(Handler.stateful(map_answer))).route("/maps-construct", MethodRouter.post(Handler.stateful(map_answer))).route("/maps-envelope", MethodRouter.post(Handler.stateful(map_answer))).route("/maps-output", MethodRouter.post(Handler.stateful(map_answer))).route("/maps", MethodRouter.post(Handler.stateful(map_answer))).route("/enum", MethodRouter.post(Handler.stateful(enum_answer))).route("/enum-view", MethodRouter.post(Handler.stateful(enum_answer))).route("/enum-construct", MethodRouter.post(Handler.stateful(enum_answer))).route("/enum-envelope", MethodRouter.post(Handler.stateful(enum_answer))).route("/enum-output", MethodRouter.post(Handler.stateful(enum_answer))).route("/scalar-lists", MethodRouter.post(Handler.stateful(scalar_lists_answer))).route("/scalar-lists-view", MethodRouter.post(Handler.stateful(scalar_lists_answer))).route("/scalar-lists-construct", MethodRouter.post(Handler.stateful(scalar_lists_answer))).route("/scalar-lists-envelope", MethodRouter.post(Handler.stateful(scalar_lists_answer))).route("/scalar-lists-output", MethodRouter.post(Handler.stateful(scalar_lists_answer))).route("/scalar-lists-merge", MethodRouter.post(Handler.stateful(scalar_lists_answer))).route("/unsigned-lists", MethodRouter.post(Handler.stateful(unsigned_answer))).route("/unsigned-view", MethodRouter.post(Handler.stateful(unsigned_answer))).route("/unsigned-construct", MethodRouter.post(Handler.stateful(unsigned_answer))).route("/unsigned-envelope", MethodRouter.post(Handler.stateful(unsigned_answer))).route("/unsigned-output", MethodRouter.post(Handler.stateful(unsigned_answer))).route("/unsigned-zero-depth", MethodRouter.post(Handler.stateful(unsigned_answer))).route("/unsigned-merge", MethodRouter.post(Handler.stateful(unsigned_answer))).route("/message-list", MethodRouter.post(Handler.stateful(message_list_answer))).route("/message-list-envelope", MethodRouter.post(Handler.stateful(message_list_answer))).route("/message-list-output", MethodRouter.post(Handler.stateful(message_list_answer))).route("/message-list-construct", MethodRouter.post(Handler.stateful(message_list_answer))).route("/collections", MethodRouter.post(Handler.stateful(collection_answer))).route("/collection-envelope", MethodRouter.post(Handler.stateful(collection_answer))).route("/collections-construct", MethodRouter.post(Handler.stateful(collection_answer))).route("/collections-output", MethodRouter.post(Handler.stateful(collection_answer))).route("/generated-construct", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/generated-message", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/generated-scalar-message", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/generated-top", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/generated-message-limit", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/generated-presence", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/compose-message", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose-scalars", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose-retained", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose-view", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose-output", MethodRouter.post(Handler.stateful(composition_answer))).route("/identity-copy", MethodRouter.post(Handler.stateful(identity_answer))).route("/identity-view", MethodRouter.post(Handler.stateful(identity_answer))).route("/identity-construct", MethodRouter.post(Handler.stateful(identity_answer))).route("/identity-empty", MethodRouter.post(Handler.stateful(identity_answer))).route("/optional", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-view", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-text", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-bytes", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-construct", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-defaults", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-clear", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-limits", MethodRouter.post(Handler.stateful(optional_answer))).route("/scalars", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-view", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-text", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-construct", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-limits", MethodRouter.post(Handler.stateful(scalar_answer))).route("/copy", MethodRouter.post(Handler.stateful(answer))).route("/construct", MethodRouter.post(Handler.stateful(answer))).route("/defaults", MethodRouter.post(Handler.stateful(answer))).route("/view", MethodRouter.post(Handler.stateful(answer))).route("/empty", MethodRouter.post(Handler.stateful(answer))).route("/limits", MethodRouter.post(Handler.stateful(answer)))
+routes = Router.new.route("/choice-depth", MethodRouter.post(Handler.stateful(choice_answer))).route("/choice-material", MethodRouter.post(Handler.stateful(choice_answer))).route("/choice-output", MethodRouter.post(Handler.stateful(choice_answer))).route("/choice-envelope", MethodRouter.post(Handler.stateful(choice_answer))).route("/choice-construct", MethodRouter.post(Handler.stateful(choice_answer))).route("/choice-retained", MethodRouter.post(Handler.stateful(choice_answer))).route("/choice-view", MethodRouter.post(Handler.stateful(choice_answer))).route("/choice", MethodRouter.post(Handler.stateful(choice_answer))).route("/maps-material", MethodRouter.post(Handler.stateful(map_answer))).route("/maps-depth", MethodRouter.post(Handler.stateful(map_answer))).route("/maps-construct", MethodRouter.post(Handler.stateful(map_answer))).route("/maps-envelope", MethodRouter.post(Handler.stateful(map_answer))).route("/maps-output", MethodRouter.post(Handler.stateful(map_answer))).route("/maps", MethodRouter.post(Handler.stateful(map_answer))).route("/enum", MethodRouter.post(Handler.stateful(enum_answer))).route("/enum-view", MethodRouter.post(Handler.stateful(enum_answer))).route("/enum-construct", MethodRouter.post(Handler.stateful(enum_answer))).route("/enum-envelope", MethodRouter.post(Handler.stateful(enum_answer))).route("/enum-output", MethodRouter.post(Handler.stateful(enum_answer))).route("/scalar-lists", MethodRouter.post(Handler.stateful(scalar_lists_answer))).route("/scalar-lists-view", MethodRouter.post(Handler.stateful(scalar_lists_answer))).route("/scalar-lists-construct", MethodRouter.post(Handler.stateful(scalar_lists_answer))).route("/scalar-lists-envelope", MethodRouter.post(Handler.stateful(scalar_lists_answer))).route("/scalar-lists-output", MethodRouter.post(Handler.stateful(scalar_lists_answer))).route("/scalar-lists-merge", MethodRouter.post(Handler.stateful(scalar_lists_answer))).route("/unsigned-lists", MethodRouter.post(Handler.stateful(unsigned_answer))).route("/unsigned-view", MethodRouter.post(Handler.stateful(unsigned_answer))).route("/unsigned-construct", MethodRouter.post(Handler.stateful(unsigned_answer))).route("/unsigned-envelope", MethodRouter.post(Handler.stateful(unsigned_answer))).route("/unsigned-output", MethodRouter.post(Handler.stateful(unsigned_answer))).route("/unsigned-zero-depth", MethodRouter.post(Handler.stateful(unsigned_answer))).route("/unsigned-merge", MethodRouter.post(Handler.stateful(unsigned_answer))).route("/message-list", MethodRouter.post(Handler.stateful(message_list_answer))).route("/message-list-envelope", MethodRouter.post(Handler.stateful(message_list_answer))).route("/message-list-output", MethodRouter.post(Handler.stateful(message_list_answer))).route("/message-list-construct", MethodRouter.post(Handler.stateful(message_list_answer))).route("/collections", MethodRouter.post(Handler.stateful(collection_answer))).route("/collection-envelope", MethodRouter.post(Handler.stateful(collection_answer))).route("/collections-construct", MethodRouter.post(Handler.stateful(collection_answer))).route("/collections-output", MethodRouter.post(Handler.stateful(collection_answer))).route("/generated-construct", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/generated-message", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/generated-scalar-message", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/generated-top", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/generated-message-limit", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/generated-presence", MethodRouter.post(Handler.stateful(generated_message_answer))).route("/compose-message", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose-scalars", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose-retained", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose-view", MethodRouter.post(Handler.stateful(composition_answer))).route("/compose-output", MethodRouter.post(Handler.stateful(composition_answer))).route("/identity-copy", MethodRouter.post(Handler.stateful(identity_answer))).route("/identity-view", MethodRouter.post(Handler.stateful(identity_answer))).route("/identity-construct", MethodRouter.post(Handler.stateful(identity_answer))).route("/identity-empty", MethodRouter.post(Handler.stateful(identity_answer))).route("/optional", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-view", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-text", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-bytes", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-construct", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-defaults", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-clear", MethodRouter.post(Handler.stateful(optional_answer))).route("/optional-limits", MethodRouter.post(Handler.stateful(optional_answer))).route("/scalars", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-view", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-text", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-construct", MethodRouter.post(Handler.stateful(scalar_answer))).route("/scalar-limits", MethodRouter.post(Handler.stateful(scalar_answer))).route("/copy", MethodRouter.post(Handler.stateful(answer))).route("/construct", MethodRouter.post(Handler.stateful(answer))).route("/defaults", MethodRouter.post(Handler.stateful(answer))).route("/view", MethodRouter.post(Handler.stateful(answer))).route("/empty", MethodRouter.post(Handler.stateful(answer))).route("/limits", MethodRouter.post(Handler.stateful(answer)))
 
 answer = |_model, context| {
 	bytes = match context.request.body {
@@ -725,3 +728,73 @@ map_answer = |_model, context| {
 	capacity = if context.request.path == "/maps-output" { 16 } else { 4096 }
 	scalar_reply(MapPacket.encode(decoded, capacity))
 }
+
+choice_answer = |_model, context| {
+	bytes = match context.request.body {
+		RequestBody.Bytes(value) => value
+		_ => []
+	}
+	limits = { input_bytes: 4096, field_bytes: 256, depth: 3, tags: 128, entries: 64, materialized_bytes: 512 }
+	if context.request.path == "/choice-envelope" {
+		return scalar_reply(copy_generated(bytes, limits, ChoiceEnvelope.decode, ChoiceEnvelope.encode))
+	}
+	if context.request.path == "/choice-construct" {
+		ChoicePacket.(defaults) = ChoicePacket.defaults
+		value = ChoicePacket.{ ..defaults, choice: State(State.from_number(-7)), secondary: Extra([]), marker: Present(0), outside: 9 }
+		return scalar_reply(ChoicePacket.encode(value, 4096))
+	}
+	selected = if context.request.path == "/choice-material" { { ..limits, materialized_bytes: 16 } } else if context.request.path == "/choice-depth" { { ..limits, depth: 0 } } else { limits }
+	decoded = match ChoicePacket.decode(bytes, selected) {
+		Ok(value) => value
+		Err(error) => return scalar_reply(Err(error))
+	}
+	if context.request.path == "/choice-view" {
+		return Ok(Reply.text(choice_view(decoded)))
+	}
+	if context.request.path == "/choice-retained" {
+		before = choice_view(decoded)
+		ChoicePacket.(record) = decoded
+		cleared = ChoicePacket.{ ..record, choice: Unset, secondary: Unset }
+		return Ok(Reply.text("${before};${choice_view(cleared)};${choice_view(decoded)}"))
+	}
+	capacity = if context.request.path == "/choice-output" { 16 } else { 4096 }
+	scalar_reply(ChoicePacket.encode(decoded, capacity))
+}
+
+choice_view = |ChoicePacket.(value)| {
+	selection = match value.choice {
+		Unset => "unset"
+		Unsigned64(item) => "unsigned64:${item.to_str()}"
+		Unsigned32(item) => "unsigned32:${item.to_str()}"
+		Signed32(item) => "signed32:${item.to_str()}"
+		Signed64(item) => "signed64:${item.to_str()}"
+		Zigzag32(item) => "zigzag32:${item.to_str()}"
+		Zigzag64(item) => "zigzag64:${item.to_str()}"
+		Fixed32Value(item) => "fixed32_value:${item.to_str()}"
+		Fixed64Value(item) => "fixed64_value:${item.to_str()}"
+		SignedFixed32(item) => "signed_fixed32:${item.to_str()}"
+		SignedFixed64(item) => "signed_fixed64:${item.to_str()}"
+
+		Enabled(item) => if item { "enabled:true" } else { "enabled:false" }
+		Text(item) => "text:${item}"
+		Payload(item) => "payload:${choice_bytes(item)}"
+		FloatValue(_) => "float_value"
+		DoubleValue(_) => "double_value"
+		State(item) => "state:${State.to_number(item).to_str()}"
+		ChildValue(item) => "child_value:${choice_child(item)}"
+		OtherChild(item) => "other_child:${choice_child(item)}"
+	}
+	secondary = match value.secondary {
+		Unset => "unset"
+		Extra(item) => "extra:${choice_bytes(item)}"
+	}
+	marker = match value.marker {
+		Absent => "absent"
+		Present(item) => item.to_str()
+	}
+	"${selection}/${secondary}/${marker}/${value.outside.to_str()}"
+}
+
+choice_bytes = |bytes| Str.join_with(bytes.map(|byte| byte.to_str()), ",")
+
+choice_child = |ChoiceChild.(value)| "${value.text}|${Str.join_with(value.numbers.map(|number| number.to_str()), ",")}|${Dict.len(value.labels).to_str()}"

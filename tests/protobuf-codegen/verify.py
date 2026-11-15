@@ -19,6 +19,7 @@ from composition_cases import verify_composition
 from collection_cases import verify_collections
 from enum_cases import verify_enums
 from map_cases import verify_maps
+from oneof_cases import verify_oneofs
 from scalar_list_cases import verify_scalar_lists
 from unsigned_cases import verify_unsigned
 from message_list_cases import verify_message_lists
@@ -110,6 +111,7 @@ def verify(executable):
             verify_scalar_lists(call, composition)
             verify_enums(call, reference)
             verify_maps(call, reference)
+            verify_oneofs(call, reference)
             for data in valid_cases():
                 valid(data)
             status, encoded = call('/construct', b'')

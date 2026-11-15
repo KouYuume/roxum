@@ -85,3 +85,35 @@ message MapPacket {
   map<sfixed64, uint64> sfixed64 = 12;
 }
 message MapEnvelope { MapPacket child = 1; }
+
+message ChoiceChild {
+  string text = 1;
+  repeated uint32 numbers = 2;
+  map<string, uint32> labels = 3;
+}
+message ChoicePacket {
+  oneof choice {
+    uint64 unsigned64 = 1;
+    uint32 unsigned32 = 2;
+    int32 signed32 = 3;
+    int64 signed64 = 4;
+    sint32 zigzag32 = 5;
+    sint64 zigzag64 = 6;
+    fixed32 fixed32_value = 7;
+    fixed64 fixed64_value = 8;
+    sfixed32 signed_fixed32 = 9;
+    sfixed64 signed_fixed64 = 10;
+    bool enabled = 11;
+    string text = 12;
+    bytes payload = 13;
+    float float_value = 14;
+    double double_value = 15;
+    catalog.State state = 16;
+    ChoiceChild child_value = 17;
+    ChoiceChild other_child = 18;
+  }
+  oneof secondary { bytes extra = 19; }
+  optional uint32 marker = 20;
+  uint32 outside = 21;
+}
+message ChoiceEnvelope { ChoicePacket child = 1; }

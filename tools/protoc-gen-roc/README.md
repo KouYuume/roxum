@@ -17,6 +17,7 @@ the same repository revision and the [pinned Roc compiler](../../docs/toolchain.
   `List(List(U8))`, and `List(Child)`.
 - All numeric and boolean scalar types as repeated fields, with packed and unpacked input.
 - Proto3 maps with all legal key types and scalar, enum, or acyclic message values.
+- Real oneofs containing scalar, enum, or acyclic message fields, with explicit unset state.
 - All 15 proto3 scalar types as singular fields, with implicit presence or explicit `optional` presence (see below).
 - Message names matching `[A-Z][A-Za-z0-9]*` and field names matching
   `[a-z][a-z0-9]*(?:_[a-z0-9]+)*`. Roc keywords, conflicting built-in names,
@@ -27,7 +28,7 @@ the same repository revision and the [pinned Roc compiler](../../docs/toolchain.
 - Files may contain services; the plugin ignores service declarations and their
   options. It generates no RPC bindings.
 
-Real `oneof`, recursive message fields, proto2,
+Recursive message fields, proto2,
 editions, extensions, and weak imports are rejected.
 The `packed` field option is accepted only on the supported repeated numeric, enum,
 and boolean fields. The enum option `allow_alias` and validated synthetic `map_entry` message option are also accepted. All other file/message/field/oneof options are rejected in this
@@ -86,7 +87,7 @@ call nesting; total temporary memory can scale with schema depth and output
 limit. There is no independent encoder depth/work limit. Do not interpret the
 output bound as a total allocation bound. Message fields with or without explicit
 `optional` use the same presence and merge behavior. Synthetic oneofs remain descriptor metadata and do not introduce
-a user-facing union beyond `Absent / Present`. Real oneofs remain unsupported.
+a user-facing union beyond `Absent / Present`. Real oneofs use the tagged selection described below.
 
 ## Repeated strings and bytes
 
@@ -448,3 +449,39 @@ enum values, scalar and message values, duplicate entries and members, parent
 merge, unknown/wrong-wire members, malformed inputs, and shared resource/output
 boundaries. A separate Roc construction case verifies encoding independently of
 decoding. Python comparisons ignore map ordering.
+
+## Oneofs
+
+Each real oneof becomes one record field named after the group. Its type is a
+closed tag union: `oneof choice { uint64 count = 1; string text = 2; }` becomes
+`choice : [Unset, Count(U64), Text(Str)]`, defaulting to `Unset`. Member names
+become PascalCase tags by capitalizing each underscore-separated segment. Group
+names follow the same lowercase identifier rules as fields. Group/field name
+collisions, duplicate generated case tags, and the reserved `Unset` case fail
+before output. Synthetic oneofs for proto3 `optional` remain `[Absent, Present(T)]`
+fields; they do not generate a selection field.
+
+The [oneof wire rules](https://protobuf.dev/programming-guides/proto3/#oneof)
+apply to recognized occurrences. Scalar and enum cases replace the selection;
+zero, false, empty string/bytes, and enum zero still select a case and are encoded.
+Message cases hold a direct child value, including an empty child. Repeating the
+same message case merges into that child. Switching to another case replaces the
+old value; switching back starts from the child's defaults, even when both cases
+have the same message type. Unknown or wrong-wire fields do not select or clear a
+case. Unknown future cases cannot be distinguished from other unknown fields and
+are discarded under the existing unknown-field policy.
+
+`decode_into` applies these rules to its initial value, including when parent
+message occurrences merge. Oneof members consume the same reader budgets as
+ordinary fields. Discarding a previous selection does not restore its consumed
+tags, materialization, or nested collection entries. Encoding writes only the
+selected member with the bounded writer. There is no additional hosted effect or
+runtime handle.
+
+The generated fixture compiles all scalar, enum, and message payloads across the
+backend/allocator matrix. Independent Python comparisons cover all case-pair
+transitions, selected defaults, multiple groups beside ordinary/optional fields,
+message merge and reset, retained original values after clearing, malformed input,
+and cumulative limits. Direct Roc construction separately checks encoding.
+Real members must be singular and cannot carry proto3 optional metadata; synthetic
+groups must follow real groups. Recursive message graphs remain unsupported.
