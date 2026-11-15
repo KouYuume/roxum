@@ -2,8 +2,9 @@
 
 Status: milestone 1 complete for finite HTTP/2, including concurrent-stream drain.
 Milestone 2 inventory is recorded in the [codec and generator assessment](protobuf-codegen.md).
-Bounded pure-Roc wire primitives are implemented. Next: descriptor-to-Roc
-feasibility; schema-aware codecs and generation remain open.
+Bounded pure-Roc wire primitives and proto3 schema codecs are implemented,
+including recursive messages. Milestone 2 packaging, compatibility metadata, and
+final acceptance remain open before the Unary integration.
 A reusable gRPC integration is not implemented.
 See the [transport decision and evidence](http2-transport.md). The responsibility
 split is agreed; API names,

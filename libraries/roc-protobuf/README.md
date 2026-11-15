@@ -138,9 +138,10 @@ still need a one-byte prefix. A wider prefix can make the final append fail even
 if the child fits; no partial writer is returned. Encoder errors propagate.
 
 This helper buffers the child payload. It bounds each child buffer and final
-output, not total allocation across arbitrary recursive composition. Recursive
-schema support still requires an explicit depth/work policy. Generated acyclic
-message-valued fields use this helper. The composition fixture verifies generated
+output, not total allocation across arbitrary recursive composition. The child
+inherits active depth and remaining message visits; its consumed visits are
+propagated back to the parent. A callback returning an unbalanced message scope
+fails with `UnfinishedMessage`. Generated message-valued fields use this helper. The composition fixture verifies generated
 and handwritten outer encoders against Python, including prefix-width
 transitions and total output boundaries.
 
@@ -171,3 +172,20 @@ Their temporary raw and typed lists share the logical entry bound; list storage
 is not charged as materialized byte payloads. Conversion preserves scalar
 semantics, including 32-bit truncation, nonzero booleans, signed zero, and NaN
 canonicalization on encoding. Errors propagate without a partial list or reader.
+
+## Encoder traversal budgets
+
+`new_writer(max_bytes)` initializes depth 64 and 65,536 message visits alongside
+the byte limit. `new_writer_with_limits({ output_bytes, depth, messages })` makes
+all three explicit. `begin_message` checks active depth and charges one visit;
+`end_message` restores the parent depth without refunding visits. The root is
+depth zero and costs one visit even when empty. Depth and visit exhaustion return
+`DepthLimit` and `MessageLimit`; ending without an active scope returns `NoParent`.
+
+Generated `encode_into` functions bracket each message with these operations.
+Handwritten message encoders must do the same to participate in traversal limits.
+Raw scalar writes and packed-payload callbacks do not create message scopes.
+Callbacks passed to `write_message` must thread the supplied writer, not replace
+it with a newly initialized writer that resets budgets. Limits bound logical
+message visits and active nesting, not every scalar operation or allocator byte;
+a caller's retained copies are independent pure values, not linear capabilities.

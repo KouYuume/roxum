@@ -2,8 +2,8 @@
 
 This handwritten fixture checks candidate Roc type layouts before the Protobuf
 generator accepts composite schemas. It is not generated code, a Protobuf
-codec, or an interoperability test. The generator supports acyclic messages, repeated scalars/messages, enums, and maps;
-recursive schemas remain unsupported.
+codec, or an interoperability test. Generated message, enum, map, oneof, and
+bounded recursive codecs are tested separately by `test-protobuf-codegen`.
 
 The pure `layouts` package imports no platform or hosted effects. Its types
 exercise these shapes:
@@ -44,18 +44,16 @@ the full release verification suite.
 
 The pinned compiler can represent these bounded recursive records using normal
 Roc values: a new host handle or hosted effect is not required by the fixture.
-Co-locating mutually recursive nominal definitions is a viable candidate for a
-generated type component; this fixture does not determine whether cyclic module
-imports work or require every schema to use one module. Fully qualified schema
-identities, collision-free names, and generated imports still need a separate
-design and fixture before enabling those features.
+Generated codecs co-locate cyclic message components in a module and use `Box`
+for singular edges within a component. Naming, imports, descriptor validation,
+and wire behavior are covered separately by `test-protobuf-codegen`.
 
-This is evidence for the exercised layouts and depth, not proof of arbitrary
-recursion safety. Generated nested-message parsing still needs shared depth,
-field/tag/entry/materialization budgets, duplicate-message merge behavior,
-bounded encoding, and independent wire interoperability. The recursive fixture also does
-not establish map wire semantics, oneof, or recursive equality behavior. In particular,
-`Absent` and a present empty child must remain distinct when codecs are added.
+This fixture establishes only the exercised layouts and depth. The generated
+codec fixtures additionally check shared decoding budgets, duplicate-message
+merges, map and oneof semantics, bounded encoding, and independent wire
+interoperability. They distinguish `Absent` from a present empty child.
+Recursive equality is not generated because the pinned compiler cannot derive
+it for these records; see the [generator contract](../../tools/protoc-gen-roc/README.md#recursive-messages-and-encoder-limits).
 
 ## Open enum candidate
 

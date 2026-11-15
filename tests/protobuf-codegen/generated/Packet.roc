@@ -61,7 +61,7 @@ Packet := { count : U64, code : U32, stamp : U64, payload : List(U8) }.{
 	## Appends fields to the supplied writer, retaining its accumulated output limit.
 	encode_into : Packet, ProtobufWire.Writer -> Try(ProtobufWire.Writer, ProtobufWire.Error)
 	encode_into = |Packet.(value), writer| {
-		var $writer = writer
+		var $writer = ProtobufWire.begin_message(writer)?
 		if value.count != 0.U64 {
 			$writer = ProtobufWire.write_tag($writer, { number: 1, kind: Varint })?
 			$writer = ProtobufWire.write_varint($writer, value.count)?
@@ -78,6 +78,6 @@ Packet := { count : U64, code : U32, stamp : U64, payload : List(U8) }.{
 			$writer = ProtobufWire.write_tag($writer, { number: 536870911, kind: Bytes })?
 			$writer = ProtobufWire.write_bytes($writer, value.payload)?
 		}
-		Ok($writer)
+		ProtobufWire.end_message($writer)
 	}
 }

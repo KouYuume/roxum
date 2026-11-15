@@ -41,7 +41,7 @@ Empty := {}.{
 	## Appends fields to the supplied writer, retaining its accumulated output limit.
 	encode_into : Empty, ProtobufWire.Writer -> Try(ProtobufWire.Writer, ProtobufWire.Error)
 	encode_into = |Empty.(_value), writer| {
-		var $writer = writer
-		Ok($writer)
+		var $writer = ProtobufWire.begin_message(writer)?
+		ProtobufWire.end_message($writer)
 	}
 }

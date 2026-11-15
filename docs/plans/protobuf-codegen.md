@@ -1,6 +1,6 @@
 # Protobuf codec and generator assessment
 
-Status: milestone 2 has a wire foundation and a generated scalar and acyclic-message pilot.
+Status: milestone 2 has a wire foundation and generated proto3 codecs, including bounded recursive messages.
 The [pure Roc wire library](../../libraries/roc-protobuf/README.md) provides bounded
 primitive reads/writes and unknown-field skipping. The
 [protoc plugin](../../tools/protoc-gen-roc/README.md) generates singular
@@ -8,16 +8,17 @@ codecs for all 15 proto3 scalar types with implicit or explicit `optional`
 presence, plus empty messages. Native `F32`/`F64` conversion is verified, including
 signed zero and NaN canonicalization. Optional scalar fields use
 `[Absent, Present(T)]`, with present-default values retained on the wire.
-Singular message fields in acyclic type graphs are supported with explicit
+Singular message fields are supported with explicit
 presence and duplicate-occurrence wire merge, with or without explicit `optional`.
-Repeated scalar and acyclic message fields preserve order
+Repeated scalar and message fields preserve order
 and share collection-entry limits. String/byte payloads also share materialization
 limits. Numeric and boolean lists accept packed and unpacked input.
 Proto3 enums support nominal numeric values, aliases, unknown numbers, optional
 presence, and repeated packed/unpacked fields. Maps use typed dictionaries with
 entry defaults, last-key-wins replacement, and shared wire budgets. Real oneofs
 use tagged selections with an explicit unset state, message merge, and case
-replacement. Recursive schemas remain unsupported.
+replacement. Recursive schemas use co-located cyclic components and bounded
+encoder traversal. Packaging and final milestone acceptance remain open.
 A [handwritten layout fixture](../../tests/protobuf-layouts/README.md)
 checks bounded self-recursion, mutual recursion, recursive lists, and imported
 payload records on the pinned compiler. The generator retains fully qualified
@@ -27,7 +28,7 @@ explicitly selected in one invocation. Case-insensitive output collisions fail
 before generation. Generated scalar codecs expose `decode_into` and
 `encode_into` for existing reader/writer composition, with wire merging and
 shared-budget fixtures. Fully qualified message references resolve through
-direct/public imports; acyclic generated message codecs share reader budgets
+direct/public imports; generated message codecs share reader budgets
 and bounded child output.
 This is the next stage of the [gRPC plan](grpc.md), following
 [finite HTTP/2 acceptance](http2-finite-acceptance.md).
@@ -144,8 +145,8 @@ to measure every allocator byte; host request memory limits remain independent.
 The wire foundation tests lower, exact, and upper boundaries. Its writer bounds
 accumulated output; generated scalar encoders can append to an existing bounded
 writer. `write_message` adds buffered length-delimited composition bounded by
-the remaining output capacity. Recursive encoding depth/work limits and the remaining schema
-matrix are still prerequisites for completing composite gRPC support.
+the remaining output capacity. Generated encoder scopes share depth and visited-message limits. Packaging and
+final interoperability acceptance remain prerequisites for reusable gRPC support.
 
 Packed varint, fixed32, and fixed64 payload readers share entry limits and
 containing-reader bounds without increasing message depth. Generated repeated
@@ -186,11 +187,10 @@ scopes, existing merge values, and accumulated writer capacity. Handwritten
 parent scope drivers compare repeated child occurrences with official Python
 message decoding and exercise shared limits. Generated acyclic message references, recursive merging
 through finite schema levels, and buffered length-delimited encoding have interoperability fixtures.
-Recursive schema graphs remain rejected. The handwritten layout fixture demonstrates
-bounded
-recursive values with `Box`/`List` and co-located mutually recursive nominal definitions.
-It does not yet define generated recursive module boundaries or validate
-composite wire semantics.
+Cyclic schema components are emitted as co-located nominal definitions with
+boxed singular edges, building on the handwritten layout fixture. Generated
+recursive fixtures additionally validate composite wire semantics and encoder
+traversal limits.
 Scalar representation, including native floats, bounded UTF-8 conversion, and
 optional presence, is implemented. Before
 expanding the generator, resolve compiler limitations with evidence rather than
@@ -238,7 +238,7 @@ cleanup for those candidate layouts across all backends and allocators. Input
 selects depth and heap-backed payloads at runtime. Closed-form Python assertions
 cover node/payload summaries, depth and input boundaries, and repeated deep
 requests; tracking mode requires one allocator success marker per request.
-This closes the bounded type-layout experiment, not recursive schema support.
+These layout checks complement the generated recursive codec checks below.
 
 ## Enum representation and codecs
 
@@ -250,7 +250,7 @@ numbers survive decode and encode. Generated message fields use the enum codec
 for implicit, optional, and repeated values, sharing existing wire budgets.
 Python interoperability covers values, presence, mixed packing, merge, malformed
 input and resource limits. Enum naming and composition APIs are documented in
-the generator guide. Recursive schemas remain a separate gate.
+the generator guide. Recursive component behavior is described below.
 
 ## Map representation and codecs
 
@@ -286,4 +286,25 @@ consumed after replacement. The codegen fixture compares every case-pair switch,
 parent merge, multiple independent groups, retained original values, malformed
 input and budget boundaries with Python Protobuf. Naming rules and the public
 selection API are documented in the [generator guide](../../tools/protoc-gen-roc/README.md#oneofs).
-Recursive schema generation and encoder work/depth limits remain separate gates.
+Recursive schema generation and encoder limits are described below.
+
+## Recursive codecs and traversal limits
+
+Cyclic message components share a deterministic module with nominal types,
+boxed singular/oneof edges, and ordinary lists/maps for repeated fields. Acyclic
+ancestors import the component without introducing cyclic module imports. The
+[generator contract](../../tools/protoc-gen-roc/README.md#recursive-messages-and-encoder-limits)
+defines naming, collision rejection, and the pinned compiler's recursive equality
+limitation. Generated types containing recursive descendants do not expose
+`is_eq`; independent Protobuf values remain the interoperability oracle.
+
+Reader budgets remain cumulative through recursion. Generated encoders charge
+the root and every nested message visit on the same writer, including empty
+messages and repeated visits to shared subtrees. The default maximum depth is
+64 and the default visit budget is 65,536; explicit limits are available through
+the writer composition API. Packed scalars do not count as nested messages.
+Tests exercise self/mutual recursion, cyclic map entries and oneofs, merge,
+replacement, retained values, nearest depth/work boundaries, and an exponential
+shared-tree workload that terminates with a typed limit error. Packaging,
+compatibility metadata, and final milestone 2 acceptance remain open before
+advertising a reusable Unary integration.
