@@ -30,7 +30,7 @@ def main():
             raise RuntimeError('protoc archive hash mismatch')
         archive.write_bytes(data)
     with zipfile.ZipFile(io.BytesIO(archive.read_bytes())) as source:
-        # Only the executable is needed: the pilot rejects imports.
+        # Schema imports are supplied by the caller; well-known types are unsupported.
         binary = DEST / 'bin/protoc'
         binary.parent.mkdir(exist_ok=True)
         binary.write_bytes(source.read('bin/protoc'))

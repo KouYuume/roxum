@@ -1,6 +1,11 @@
 # Versioning
 
-Core and each integration have independent semantic versions.
+Core and each integration have independent semantic versions. The independent
+Protobuf library and generator share a separate version in
+[`libraries/roc-protobuf/compatibility.json`](../../libraries/roc-protobuf/compatibility.json).
+Their [distribution contract](../../libraries/roc-protobuf/DISTRIBUTION.md) pins
+the compiler and requires matched tool/library versions; it does not declare
+a roxum platform dependency. The same semantic version rules apply to this pair.
 
 | Change | Before 1.0 | From 1.0 |
 |---|---|---|

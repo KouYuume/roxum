@@ -1,10 +1,12 @@
 # Protobuf wire and scalar codecs
 
 `package/main.roc` exports `ProtobufWire` and `ProtobufScalar`, pure Roc modules
-with no platform or hosted imports. They support
-[gRPC milestone 2](../../docs/plans/protobuf-codegen.md) and are not yet published
-packages. The [generator pilot](../../tools/protoc-gen-roc/README.md) composes them
-into codecs for singular scalar fields with implicit or explicit `optional` presence.
+with no platform or hosted imports. The [generator](../../tools/protoc-gen-roc/README.md)
+composes them into bounded proto3 codecs, including recursive messages.
+See [distribution and compatibility](DISTRIBUTION.md) for the standalone source
+archive, Roc bundle, exact compiler revision, and matched library/tool versions.
+These artifacts support [gRPC milestone 2](../../docs/plans/protobuf-codegen.md);
+they do not provide a gRPC runtime.
 
 `ProtobufWire` reads/writes unsigned varints, tags, fixed-width words, and
 length-delimited bytes. It skips unknown fields, including matched groups, and

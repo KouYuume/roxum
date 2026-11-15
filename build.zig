@@ -711,6 +711,9 @@ pub fn build(b: *std.Build) void {
     const test_protobuf_codegen = b.step("test-protobuf-codegen", "Check generated Protobuf scalar codecs in all backend/allocator modes");
     const run_protobuf_codegen = b.addSystemCommand(&.{ "python3", "tools/check.py", "--only", "test-protobuf-codegen" });
     test_protobuf_codegen.dependOn(&run_protobuf_codegen.step);
+    const test_protobuf_package = b.step("test-protobuf-package", "Verify standalone Protobuf distribution and URL imports");
+    const run_protobuf_package = b.addSystemCommand(&.{ "python3", "tools/check.py", "--only", "test-protobuf-package" });
+    test_protobuf_package.dependOn(&run_protobuf_package.step);
     const test_protobuf = b.step("test-protobuf", "Check pure Protobuf wire operations in all backend/allocator modes");
     const run_protobuf = b.addSystemCommand(&.{ "python3", "tools/check.py", "--only", "test-protobuf" });
     test_protobuf.dependOn(&run_protobuf.step);
