@@ -227,6 +227,25 @@
       ],
       "compatibility_sha256": "2cbb8ca542524c5ee890a82dd43a7fa98fdb43010f4d874b7041749217da9e6a",
       "max_unpacked_bytes": 65536
+    },
+    {
+      "name": "roxum-grpc",
+      "version": "0.1.0",
+      "package_root": "integrations/roxum-grpc/package/main.roc",
+      "applications": [
+        "tests/grpc-wire/app.roc"
+      ],
+      "platform_versions": "^0.1",
+      "requires_platform_sha256": "42dad44504128f55396b374fbd8996a338fd37aaef311a8270c89ea498ee496b",
+      "compatibility_files": [
+        "tests/grpc-wire/checks.sh",
+        "tests/grpc-wire/verify.py",
+        "tests/grpc-probe/requirements.txt",
+        "tests/http2-engine/requirements.txt",
+        "tests/support/roxum_process.py"
+      ],
+      "compatibility_sha256": "e68fe47d450da443f7f1dff4c95d860cc9e07b58a1bcdd3334520935b221237f",
+      "max_unpacked_bytes": 65536
     }
   ]
 }
