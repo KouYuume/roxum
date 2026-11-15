@@ -163,6 +163,7 @@ pub const Owner = struct {
         if (registry.leases.runningStream(ticket) == null) return error.Closed;
         try self.engine.respondWithTrailers(live, owned.response.status, headers[0..count], owned.body, owned.trailers);
         std.debug.assert(registry.leases.commitResponse(ticket));
+        registry.clearExpiryResponse(ticket);
         self.runnable = true;
     }
 

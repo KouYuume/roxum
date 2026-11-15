@@ -85,6 +85,7 @@ platform "roxum"
 		"roxum_random_u64": HostRandom.u64!,
 		"roxum_request_execution_elapsed": HostRequestExecution.elapsed_nanoseconds!,
 		"roxum_request_execution_limit": HostRequestExecution.limit_nanoseconds!,
+		"roxum_request_execution_limit_with_response": HostRequestExecution.limit_with_response!,
 		"roxum_rate_counter_add": HostRateCounter.add!,
 		"roxum_rate_counter_new": HostRateCounter.new!,
 		"roxum_secret_derive": HostSecret.derive!,

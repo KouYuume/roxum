@@ -51,7 +51,7 @@ elapsed time includes a delayed body and remains monotonic across effect suspens
 zero/already-elapsed limits stop before the next application statement, and a later
 larger duration cannot extend a request limit. Expiry cancels a borrowed TCP
 connection, releases its permit, and preserves peers. With a listener cap, a Roc
-limit cannot widen it. Both controls report `Unavailable` in initialization and
+limit cannot widen it. Execution controls report `Unavailable` in initialization and
 HTTP/1 requests. All checks use TCP and Unix sockets across the backend/allocator
 matrix; exact deadline boundaries remain covered by the internal lease tests.
 
@@ -71,3 +71,12 @@ Early-response deadline checks configure a 1-second write deadline and a
 3-second input deadline. Empty, finite-body, and trailer replies remain open
 after their output completes and the write deadline passes, then reset at the
 input deadline. Peer requests continue on both TCP and Unix connections.
+
+Expiry-response checks cover immediate termination, replacement without deadline
+extension, invalid registration preserving the earlier response and duration,
+and normal response commitment winning. A response blocked by flow control must
+survive request cleanup and deliver its copied bytes once the client grants
+credit. Initialization and HTTP/1 reject registration without retaining Roc values.
+Internal tests additionally cover response-size boundaries, allocation failure,
+cleanup before queued submission, disconnect/reset, and an I/O reset winning over
+queued execution expiry.

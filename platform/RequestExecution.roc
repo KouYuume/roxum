@@ -1,4 +1,5 @@
 import HostRequestExecution
+import Http
 
 ## Execution timing for the current HTTP/2 request. These effects are unavailable
 ## in `init!` and on HTTP/1. They carry no handle that can escape the request.
@@ -7,6 +8,7 @@ import HostRequestExecution
 ## queueing, and handler execution all count. `BeforeBody` middleware can set
 ## a deadline before waiting for input; ordinary handlers run after body EOF.
 RequestExecution := [].{
+
 	## Elapsed monotonic nanoseconds since initial headers completed.
 	## An expired or closed request stops instead of returning to application code.
 	elapsed_nanoseconds! : {} => Try(U64, [Unavailable])
@@ -21,11 +23,32 @@ RequestExecution := [].{
 	## `Server.Limits.http2_execution` cap. Addition saturates rather than wrapping.
 	## Zero, or a duration already elapsed, stops this request before returning.
 	##
-	## Expiry resets the HTTP/2 stream and cancels suspended I/O; it does not create
-	## an HTTP reply or a gRPC status. It cannot preempt arbitrary pure computation.
+	## Expiry cancels suspended I/O and resets the stream unless a response was
+	## registered with `limit_with_response!`. Pure computation is not preempted.
 	## Response commitment wins over later expiry; socket writes still have their
 	## own timeout. This does not change idle/read/write timeouts.
 	limit_nanoseconds! : U64 => Try({}, [Unavailable])
 	limit_nanoseconds! = |nanoseconds|
-		if HostRequestExecution.limit_nanoseconds!(nanoseconds) { Ok({}) } else { Err(Unavailable) }
+		if HostRequestExecution.limit_nanoseconds!(nanoseconds) {
+			Ok({})
+		} else {
+			Err(Unavailable)
+		}
+
+	## Tightens the same deadline and atomically installs a finite expiry response.
+	## The host validates and copies the response before changing the deadline.
+	## Invalid or oversized responses leave the previous configuration unchanged.
+	## Repeated successful calls replace the response but never extend the deadline.
+	## Expiry cancels execution and sends this response without running middleware.
+	## Client cancellation, shutdown, and read/write timeouts do not use it.
+	## Normal response commitment discards it. Delivery is best effort and bounded
+	## by the connection's response limits, memory budget, and write timeout.
+	limit_with_response! : U64, Http.Response => Try({}, [Unavailable, InvalidResponse])
+	limit_with_response! = |nanoseconds, response|
+		match HostRequestExecution.limit_with_response!(nanoseconds, response) {
+			0 => Ok({})
+			1 => Err(Unavailable)
+			_ => Err(InvalidResponse)
+		}
+
 }

@@ -148,16 +148,18 @@ units H/M/S/m/u/n. Zero expires immediately. Large valid durations saturate at
 U64 nanoseconds. Duplicate, empty, signed, fractional or malformed fields are
 INVALID_ARGUMENT; a missing field leaves the server execution cap unchanged.
 The layer validates protocol headers before installing a duration through
-`RequestExecution.limit_nanoseconds!`. The host anchors it at initial header
-completion, so time spent queued or in earlier middleware is not added back.
+`RequestExecution.limit_with_response!`, registering a bounded HTTP 200 response
+with `grpc-status: 4` and `grpc-message: deadline%20exceeded`. The host anchors
+the duration at initial header completion, so time spent queued or in earlier middleware is not added back.
 
 Host expiry and client reset abandon suspended request execution and release
 request resources. They cannot preempt arbitrary pure computation. A committed
 response wins over later execution expiry; output still has its write timeout.
 
-**Remaining release gate:** host expiry currently emits an HTTP/2 stream reset,
-not a `grpc-status: 4` trailer. A client with its own matching deadline can report
-DEADLINE_EXCEEDED locally; a raw timeout-header caller observes a reset (which
-may map to CANCELLED). This is transport enforcement, not complete gRPC deadline
-status delivery. A generic host expiry-response capability and integration status
-mapping must be resolved before claiming the first Unary release complete.
+Expiry sends the registered DEADLINE_EXCEEDED response independently of request
+cleanup, including while the request body is incomplete. Response delivery remains
+subject to connection memory limits, peer cancellation, and I/O timeouts. A server
+execution cap that expires before the layer runs still resets the stream because
+no integration response has been registered. A client reset never triggers this
+response. Final proxy/client acceptance and distribution verification remain part
+of the first Unary release gate.

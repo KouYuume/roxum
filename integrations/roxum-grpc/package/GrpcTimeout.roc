@@ -3,6 +3,7 @@ import pf.RequestHeader
 import pf.RequestExecution
 import pf.Middleware
 import pf.Reply
+import pf.Respond
 import GrpcWire
 import GrpcMetadata
 import GrpcStatus
@@ -55,8 +56,8 @@ GrpcTimeout := [].{
 		Ok($result)
 	}
 
-	## Must precede body waits. Host expiry cancels execution via stream reset;
-	## it does not synthesize a gRPC status or preempt pure computation.
+	## Must precede body waits. Expiry cancels execution and sends the registered
+	## DEADLINE_EXCEEDED response; it cannot preempt pure computation.
 	layer = |metadata_limits| [
 		Middleware.Stage.BeforeBody(
 			|_model, head| {
@@ -64,7 +65,7 @@ GrpcTimeout := [].{
 				timeout = GrpcTimeout.from_headers(head.headers).map_err(|_| rejection(GrpcStatus.Code.InvalidArgument, "invalid grpc-timeout"))?
 				match timeout {
 					Absent => {}
-					Nanoseconds(duration) => RequestExecution.limit_nanoseconds!(duration).map_err(|_| rejection(GrpcStatus.Code.Internal, "execution control unavailable"))?
+					Nanoseconds(duration) => RequestExecution.limit_with_response!(duration, Respond.to_response(rejection(GrpcStatus.Code.DeadlineExceeded, "deadline exceeded"))).map_err(|_| rejection(GrpcStatus.Code.Internal, "execution control unavailable"))?
 				}
 				Ok(head)
 			},

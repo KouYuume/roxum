@@ -334,7 +334,7 @@ immediately, and addition saturates at the clock's maximum value.
 The serialized owner checks expiry before and after Roc input conversion, and
 before finite response submission. Scheduler ticks also expire body-waiting, queued and running leases.
 Expiry invalidates dispatch and response admission immediately, releases retained
-input, and queues one stream cancellation. A running lease continues to pin its
+input, and queues one expiry completion (a registered response or stream reset). A running lease continues to pin its
 slot until request cleanup finishes. The production scheduler uses the existing
 cancellation path to wake suspended work and preserves a timeout outcome for an
 admitted execution, even if late response conversion subsequently fails. This
@@ -602,7 +602,7 @@ If execution has closed or expired, the effect ends the fiber without returning
 to Roc. The scheduler's existing abandonment path releases request allocations,
 held permits and borrowed resources; expiry retains the timeout access outcome.
 Otherwise the elapsed operation returns the nanoseconds since initial headers.
-Outside an HTTP/2 request, both operations report `Unavailable`. The effect binding
+Outside an HTTP/2 request, these operations report `Unavailable`. The effect binding
 lasts through the Roc invocation and follows fiber suspension/resumption.
 
 `BeforeBody` stages can install a deadline before any body wait. A duration already
@@ -610,3 +610,25 @@ elapsed during queueing or another metadata effect stops execution before the ne
 Roc statement. Ordinary handlers still receive a complete body. Protocol timeout
 parsing stays in Roc integrations; the host neither parses `grpc-timeout` nor creates
 gRPC statuses.
+
+
+`limit_with_response!` atomically tightens the same deadline and registers a finite
+`Http.Response`. Under the connection lock, the host validates the response with
+the ordinary HTTP/2 encoder rules and copies its body and fields into the bounded
+connection allocator. It retains no Roc references. Invalid responses or failed
+allocation return `InvalidResponse` without changing the previous registration or
+deadline. A successful repeated call replaces the response but cannot extend the
+existing deadline. HTTP/1 and initialization return `Unavailable`.
+
+Expiry invalidates the execution lease and queues completion. Between engine
+callbacks, the owner submits the copied response instead of a reset, then frees
+the snapshot. Request cleanup may finish before this submission without freeing
+the queued snapshot. Normal response commitment, protocol closure, and disconnect
+also release it. The same connection lock serializes these paths. Client reset,
+body/write timeout, and forced shutdown never select the expiry response by
+themselves. If no response is registered when execution expires, reset remains
+the fallback. Normal response-write and incomplete-input timeouts still apply;
+registration does not guarantee delivery to a closed or stalled peer.
+
+The integration selects gRPC status and metadata in Roc. Expiry bypasses router
+response middleware and cannot call back into abandoned application code.

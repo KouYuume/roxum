@@ -10,6 +10,7 @@ const Entry = struct {
     buffer: ?input.Input = null,
     cancel_pending: bool = false,
     finished: bool = false,
+    expiry_response: ?@import("deferred_response.zig").Response = null,
 };
 pub const Work = union(enum) {
     cancel: engine.StreamId,
@@ -135,6 +136,7 @@ pub const Streams = struct {
     }
 
     pub fn finish(self: *Streams, ticket: Ticket) bool {
+        if (!self.leases.executionExpired(ticket)) self.clearExpiryResponse(ticket);
         if (!self.leases.finish(ticket)) return false;
         const entry_value = &self.entries[ticket.slot];
         if (entry_value.buffer) |*buffer| buffer.deinit();
@@ -146,9 +148,17 @@ pub const Streams = struct {
         return true;
     }
 
+    pub fn clearExpiryResponse(self: *Streams, ticket: Ticket) void {
+        if (self.leases.stream(ticket) == null) return;
+        const entry = &self.entries[ticket.slot];
+        if (entry.expiry_response) |*response| response.deinit();
+        entry.expiry_response = null;
+    }
+
     pub fn close(self: *Streams, id: engine.StreamId) void {
         const ticket = self.leases.find(id) orelse return;
         const entry_value = &self.entries[ticket.slot];
+        self.clearExpiryResponse(ticket);
         if (entry_value.buffer) |*buffer| buffer.deinit();
         entry_value.buffer = null;
         entry_value.cancel_pending = false;

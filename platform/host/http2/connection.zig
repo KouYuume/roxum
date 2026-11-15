@@ -179,6 +179,34 @@ pub const Connection = struct {
         }
     }
 
+    /// Called between engine operations, under the connection lock. Expiry has
+    /// already invalidated execution; only its copied response remains usable.
+    pub fn completeExpired(self: *Connection, id: engine.StreamId) !void {
+        const ticket = self.streams.leases.find(id) orelse return;
+        defer self.streams.clearExpiryResponse(ticket);
+        if (self.streams.leases.executionExpired(ticket)) {
+            if (self.streams.entries[ticket.slot].expiry_response) |*response| {
+                // An I/O timeout may already have queued a reset in this tick.
+                // Never replace it or turn its stream-local failure into a close.
+                self.owner.engine.checkDispatchable(id) catch |err| switch (err) {
+                    error.Closed, error.InvalidState => return,
+                    else => return err,
+                };
+                try response.submit(self.owner.engine, id);
+                self.owner.runnable = true;
+                self.deadlines[ticket.slot] = self.now +| self.write_timeout;
+                self.writing[ticket.slot] = true;
+                if (self.access[ticket.slot]) |*entry| {
+                    entry.outcome = @import("../access_log.zig").Outcome.timeout;
+                    entry.status = response.status;
+                    entry.body_bytes = response.body.len;
+                }
+                return;
+            }
+        }
+        try self.owner.cancel(id);
+    }
+
     fn cancelTimedOut(self: *Connection, id: engine.StreamId) void {
         self.owner.cancel(id) catch {
             // A failed reset must not strand a waiter after its timer is cleared.
@@ -519,6 +547,91 @@ test "early response write deadline ends only after the final output byte" {
                 connection.expire(201);
                 try std.testing.expectError(error.Closed, connection.owner.engine.checkDispatchable(work.id));
                 try std.testing.expectEqual(@as(u64, 0), connection.body_deadlines[slot]);
+            }
+        }
+    }
+}
+
+test "deferred expiry responses own bytes through cleanup and release on every terminal path" {
+    const End = enum { expire, finish_first, io_timeout, reset, disconnect, normal };
+    for (std.enums.values(End)) |ending| {
+        var pair: [2]c_int = undefined;
+        try std.testing.expectEqual(@as(c_int, 0), std.c.socketpair(std.c.AF.UNIX, std.c.SOCK.STREAM, 0, &pair));
+        defer net.closeSocket(pair[1]);
+        try net.setListenerNonBlocking(pair[0]);
+        var readiness = try poller.Poller.init();
+        defer readiness.deinit();
+        const connection = try Connection.create(pair[0], &readiness, 1, .{});
+        defer {
+            connection.disconnect();
+            connection.destroy();
+        }
+        try connection.owner.engine.receive("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" ++
+            "\x00\x00\x00\x04\x00\x00\x00\x00\x00" ++
+            "\x00\x00\x0e\x01\x05\x00\x00\x00\x01\x83\x86\x84\x01\x09localhost");
+        const work = connection.streams.nextMetadata().?.execute;
+        // Nearest below/at/above the configured response-body bound.
+        connection.owner.engine.limits.response_bytes = 4;
+        for ([_]usize{ 3, 4, 5 }) |length| {
+            const attempt = @import("deferred_response.zig").Response.init(connection.budget.allocator(), connection.owner.engine, work.id, 200, &.{}, "12345"[0..length], &.{});
+            if (length > 4) {
+                try std.testing.expectError(error.LimitExceeded, attempt);
+            } else {
+                var accepted = try attempt;
+                accepted.deinit();
+            }
+        }
+        connection.owner.engine.limits.response_bytes = 1024;
+        const before = connection.budget.used;
+        connection.budget.limit = before;
+        try std.testing.expectError(error.OutOfMemory, @import("deferred_response.zig").Response.init(connection.budget.allocator(), connection.owner.engine, work.id, 200, &.{}, "body", &.{}));
+        try std.testing.expectEqual(before, connection.budget.used);
+        connection.budget.limit = 16 * 1024 * 1024;
+        var body = "expired".*;
+        var value = "done".*;
+        const response = try @import("deferred_response.zig").Response.init(connection.budget.allocator(), connection.owner.engine, work.id, 504, &.{.{ .name = "x-initial", .value = &value }}, &body, &.{.{ .name = "x-final", .value = &value }});
+        connection.streams.entries[work.ticket.slot].expiry_response = response;
+        @memset(&body, 'x');
+        @memset(&value, 'x');
+        try std.testing.expectEqualStrings("expired", response.body);
+        try std.testing.expectEqualStrings("done", response.headers[0].value);
+        try std.testing.expectEqualStrings("done", response.trailers[0].value);
+        try std.testing.expect(connection.streams.leases.limitExecution(work.ticket, 10, 10));
+        switch (ending) {
+            End.expire, End.finish_first, End.io_timeout => {
+                connection.expire(work.headers_at + 9);
+                try std.testing.expect(connection.streams.nextMetadata() == null);
+                connection.expire(work.headers_at + 10);
+                if (ending == End.finish_first) try std.testing.expect(connection.streams.finish(work.ticket));
+                const cancel = connection.streams.nextMetadata().?.cancel;
+                if (ending == End.io_timeout) try connection.owner.cancel(cancel);
+                try connection.completeExpired(cancel);
+                try std.testing.expectEqual(ending != End.io_timeout, connection.writing[work.ticket.slot]);
+                if (ending != End.io_timeout) try std.testing.expect(connection.deadlines[work.ticket.slot] > connection.now);
+                connection.expire(work.headers_at + 11);
+                try std.testing.expect(connection.streams.nextMetadata() == null);
+                if (ending != End.finish_first) try std.testing.expect(connection.streams.finish(work.ticket));
+            },
+            End.reset => {
+                connection.streams.close(work.id);
+                try std.testing.expect(connection.streams.finish(work.ticket));
+            },
+            End.disconnect => {
+                connection.disconnect();
+                try std.testing.expect(connection.streams.finish(work.ticket));
+            },
+            End.normal => {
+                try connection.owner.respond(work.id, 200, &.{}, "ok");
+                try std.testing.expect(connection.streams.leases.commitResponse(work.ticket));
+                try std.testing.expect(connection.streams.finish(work.ticket));
+            },
+        }
+        try std.testing.expectEqual(@as(usize, 0), connection.budget.used);
+        if (!connection.closed) {
+            while (true) {
+                const bytes = try connection.owner.engine.output();
+                if (bytes.len == 0) break;
+                try connection.owner.engine.consumeOutput(bytes.len);
             }
         }
     }

@@ -1159,7 +1159,7 @@ pub const Loop = struct {
             if (progress == @import("http2/owner.zig").Progress.closed) return self.close(slot);
             while (protocol.streams.nextMetadata()) |work| {
                 switch (work) {
-                    h2_streams.Work.cancel => |id| protocol.owner.cancel(id) catch return self.close(slot),
+                    h2_streams.Work.cancel => |id| protocol.completeExpired(id) catch return self.close(slot),
                     h2_streams.Work.execute => |execution| {
                         if (access_log.enabled()) {
                             const fields = execution.buffer.fields.items;

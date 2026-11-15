@@ -193,9 +193,14 @@ pub const Engine = struct {
         slot.final_bytes = bytes;
     }
 
-    fn submitResponse(self: *Engine, id: StreamId, status: u16, headers: []const Header, body: []const u8, trailers: bool) Error!void {
-        try self.enter();
-        defer self.entered = false;
+    /// Validate a deferred response without committing protocol output.
+    pub fn validateFiniteResponse(self: *Engine, id: StreamId, status: u16, headers: []const Header, body: []const u8, trailers: []const Header) Error!void {
+        if (self.entered) return error.ReentrantCall;
+        try self.validateTrailers(trailers);
+        try self.validateResponseHead(id, status, headers, body, trailers.len > 0);
+    }
+
+    fn validateResponseHead(self: *Engine, id: StreamId, status: u16, headers: []const Header, body: []const u8, trailers: bool) Error!void {
         const slot = self.find(@backingInt(id)) orelse return error.Closed;
         if (slot.rejected) return error.Closed;
         if (slot.responded) return error.InvalidState;
@@ -203,13 +208,9 @@ pub const Engine = struct {
         if (status < 200 or status > 599) return error.InvalidHeaders;
         if ((status == 204 or status == 205 or status == 304) and body.len != 0) return error.InvalidState;
         if (headers.len > 64 or body.len > self.limits.response_bytes) return error.LimitExceeded;
-        var status_buffer: [3]u8 = undefined;
-        const status_text = std.fmt.bufPrint(&status_buffer, "{d}", .{status}) catch unreachable;
-        var fields: [65]c.nghttp2_nv = undefined;
-        fields[0] = field(":status", status_text);
         var total: usize = 42; // :status + three digits + RFC field accounting.
         var has_content_length = false;
-        for (headers, 0..) |header, i| {
+        for (headers) |header| {
             if (!validHeader(header)) return error.InvalidHeaders;
             if (std.mem.eql(u8, header.name, "content-length")) {
                 if (has_content_length or status == 204 or header.value.len == 0) return error.InvalidHeaders;
@@ -224,9 +225,22 @@ pub const Engine = struct {
             total = std.math.add(usize, total, header.name.len) catch return error.LimitExceeded;
             total = std.math.add(usize, total, header.value.len) catch return error.LimitExceeded;
             total = std.math.add(usize, total, 32) catch return error.LimitExceeded;
-            fields[i + 1] = field(header.name, header.value);
         }
         if (total > self.limits.header_bytes) return error.LimitExceeded;
+    }
+
+    fn submitResponse(self: *Engine, id: StreamId, status: u16, headers: []const Header, body: []const u8, trailers: bool) Error!void {
+        try self.enter();
+        defer self.entered = false;
+        const slot = self.find(@backingInt(id)) orelse return error.Closed;
+        if (slot.rejected) return error.Closed;
+        if (slot.responded) return error.InvalidState;
+        try self.validateResponseHead(id, status, headers, body, trailers);
+        var status_buffer: [3]u8 = undefined;
+        const status_text = std.fmt.bufPrint(&status_buffer, "{d}", .{status}) catch unreachable;
+        var fields: [65]c.nghttp2_nv = undefined;
+        fields[0] = field(":status", status_text);
+        for (headers, 0..) |header, i| fields[i + 1] = field(header.name, header.value);
         const response_body = if (slot.head_request) body[0..0] else body;
         if (response_body.len > 0) {
             const allocation = self.memory.allocate(response_body.len) orelse return error.OutOfMemory;
