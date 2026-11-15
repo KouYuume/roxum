@@ -128,7 +128,7 @@ class Generator(unittest.TestCase):
                 # The diagnostic must identify the cycle, not its acyclic ancestor.
                 ('message Ancestor { Left child = 1; } message Left { Right child = 1; } '
                  'message Right { Left child = 1; }', b'invalid.proto:.Left:'),
-                ('message Bad { oneof choice { uint64 value = 1; } }', b'invalid.proto:.Bad.choice:'),
+                ('message Bad { oneof choice { uint64 unset = 1; } }', b'invalid.proto:.Bad.choice:'),
                 ('message Builtin { uint64 value = 1; }', b'invalid.proto:.Builtin:'),
                 ('message BUILTIN { uint64 value = 1; }', b'invalid.proto:.BUILTIN:')]:
             with self.subTest(declaration=declaration), tempfile.TemporaryDirectory() as directory:
@@ -427,6 +427,51 @@ class Generator(unittest.TestCase):
         field.type_name = '.State'
         enum.value[0].number = 1
         self.assertIn('first enum', g.generate(req).error)
+
+    def test_real_oneof_descriptors(self):
+        def grouped():
+            req, file, message, field = request()
+            message.oneof_decl.add(name='choice')
+            field.oneof_index = 0
+            return req, file, message, field
+
+        # A single real member has a selected-default state, unlike an implicit field.
+        for kind in {1,2,3,4,5,6,7,8,9,12,13,15,16,17,18}:
+            req, _, _, field = grouped()
+            field.type = kind
+            result = g.generate(req)
+            self.assertFalse(result.error, result.error)
+            source = next(f.content for f in result.file if f.name == 'Sample.roc')
+            self.assertIn('choice : [Unset, Count(', source)
+            self.assertNotIn('count :', source)
+        for name in ['Bad', '_choice', 'bad__choice', 'choice_', 'match', 'count']:
+            req, _, message, _ = grouped()
+            message.oneof_decl[0].name = name
+            result = g.generate(req)
+            self.assertTrue(result.error)
+            self.assertFalse(result.file)
+        for mutate in [lambda m,f: setattr(f,'label',3),
+                       lambda m,f: setattr(f,'oneof_index',-1),
+                       lambda m,f: setattr(f,'oneof_index',1),
+                       lambda m,f: setattr(f,'name','unset'),
+                       lambda m,f: m.oneof_decl.add(name='empty'),
+                       lambda m,f: m.oneof_decl[0].options.ParseFromString(b'\x80\x80\x04\x01')]:
+            req, _, message, field = grouped()
+            mutate(message,field)
+            result = g.generate(req)
+            self.assertTrue(result.error)
+            self.assertFalse(result.file)
+        req, _, message, field = grouped()
+        field.name = 'value1part'
+        message.field.add(name='value_1part',number=2,type=4,label=1,oneof_index=0)
+        self.assertIn('case names collide',g.generate(req).error)
+        # Synthetic groups must follow real groups and retain exactly one member.
+        req, _, message, field = grouped()
+        field.proto3_optional = True
+        message.oneof_decl[0].name = '_count'
+        message.oneof_decl.add(name='other')
+        message.field.add(name='text',number=2,type=9,label=1,oneof_index=1)
+        self.assertIn('precede synthetic',g.generate(req).error)
 
     def test_map_descriptors(self):
         def map_request():
