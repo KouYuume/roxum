@@ -6,7 +6,9 @@ Bounded pure-Roc wire primitives and proto3 schema codecs are implemented,
 including recursive messages. Milestone 2 includes standalone distribution,
 matched tool/library compatibility metadata, and independent interoperability
 acceptance. The next milestone is the Unary integration.
-A reusable gRPC integration is not implemented.
+The [gRPC protocol foundation](../../integrations/roxum-grpc/README.md) provides
+finite framing, metadata and status helpers. Typed Unary dispatch, deadline
+integration and final release acceptance are not implemented.
 See the [transport decision and evidence](http2-transport.md). The responsibility
 split is agreed; API names,
 dependencies, and the detailed implementation below remain proposals until their
@@ -187,6 +189,14 @@ semantics. Compare decoded values rather than requiring one canonical encoding.
 See the [Protobuf encoding specification](https://protobuf.dev/programming-guides/encoding/).
 
 ### 3. Deliver the first usable Unary RPC integration
+
+The protocol foundation is implemented in `integrations/roxum-grpc`: finite
+Unary envelopes, bounded ASCII/binary metadata, status messages and HTTP reply
+construction. Independent clients verify TCP/Unix behavior across compiler
+backends and allocators, including malformed input and connection survival.
+This does not satisfy the full milestone gate below: typed service registration,
+generated dispatch, pre-body deadlines/cancellation integration and final
+proxy/client acceptance remain open.
 
 Add a separately versioned `roxum-grpc` integration using the core capabilities
 and generated codecs. Provide typed service registration, exactly one request
