@@ -18,6 +18,7 @@ These documents describe the current implementation, its invariants, and the pro
 - [Execution and ownership](design/execution-model.md) and [I/O scheduling](design/io-execution.md)
 - [Internal HTTP/2 engine](design/http2-engine.md): dependency, ownership, limits, and finite production listener integration
 - [Streaming lifecycle](design/streaming.md) and [HTTP field lists](design/http-field-lists.md)
+- [Independent Protobuf distribution](../libraries/roc-protobuf/DISTRIBUTION.md): codec/tool compatibility, standalone setup, and artifact metadata
 - [Versioning](design/versioning.md) and [integration releases](design/integration-releases.md)
 - [Contributing](contributing.md): local checks before pushing, and what CI runs
 

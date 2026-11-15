@@ -84,7 +84,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: >-
           gh release create "v$VERSION"
-          zig-out/release/*.tar.zst zig-out/release/release.json
+          zig-out/release/*.tar.zst zig-out/release/*-source.tar.gz
+          zig-out/release/release.json zig-out/release/protobuf.json
           --target "$GITHUB_SHA"
           --title "roxum $VERSION"
           --notes-file zig-out/release/release-notes.md

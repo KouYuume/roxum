@@ -54,7 +54,7 @@ if [[ -z "$release_url" ]]; then
     echo "no -Drelease-url: the integrations' bundles name $release_url and are not for publishing" >&2
 fi
 
-rm -f "$output_dir"/*.tar.zst "$output_dir"/release.json "$output_dir"/release-notes.md
+rm -f "$output_dir"/roc-protobuf-*-source.tar.gz "$output_dir"/protobuf.json "$output_dir"/*.tar.zst "$output_dir"/release.json "$output_dir"/release-notes.md
 # roc bundle stores paths relative to the entry file's directory.
 (cd "$staging" && "$ROC_BIN" bundle main.roc NGHTTP2-LICENSE "${target_files[@]}" --output-dir ../) | tee "$output_dir/bundle.log"
 

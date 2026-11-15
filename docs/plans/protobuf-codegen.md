@@ -1,6 +1,6 @@
 # Protobuf codec and generator assessment
 
-Status: milestone 2 has a wire foundation and generated proto3 codecs, including bounded recursive messages.
+Status: milestone 2 is complete for the documented `proto3-v1` subset.
 The [pure Roc wire library](../../libraries/roc-protobuf/README.md) provides bounded
 primitive reads/writes and unknown-field skipping. The
 [protoc plugin](../../tools/protoc-gen-roc/README.md) generates singular
@@ -18,7 +18,8 @@ presence, and repeated packed/unpacked fields. Maps use typed dictionaries with
 entry defaults, last-key-wins replacement, and shared wire budgets. Real oneofs
 use tagged selections with an explicit unset state, message merge, and case
 replacement. Recursive schemas use co-located cyclic components and bounded
-encoder traversal. Packaging and final milestone acceptance remain open.
+encoder traversal. Standalone distribution and the matched tool/library contract
+complete the packaging gate; Unary RPC remains the next milestone.
 A [handwritten layout fixture](../../tests/protobuf-layouts/README.md)
 checks bounded self-recursion, mutual recursion, recursive lists, and imported
 payload records on the pinned compiler. The generator retains fully qualified
@@ -68,8 +69,8 @@ universal wheel, including the independent reference implementation. Its
 [toolchain instructions](../../tools/protoc-gen-roc/README.md#toolchain-and-generation)
 record artifact hashes and licenses. These dependencies are build-time only.
 Validate dependency changes on the supported development/test environments.
-Keep the codec package and generator versioned together initially; establish
-packaging before advertising reuse.
+The codec package and generator are versioned together and distributed under the
+[standalone compatibility contract](../../libraries/roc-protobuf/DISTRIBUTION.md).
 
 ## Initial schema target
 
@@ -145,8 +146,8 @@ to measure every allocator byte; host request memory limits remain independent.
 The wire foundation tests lower, exact, and upper boundaries. Its writer bounds
 accumulated output; generated scalar encoders can append to an existing bounded
 writer. `write_message` adds buffered length-delimited composition bounded by
-the remaining output capacity. Generated encoder scopes share depth and visited-message limits. Packaging and
-final interoperability acceptance remain prerequisites for reusable gRPC support.
+the remaining output capacity. Generated encoder scopes share depth and visited-message limits. Standalone packaging and independent interoperability establish codec reuse,
+not gRPC service support.
 
 Packed varint, fixed32, and fixed64 payload readers share entry limits and
 containing-reader bounds without increasing message depth. Generated repeated
@@ -196,9 +197,9 @@ optional presence, is implemented. Before
 expanding the generator, resolve compiler limitations with evidence rather than
 silently changing the compiler pin or moving pure codec logic into the host.
 
-Milestone 2 remains incomplete until generated code compiles with the pinned
-compiler and the advertised schema subset passes independent interoperability
-and negative tests. Compare values and presence rather than encoded-byte
+Milestone 2 acceptance requires generated code to compile with the pinned
+compiler and the advertised schema subset to pass independent interoperability
+and negative tests. The checks below provide this evidence. Compare values and presence rather than encoded-byte
 identity; check signed zero and NaN semantics explicitly instead of using an
 ordinary floating-point equality assertion. The first public Unary integration
 remains milestone 3.
@@ -228,9 +229,9 @@ with direct Roc presence/value views, and check present defaults, clearing,
 duplicates, wrong-wire skipping, malformed values, and cumulative/output bounds.
 Synthetic oneof metadata is validated separately from real oneof selections. The reference
 implementation's overlong-tag limitation is recorded in the [generator verification notes](../../tools/protoc-gen-roc/README.md#verification).
-These checks do not establish support for the rest of the target matrix or
-complete milestone 2; the fixed-byte gRPC probe still supplies no generated
-service bindings.
+These checks establish the advertised codec subset together with the composite
+and distribution fixtures below; the fixed-byte gRPC probe still supplies no
+generated service bindings.
 
 The separate `test-protobuf-layouts` group checks construction, cross-module
 traversal, retained originals after child replacement, and request-lifetime
@@ -305,6 +306,26 @@ messages and repeated visits to shared subtrees. The default maximum depth is
 the writer composition API. Packed scalars do not count as nested messages.
 Tests exercise self/mutual recursion, cyclic map entries and oneofs, merge,
 replacement, retained values, nearest depth/work boundaries, and an exponential
-shared-tree workload that terminates with a typed limit error. Packaging,
-compatibility metadata, and final milestone 2 acceptance remain open before
-advertising a reusable Unary integration.
+shared-tree workload that terminates with a typed limit error.
+
+
+## Standalone distribution acceptance
+
+`test-protobuf-package` builds the content-addressed pure Roc bundle and a
+reproducible source archive containing the matching generator, setup script,
+wire sources, license, and compatibility metadata. It extracts outside the
+repository, installs the pinned build tools, generates recursive messages, and
+runs codec assertions using a wire bundle fetched over loopback HTTP with fresh
+caches. No roxum platform import or host archive is used by this consumer.
+
+`compatibility.json` records the independent shared version, exact Roc revision,
+schema subset, and package size limit. Release metadata records both artifact
+hashes and URLs. Invalid version/compiler/subset metadata is rejected. The
+[distribution guide](../../libraries/roc-protobuf/DISTRIBUTION.md) explains
+installation, supported scope, unknown-field loss, and regeneration on upgrade.
+
+Together with `test-protobuf-codegen` and `test-protobuf` on macOS/Linux, the
+standalone consumer closes milestone 2 for this subset. It does not establish
+support for excluded schemas, all compiler versions, or gRPC services. Typed
+Unary dispatch, framing, status, metadata, deadlines, and client acceptance
+remain milestone 3.

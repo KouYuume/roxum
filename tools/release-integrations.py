@@ -47,11 +47,11 @@ def sha256(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def bundle(directory, output, roc, environment):
+def bundle(directory, output, roc, environment, extra_files=()):
     """Bundles the package in `directory`; returns the new file's name and
     its size uncompressed."""
     before = {path.name for path in output.glob("*.tar.zst")}
-    result = subprocess.run([roc, "bundle", "main.roc", "--output-dir", str(output)], cwd=directory,
+    result = subprocess.run([roc, "bundle", "main.roc", *extra_files, "--output-dir", str(output)], cwd=directory,
                             env=environment, capture_output=True, text=True)
     if result.returncode != 0:
         fail(f"roc bundle failed in {directory}:\n{result.stdout}{result.stderr}")
@@ -145,11 +145,15 @@ def main():
                 "unpacked_bytes": size,
             })
 
+    from protobuf_distribution import build as build_protobuf
+    protobuf = build_protobuf(OUTPUT, release_url)
+
     version = manifest["core"]["version"]
     release = {
         "version": version,
         "platform": {"file": platform.name, "url": platform_url, "sha256": sha256(platform)},
         "integrations": integrations,
+        "protobuf": protobuf,
     }
     (OUTPUT / "release.json").write_text(json.dumps(release, indent=2) + "\n")
     rows = "\n".join(
@@ -172,6 +176,13 @@ app [program] {{
 | Integration | Version | Platform versions | URL |
 |---|---|---|---|
 {rows}
+
+### Independent Protobuf support
+
+roc-protobuf and protoc-gen-roc {protobuf["version"]}:
+- Wire package: `{protobuf["wire"]["url"]}`
+- Source and generator: `{protobuf["source"]["url"]}`
+- Compatibility and artifact hashes: `{release_url}/protobuf.json`
 """)
     for item in integrations:
         print(f"{item['name']} {item['version']}: {item['file']} ({item['unpacked_bytes']} bytes)")

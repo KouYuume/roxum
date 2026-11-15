@@ -3,8 +3,9 @@
 Status: milestone 1 complete for finite HTTP/2, including concurrent-stream drain.
 Milestone 2 inventory is recorded in the [codec and generator assessment](protobuf-codegen.md).
 Bounded pure-Roc wire primitives and proto3 schema codecs are implemented,
-including recursive messages. Milestone 2 packaging, compatibility metadata, and
-final acceptance remain open before the Unary integration.
+including recursive messages. Milestone 2 includes standalone distribution,
+matched tool/library compatibility metadata, and independent interoperability
+acceptance. The next milestone is the Unary integration.
 A reusable gRPC integration is not implemented.
 See the [transport decision and evidence](http2-transport.md). The responsibility
 split is agreed; API names,
@@ -161,8 +162,11 @@ support claim is made yet.
 ### 2. Build reusable Protobuf support and code generation
 
 The [codec and generator assessment](protobuf-codegen.md) records the inventory,
-initial schema target, resource contracts, and implementation slices. It does
-not establish runtime support or complete this milestone.
+schema target, resource contracts, and implementation evidence. This milestone
+is complete for the documented `proto3-v1` subset: the standalone package check
+uses an extracted generator and a URL-fetched wire bundle without roxum imports,
+while the codec and wire checks cover independent interoperability across
+backends and allocators. This does not establish Unary RPC support.
 
 First inventory reusable Roc codecs and generators. If none meets the required
 contracts, implement a pure library under `libraries/` and an independent

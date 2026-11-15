@@ -527,3 +527,28 @@ retained originals, default depth 63/64/65, sibling work bounds, and an applicat
 constructed shared tree whose exponential traversal is stopped by its visit
 budget. These logical limits are not an exact total-allocation or CPU-time quota.
 Keep caller-supplied limits finite and appropriate for the execution environment.
+
+## Distribution and compatibility
+
+The generator and wire package ship as a matched versioned pair. The standalone
+source archive preserves `tools/protoc-gen-roc` and `libraries/roc-protobuf`, so
+its launcher and setup script work after extraction outside this repository.
+The separate content-addressed Roc bundle contains only the pure wire package
+and its license. Neither artifact depends on the roxum platform.
+
+See [distribution instructions](../../libraries/roc-protobuf/DISTRIBUTION.md) and
+[compatibility metadata](../../libraries/roc-protobuf/compatibility.json). Use
+`--roc_opt=wire=<bundle URL> --roc_out=<directory>` when passing a URL: a colon
+inside `--roc_out=options:directory` would be interpreted as the output separator.
+The package test installs from the extracted source, generates a recursive codec,
+and evaluates it against a URL-fetched wire bundle with fresh Roc caches.
+
+```sh
+python3 tools/protobuf_distribution.py
+python3 tools/check.py --only test-protobuf-package
+```
+
+Local artifacts default to unpublished placeholder URLs. `zig build release`
+also builds these artifacts and includes their versions, compiler contract, URLs,
+and hashes under `protobuf` in `release.json` and in `protobuf.json`. A build does
+not publish a release.

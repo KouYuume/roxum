@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "version": "0.1.0",
+  "generator_version": "0.1.0",
+  "roc_revision": "9e85de7aba79eaeb8ca589ab6a1ea581274c8930",
+  "schema_subset": "proto3-v1",
+  "max_unpacked_bytes": 131072
+}

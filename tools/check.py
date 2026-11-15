@@ -189,6 +189,7 @@ TESTS = [
 ]
 
 COMMANDS = [
+    Command("test-protobuf-package", ["python3", "tests/protobuf-package/verify.py"], "cache"),
     Command("test-http2-roc", ["zig", "build", "test-http2-roc"], "zig"),
     Command("test-http2-wire", ["zig", "build", "test-http2-wire"], "zig"),
     Command("test-abi", ["zig", "build", "test-abi"], "zig"),

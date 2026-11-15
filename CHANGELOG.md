@@ -14,6 +14,8 @@ Changes to the roxum platform and its integrations, newest first. The platform a
 
 ### Added
 
+- roc-protobuf: standalone pure Roc bundle and matched protoc-gen-roc source distribution, with compiler compatibility metadata and bounded proto3 codecs including recursive messages.
+
 - HTTP/2 real-Roc fixture integration with the production wait registry and kqueue/epoll, verifying timer collection and cancellation wakes before fiber cleanup. Production worker integration remains pending.
 
 - HTTP/2 real-Roc fixture coverage for stopping sleeping invocations on reset/disconnect, reclaiming their request heaps, and releasing held concurrency permits before peer dispatch. Production worker integration remains pending.
