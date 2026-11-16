@@ -16,6 +16,9 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.1.0
+        with:
+          python-version: "3.13"
       - uses: mlugg/setup-zig@v2.2.1
         with:
           version: 0.17.1
@@ -244,6 +247,9 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.1.0
+        with:
+          python-version: "3.13"
       - uses: mlugg/setup-zig@v2.2.1
         with:
           version: 0.17.1

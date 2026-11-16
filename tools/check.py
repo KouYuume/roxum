@@ -11,7 +11,8 @@ path (platform/targets/<target>/), so the apps are built in two phases: all of
 them against the arena host, then all of them against the tracking host, and
 the arena host is put back at the end. A built executable carries its host,
 so the verify scripts then run in parallel. Tests with timing thresholds run
-afterwards, one variant at a time, with nothing else running.
+afterwards, one variant at a time by default, with nothing else running.
+Use `--timing-jobs` to opt into concurrent timing variants.
 
 Checks that use Roc's shared cache (`roc test`, `roc check`, `zig build
 test`) run one at a time in a lane of their own, beside the builds. Zig-only
@@ -48,7 +49,7 @@ class Test:
     `{contract}` (1 for tracking, else 0), and `{out}`, the variant's own
     directory. `checks` run once, before the variants, in the shared-cache
     lane. `timing` marks a test whose thresholds need a machine without the
-    builds and the other lanes; such tests run a few at a time at the end.
+    builds and the other lanes; such tests run serially at the end by default.
     `alone` marks a timing test that loads the machine itself (many workers,
     a thousand connections), whose variants run with nothing else."""
     name: str
@@ -94,7 +95,7 @@ TESTS = [
          allocators=ARENA, checks=[["bash", "tests/platform-package/checks.sh"]]),
     Test("test-m9p4", {"app": "integrations/roxum-sse/example/app.roc"},
          ["python3", "integrations/roxum-sse/example/verify.py", "{exe:app}"], allocators=ARENA,
-         checks=[["bash", "integrations/roxum-sse/example/checks.sh"]]),
+         checks=[["bash", "integrations/roxum-sse/example/checks.sh"]], timing=True),
     Test("test-m9-1", {"app": "tests/middleware/app.roc"}, contract_verify("tests/middleware/verify.py", "app"), env=CONTRACT_ENV),
     Test("test-stages", {"app": "tests/stages/app.roc"}, contract_verify("tests/stages/verify.py", "app"), env=CONTRACT_ENV),
     Test("test-input", {"app": "tests/input/app.roc"}, contract_verify("tests/input/verify.py", "app"), env=CONTRACT_ENV, timing=True),
@@ -332,8 +333,8 @@ def main():
     parser.add_argument("--only", help="run one test or command by its zig build step name")
     parser.add_argument("--list", action="store_true")
     parser.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
-    parser.add_argument("--timing-jobs", type=int, default=3,
-                        help="variants of timing tests to run at once, after everything else has finished")
+    parser.add_argument("--timing-jobs", type=int, default=1,
+                        help="variants of timing tests to run at once after everything else (default: 1)")
     arguments = parser.parse_args()
     if arguments.list:
         for item in TESTS + COMMANDS:

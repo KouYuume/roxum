@@ -2,6 +2,14 @@
 
 The source of truth for the Roc compiler revision is [`.roc-revision`](../.roc-revision). Use the Roc nightly built from that revision, named with its SHA-256 values in `tools/linux/Dockerfile`; `tools/install-roc-nightly.sh` installs it, as CI does. The pinned Roc source and roxum host both use Zig 0.17.1. The checks of the ABI glue and the compiler revision also need the source checked out at that revision. Use the same compiler revision locally; a different nightly may change syntax, layout, or the hosted ABI.
 
+## Python test dependencies
+
+The full-check workflow selects CPython 3.13 on macOS and Linux. Use that version
+when reproducing CI: the gRPC and Protobuf checks install pinned, hash-verified
+binary wheels, whose Python compatibility is independent of the Roc compiler.
+Do not rely on the runner image's default Python. After changing Python versions,
+recreate the test venvs under `zig-out/` so they use the selected interpreter.
+
 ## Setup
 
 Install Zig 0.17.1. From the roxum repository, install the pinned Roc nightly, and clone the Roc source at the recorded revision beside it:
