@@ -28,7 +28,8 @@ These documents describe the current implementation, its invariants, and the pro
 These documents describe implementation plans, acceptance evidence, and remaining
 gates. Completed evidence is distinguished from proposed capabilities.
 
-- [gRPC server support](plans/grpc.md): host/integration boundaries, completed Unary gates, and future streaming candidates
+- [gRPC server support](plans/grpc.md): host/integration boundaries, completed Unary gates, and planned streaming scope
+- [0.3 gRPC streaming](plans/grpc-streaming-0.3.md): server/client/bidirectional scope, PR sequence and acceptance gates
 - [Protobuf codec and generator assessment](plans/protobuf-codegen.md): reuse inventory, schema target, decoder bounds, and milestone 2 implementation slices
 - [Finite HTTP/2 acceptance](plans/http2-finite-acceptance.md): milestone 1 transport evidence and limits
 - [HTTP/2 transport decision](plans/http2-transport.md): engine choice, isolated spike evidence, and links to implemented contracts
