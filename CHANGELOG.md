@@ -4,7 +4,15 @@ Changes to the roxum platform and its integrations, newest first. The platform a
 
 ## Unreleased
 
+## 0.2.0
+
 ### Breaking changes
+
+- Upgrade to Roc `9e85de7aba79eaeb8ca589ab6a1ea581274c8930` and Zig 0.17.1. `PathSegment.from_interpolation` and `QueryValue.from_interpolation` return assemblers accepting `Iter(Str)` instead of `List(Str)`; ordinary interpolation syntax is unchanged. Follow the [0.2 migration guide](docs/guides/migrating-to-0.2.md) and rebuild applications with matching platform and integration bundles.
+
+- `Reply` includes `WithTrailers`; exhaustive matches must handle the new variant. `Http.Response` adds optional `trailers`, defaulting to an empty list. Nonempty trailers require a finite HTTP/2 response.
+
+- roxum-proxy-headers: 0.2.0 uses the TCP/Unix peer representation in its public request types. Release bundles declare core `^0.2`; do not mix integrations from the 0.1 release with the 0.2 platform.
 
 - `Http.Version` includes `Http20`; exhaustive matches must handle the new variant. Production HTTP/2 listeners are opt-in; HTTP/1 remains the default.
 

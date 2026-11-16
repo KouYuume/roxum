@@ -2,7 +2,7 @@
 
 ## Using roxum
 
-- [Getting started](guides/getting-started.md) and [toolchain setup](toolchain.md)
+- [Getting started](guides/getting-started.md), [toolchain setup](toolchain.md), and [migrating from 0.1 to 0.2](guides/migrating-to-0.2.md)
 - [Routing](guides/routing.md), [extractors](guides/extractors.md), [responses](guides/responses.md), and [middleware](guides/middleware.md)
 - [Streaming](guides/streaming.md), [files and compression](guides/files.md), and [static pages](guides/static-pages.md)
 - [Unary gRPC](../integrations/roxum-grpc/README.md), [runnable service](../integrations/roxum-grpc/example/README.md), and [distribution](../integrations/roxum-grpc/DISTRIBUTION.md)

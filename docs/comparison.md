@@ -36,7 +36,7 @@ Ratings describe each criterion, not overall quality; additional libraries can c
 | HTTP tests without a server | △ No test harness; `Router.dispatch!` runs a request through the routes inside an app | ○ `tower::ServiceExt::oneshot` | ◎ `net/http/httptest` |
 | Profiling and debugging | ○ Access log, metrics, `roxum-trace` ([observability](guides/observability.md)) | ◎ `tracing` ecosystem, native debuggers | ◎ `net/http/pprof`, runtime trace, Delve |
 | Supported systems | △ Apple silicon macOS; arm64 and x86_64 Linux with musl | ◎ | ◎ |
-| Maturity and API stability | △ 0.1.0, on a pinned Roc nightly | ○ 0.x, widely deployed | ◎ [Go 1 compatibility promise](https://go.dev/doc/go1compat) |
+| Maturity and API stability | △ 0.x, on a pinned Roc nightly | ○ 0.x, widely deployed | ◎ [Go 1 compatibility promise](https://go.dev/doc/go1compat) |
 
 Equivalent tag and body-stage hooks in axum or Go need custom implementation. Memory ratings concern cleanup, not consumption.
 
