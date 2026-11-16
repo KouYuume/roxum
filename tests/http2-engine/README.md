@@ -33,6 +33,11 @@ before checking that another connection completes. They then verify writable
 resumption or abort cleanup, malformed-preface isolation, connection-slot reuse,
 and complete responses after TCP write-half closure. Engine destruction checks
 allocation cleanup on both successful and interrupted connections.
+The incremental exchange receives three independently submitted chunks, withholds
+stream credit between them, and completes another response while the writer is
+blocked. Final trailers complete at zero remaining stream credit. Unit checks
+also cover chunk-limit boundaries, connection-credit exhaustion across multiple
+frames, partial output, allocator failure and reset cleanup.
 This is a host-engine contract test, not a supported Roc HTTP/2 listener.
 
 For another supported target, build `zig build http2-engine-fixture

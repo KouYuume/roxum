@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Independent wire checks for the internal engine's finite-response contract."""
+"""Independent wire checks for the internal engine's finite and incremental output contracts."""
 import argparse
 import os
 from collections import defaultdict
@@ -658,10 +658,76 @@ def verify_metadata_admission(executable):
         process.wait()
 
 
+def verify_incremental(executable):
+    process = subprocess.Popen([executable], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        assert select.select([process.stdout], [], [], 5)[0], 'startup timeout'
+        with socket.create_connection(('127.0.0.1', int(process.stdout.readline())), timeout=5) as sock:
+            conn = H2Connection(config=H2Configuration(client_side=True, header_encoding='utf-8'))
+            conn.initiate_connection()
+            conn.update_settings({SettingCodes.INITIAL_WINDOW_SIZE: 16})
+            body, ended, trailers, status = defaultdict(bytes), set(), {}, {}
+            def flush():
+                sock.sendall(conn.data_to_send())
+            def until(predicate):
+                deadline = time.monotonic() + 5
+                while not predicate():
+                    sock.settimeout(max(.001, deadline - time.monotonic()))
+                    data = sock.recv(65536)
+                    assert data, 'unexpected EOF'
+                    for event in conn.receive_data(data):
+                        if isinstance(event, DataReceived):
+                            body[event.stream_id] += event.data
+                            conn.increment_flow_control_window(event.flow_controlled_length)
+                        elif isinstance(event, ResponseReceived):
+                            status[event.stream_id] = dict(event.headers)[':status']
+                        elif isinstance(event, StreamEnded):
+                            ended.add(event.stream_id)
+                        elif isinstance(event, TrailersReceived):
+                            trailers[event.stream_id] = dict(event.headers)
+                        elif isinstance(event, (StreamReset, ConnectionTerminated)):
+                            raise AssertionError(event)
+                    flush()
+                    assert time.monotonic() < deadline
+            def request(sid, path, payload=b''):
+                conn.send_headers(sid, [(':method', 'POST'), (':scheme', 'http'),
+                                      (':authority', 'localhost'), (':path', path)], end_stream=not payload)
+                if payload:
+                    conn.send_data(sid, payload, end_stream=True)
+                flush()
+            request(1, '/incremental')
+            until(lambda: len(body[1]) == 16)
+            assert 1 not in ended
+            # A producer stalled on stream credit cannot stop another response.
+            request(3, '/', b'alive')
+            until(lambda: 3 in ended)
+            assert status[1] == status[3] == '200'
+            assert body[3] == b'alive'
+            assert len(body[1]) == 16 and 1 not in ended
+            conn.increment_flow_control_window(16, stream_id=1)
+            flush()
+            until(lambda: len(body[1]) == 32)
+            assert 1 not in ended
+            conn.increment_flow_control_window(16, stream_id=1)
+            flush()
+            # Final trailers need no additional DATA credit.
+            until(lambda: 1 in ended)
+            assert body[1] == b'0123456789abcdef' * 3
+            assert trailers[1] == {'x-result': 'done'}
+        _, errors = process.communicate(timeout=10)
+        assert process.returncode == 0, errors
+        print('PASS incremental output: early DATA, backpressure, peer progress, zero-credit completion')
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.wait()
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('server')
     executable = parser.parse_args().server
+    verify_incremental(executable)
     verify_metadata_admission(executable)
     verify_trailers(executable)
     verify(executable)
