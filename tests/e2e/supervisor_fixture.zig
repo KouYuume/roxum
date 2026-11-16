@@ -16,10 +16,10 @@ fn logStart() void {
 }
 
 fn worker(_: ?u16) c_int {
-    logStart();
     const startup_stall = std.c.getenv("ROXUM_TEST_STARTUP_STALL") != null and
         host.supervisor.inherited_listener != null;
     const restart_stall = if (std.c.getenv("ROXUM_TEST_STALL_FILE")) |path| access(path, 0) == 0 else false;
+    logStart();
     if (startup_stall or restart_stall) {
         while (true) {
             _ = pause();
@@ -35,6 +35,6 @@ fn worker(_: ?u16) c_int {
 
 pub fn main() !void {
     try host.supervisor.run(worker, .{
-        .readiness_timeout_milliseconds = 200,
+        .readiness_timeout_milliseconds = if (std.c.getenv("ROXUM_TEST_WAIT_FOR_SHUTDOWN") != null) std.math.maxInt(u64) else 200,
     });
 }

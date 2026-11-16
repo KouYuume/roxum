@@ -42,41 +42,56 @@ def main():
         finally:
             cleanup(server)
 
-        marker = str(Path(directory) / "stall")
-        # Each worker logs its start: a stalled restart lives only until its
-        # 200 ms readiness timeout, too briefly for `ps` sampling to see every
-        # one on a loaded machine.
-        start_log = Path(directory) / "starts"
-        server = start(binary, ROXUM_TEST_STALL_FILE=marker, ROXUM_TEST_START_LOG=str(start_log))
-        try:
-            assert select.select([server.stdout], [], [], 3)[0], "no initial readiness"
-            if read_port(server) <= 0:
-                raise RuntimeError("the published port is not positive")
-            initial = children(server.pid)
-            assert len(initial) == 2
-            Path(marker).touch()
-            os.kill(initial[0], signal.SIGKILL)
-            healthy = initial[1]
-            seen = set()
-            deadline = time.monotonic() + 4
-            while time.monotonic() < deadline and len(seen) < 3:
-                assert server.poll() is None, "restart timeout stopped supervisor"
-                os.kill(healthy, 0)
-                seen = {int(line) for line in start_log.read_text().split()} - set(initial)
-                time.sleep(0.02)
-            assert len(seen) >= 3, f"timed-out workers were not retried: {len(seen)} restarts"
-            # Send only to the supervisor: it must interrupt its readiness wait
-            # and terminate both ready and still-starting workers itself.
+        check_restarts(binary, directory, shutdown=False)
+        check_restarts(binary, directory, shutdown=True)
+
+
+def check_restarts(binary, directory, *, shutdown):
+    case = "shutdown" if shutdown else "timeout"
+    marker = str(Path(directory) / f"{case}-stall")
+    start_log = Path(directory) / f"{case}-starts"
+    # Keep the 200 ms retry test separate from clean shutdown: a worker killed
+    # by that deadline can legitimately make a concurrent shutdown exit 1.
+    environment = {"ROXUM_TEST_WAIT_FOR_SHUTDOWN": "1"} if shutdown else {}
+    server = start(binary, ROXUM_TEST_STALL_FILE=marker,
+                   ROXUM_TEST_START_LOG=str(start_log), **environment)
+    try:
+        assert select.select([server.stdout], [], [], 3)[0], "no initial readiness"
+        if read_port(server) <= 0:
+            raise RuntimeError("the published port is not positive")
+        initial = children(server.pid)
+        assert len(initial) == 2
+        Path(marker).touch()
+        os.kill(initial[0], signal.SIGKILL)
+        healthy = initial[1]
+        seen = set()
+        wanted = 1 if shutdown else 3
+        deadline = time.monotonic() + 4
+        while time.monotonic() < deadline:
+            assert server.poll() is None, "restart timeout stopped supervisor"
+            os.kill(healthy, 0)
+            # The fixture logs after checking the stall marker. In the shutdown
+            # case its readiness deadline cannot kill it before our signal.
+            seen = {int(line) for line in start_log.read_text().split()} - set(initial)
+            if len(seen) >= wanted:
+                break
+            time.sleep(0.02)
+        assert len(seen) >= wanted, f"expected {wanted} starts, observed {len(seen)}"
+        if shutdown:
+            # The replacement proves the original killed worker was reaped.
+            # Signal only the supervisor; both ready and starting workers must
+            # be drained and reaped by it, rather than by test cleanup.
             os.kill(server.pid, signal.SIGTERM)
-            assert server.wait(timeout=2) == 0
+            code = server.wait(timeout=2)
+            assert code == 0, f"shutdown during readiness exited {code}"
             for pid in [healthy, *seen]:
                 try:
                     os.kill(pid, 0)
                 except ProcessLookupError:
                     continue
                 raise AssertionError(f"worker {pid} survived shutdown")
-        finally:
-            cleanup(server)
+    finally:
+        cleanup(server)
 
 
 if __name__ == "__main__":
