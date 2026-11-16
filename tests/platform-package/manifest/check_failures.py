@@ -31,16 +31,20 @@ def expect_failure(name, mutate, expected):
 
 
 def main():
-    # An integration declares the platform versions it works with
-    # (docs/design/versioning.md).
+    # Use the next caret boundary so a release bump cannot turn a negative
+    # fixture into a compatible version (docs/design/versioning.md).
+    major, minor = map(int, BASE["integrations"][0]["platform_versions"][1:].split("."))
+    upper_major, upper_minor = (0, minor + 1) if major == 0 else (major + 1, 0)
+    outside_range = f"^{upper_major}.{upper_minor}"
+    outside_version = f"{upper_major}.{upper_minor}.0"
     expect_failure(
         "platform outside the declared versions",
-        lambda data: data["integrations"][0].update(platform_versions="^0.2"),
+        lambda data: data["integrations"][0].update(platform_versions=outside_range),
         "does not declare platform",
     )
     expect_failure(
-        "a platform with a new 0.MINOR, which is a breaking change",
-        lambda data: data["core"].update(version="0.2.0"),
+        "platform at the excluded upper caret boundary",
+        lambda data: data["core"].update(version=outside_version),
         "does not declare platform",
     )
     expect_failure(

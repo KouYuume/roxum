@@ -168,7 +168,7 @@ Server :: [].{
 
 	## Explicit cleartext protocol selection. Http2 uses prior knowledge; no Upgrade.
 	## Http2 currently buffers request bodies and supports finite responses only.
-	## Finite response trailers are supported; streaming, files and native gRPC are not.
+	## Finite response trailers support Unary gRPC integrations; streaming and files are unsupported.
 	Protocol := [Http1, Http2]
 
 	## Where the server listens, its connection timeouts, its limits, and how

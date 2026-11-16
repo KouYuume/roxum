@@ -35,7 +35,7 @@ Http :: [].{
 	}
 
 	## The HTTP version carried by request metadata. Http20 represents HTTP/2;
-	## production listeners currently accept only HTTP/1.0 and HTTP/1.1.
+	## listeners opt into HTTP/2; HTTP/1 remains the default.
 	Version := [Http10, Http11, Http20].{
 		is_eq : _
 	}
