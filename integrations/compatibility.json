@@ -225,7 +225,7 @@
         "integrations/roxum-concurrency-limit/example/verify.py",
         "tests/support/roxum_process.py"
       ],
-      "compatibility_sha256": "31717eb0065d8d59476ed8845fb3716d7d771dc01af0a7a420d442574cc9e615",
+      "compatibility_sha256": "d5a7211a7041c4cd12e2aea68416f37b5a299ae5ac39a9dabb34120caa3dc97f",
       "max_unpacked_bytes": 65536
     },
     {
