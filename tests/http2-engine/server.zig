@@ -76,6 +76,7 @@ const State = struct {
 
 const Connection = struct {
     trailers: [16]?http2.StreamId = @splat(null),
+    incremental: [16]?struct { id: http2.StreamId, chunks: usize = 0 } = @splat(null),
     state: State = .{},
     remote: bridge.RemoteAddress = bridge.RemoteAddress.unix,
     owner: ?transport.Owner = null,
@@ -122,6 +123,17 @@ const Connection = struct {
                 defer request.decref(&host);
                 const body = if (request.body.tag == bridge.HttpRequestBodyTag.Bytes) request.body.payload_bytes().items() else "";
                 const path = request.raw_target.items();
+                if (std.mem.eql(u8, path, "/incremental")) {
+                    try owner.engine.beginStreamingResponse(execution.id, 200, &.{});
+                    owner.runnable = true;
+                    for (&self.incremental) |*pending| {
+                        if (pending.* == null) {
+                            pending.* = .{ .id = execution.id };
+                            break;
+                        }
+                    }
+                    continue;
+                }
                 if (std.mem.eql(u8, path, "/trailers")) {
                     try owner.engine.beginResponse(execution.id, 200, &.{}, body);
                     owner.runnable = true;
@@ -150,6 +162,33 @@ const Connection = struct {
                 error.SendFailed, error.ReceiveFailed, error.Protocol => return false,
                 else => return err,
             };
+            for (&self.incremental) |*pending| {
+                const work = if (pending.*) |*value| value else continue;
+                if (work.chunks < 3) {
+                    const accepted = owner.engine.writeStreamingResponse(work.id, "0123456789abcdef") catch |err| switch (err) {
+                        error.Closed => {
+                            pending.* = null;
+                            continue;
+                        },
+                        else => return err,
+                    };
+                    if (accepted) {
+                        work.chunks += 1;
+                        owner.runnable = true;
+                    }
+                } else {
+                    owner.engine.finishResponse(work.id, &.{.{ .name = "x-result", .value = "done" }}) catch |err| switch (err) {
+                        error.InvalidState => continue,
+                        error.Closed => {
+                            pending.* = null;
+                            continue;
+                        },
+                        else => return err,
+                    };
+                    pending.* = null;
+                    owner.runnable = true;
+                }
+            }
             for (&self.trailers) |*pending| {
                 const id = pending.* orelse continue;
                 owner.engine.finishResponse(id, &.{.{ .name = "x-result", .value = "done" }}) catch |err| switch (err) {

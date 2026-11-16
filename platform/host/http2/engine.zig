@@ -13,6 +13,7 @@ pub const Limits = struct {
     header_bytes: usize = 16 * 1024,
     body_bytes: usize = 64 * 1024,
     response_bytes: usize = 64 * 1024,
+    stream_chunk_bytes: usize = 16 * 1024,
 };
 pub const Observer = struct {
     context: *anyopaque,
@@ -33,6 +34,8 @@ const Slot = struct {
     received: usize = 0,
     rejected: bool = false,
     responded: bool = false,
+    streaming: bool = false,
+    streaming_headers_sent: bool = false,
     awaiting_trailers: bool = false,
     body_done: bool = false,
     head_request: bool = false,
@@ -157,7 +160,7 @@ pub const Engine = struct {
     }
 
     /// Copies response bytes; callers may release their buffers on return.
-    /// This initial adapter supports finite responses, not duplex writers.
+    /// Submits a finite response with automatic end-of-stream framing.
     pub fn respond(self: *Engine, id: StreamId, status: u16, headers: []const Header, body: []const u8) Error!void {
         return self.submitResponse(id, status, headers, body, false);
     }
@@ -165,6 +168,43 @@ pub const Engine = struct {
     /// Keep the response open for explicit trailers after the finite DATA provider ends.
     pub fn beginResponse(self: *Engine, id: StreamId, status: u16, headers: []const Header, body: []const u8) Error!void {
         return self.submitResponse(id, status, headers, body, true);
+    }
+
+    /// Commits headers without ending output. Streaming has no declared length.
+    pub fn beginStreamingResponse(self: *Engine, id: StreamId, status: u16, headers: []const Header) Error!void {
+        for (headers) |header| {
+            if (std.mem.eql(u8, header.name, "content-length")) return error.InvalidHeaders;
+        }
+        try self.beginResponse(id, status, headers, "");
+        self.find(@backingInt(id)).?.streaming = true;
+    }
+
+    /// Copies one bounded chunk. False means retry after driving transport output;
+    /// no caller bytes are retained on that path. Success is not peer delivery.
+    pub fn writeStreamingResponse(self: *Engine, id: StreamId, bytes: []const u8) Error!bool {
+        try self.enter();
+        defer self.entered = false;
+        const slot = self.find(@backingInt(id)) orelse return error.Closed;
+        if (slot.rejected) return error.Closed;
+        if (!slot.streaming or !slot.awaiting_trailers) return error.InvalidState;
+        if (bytes.len > self.limits.stream_chunk_bytes) return error.LimitExceeded;
+        if (!slot.streaming_headers_sent or !slot.body_done or self.pending.len != 0) return false;
+        if (bytes.len == 0) return true;
+        const allocation = self.memory.allocate(bytes.len) orelse return error.OutOfMemory;
+        const copy = @as([*]u8, @ptrCast(allocation))[0..bytes.len];
+        var retained = false;
+        defer if (!retained) self.memory.release(copy.ptr);
+        @memcpy(copy, bytes);
+        const provider = c.nghttp2_data_provider2{ .source = .{ .ptr = slot }, .read_callback = readResponse };
+        const result = c.nghttp2_submit_data2(self.session, c.NGHTTP2_FLAG_NONE, slot.id, &provider);
+        // Do not replace a DATA provider still owned by nghttp2.
+        if (result == c.NGHTTP2_ERR_DATA_EXIST) return false;
+        try check(result);
+        slot.response = copy;
+        slot.offset = 0;
+        slot.body_done = false;
+        retained = true;
+        return true;
     }
 
     /// Copies a complete finite response, including final metadata, before the
@@ -271,6 +311,7 @@ pub const Engine = struct {
         if (slot.rejected) return error.Closed;
         if (!slot.awaiting_trailers or !slot.body_done) return error.InvalidState;
         if (slot.final_bytes != null) return error.InvalidState;
+        if (slot.streaming and (!slot.streaming_headers_sent or self.pending.len != 0)) return error.InvalidState;
         try self.submitTrailers(slot, trailers);
     }
 
@@ -424,6 +465,11 @@ fn frameReceived(_: ?*c.nghttp2_session, frame: [*c]const c.nghttp2_frame, user:
     return 0;
 }
 fn frameSent(_: ?*c.nghttp2_session, frame: [*c]const c.nghttp2_frame, user: ?*anyopaque) callconv(std.builtin.CallingConvention.c) c_int {
+    if (frame.*.hd.type == c.NGHTTP2_HEADERS) {
+        if (engine(user).find(frame.*.hd.stream_id)) |slot| {
+            if (slot.streaming) slot.streaming_headers_sent = true;
+        }
+    }
     // mem_send serializes before the transport writes. For HEADERS, nghttp2
     // calls this only after the final CONTINUATION has been serialized.
     if ((frame.*.hd.type == c.NGHTTP2_HEADERS or frame.*.hd.type == c.NGHTTP2_DATA) and frame.*.hd.flags & c.NGHTTP2_FLAG_END_STREAM != 0) {
@@ -441,7 +487,7 @@ fn streamClosed(_: ?*c.nghttp2_session, id: i32, error_code: u32, user: ?*anyopa
     self.observer.closed(self.observer.context, @fromBackingInt(@intCast(id)));
     return 0;
 }
-fn readResponse(_: ?*c.nghttp2_session, _: i32, buffer: [*c]u8, length: usize, flags: [*c]u32, source: [*c]c.nghttp2_data_source, _: ?*anyopaque) callconv(std.builtin.CallingConvention.c) isize {
+fn readResponse(_: ?*c.nghttp2_session, _: i32, buffer: [*c]u8, length: usize, flags: [*c]u32, source: [*c]c.nghttp2_data_source, user: ?*anyopaque) callconv(std.builtin.CallingConvention.c) isize {
     const slot: *Slot = @ptrCast(@alignCast(source.*.ptr.?));
     const bytes = slot.response orelse &.{};
     const count = @min(length, bytes.len - slot.offset);
@@ -451,6 +497,10 @@ fn readResponse(_: ?*c.nghttp2_session, _: i32, buffer: [*c]u8, length: usize, f
         slot.body_done = true;
         flags.* = c.NGHTTP2_DATA_FLAG_EOF;
         if (slot.awaiting_trailers) flags.* |= c.NGHTTP2_DATA_FLAG_NO_END_STREAM;
+        if (slot.streaming) {
+            if (slot.response) |owned| engine(user).memory.release(owned.ptr);
+            slot.response = null;
+        }
     }
     return @intCast(count);
 }
@@ -1030,4 +1080,152 @@ test "response completion follows the last CONTINUATION byte exactly once" {
         try self.consumeOutput(bytes.len);
     }
     try std.testing.expectEqual(@as(usize, 1), context.sent);
+}
+
+fn drainTestOutput(self: *Engine) !void {
+    while (true) {
+        const bytes = try self.output();
+        if (bytes.len == 0) break;
+        try self.consumeOutput(bytes.len);
+    }
+}
+
+test "streaming chunks bound retained memory and preserve partial output before completion" {
+    for ([_]usize{ 15, 16, 17 }) |size| {
+        var context: u8 = 0;
+        const self = try Engine.create(std.testing.allocator, .{ .stream_chunk_bytes = 16, .response_bytes = 1 }, TestObserver.observer(&context));
+        defer self.destroy();
+        try openTestStream(self);
+        const id: StreamId = @fromBackingInt(@intCast(1));
+        try self.beginStreamingResponse(id, 200, &.{});
+        try std.testing.expectError(error.InvalidState, self.beginStreamingResponse(id, 200, &.{}));
+        try std.testing.expect(!try self.writeStreamingResponse(id, "early"));
+        try drainTestOutput(self);
+        try std.testing.expect(try self.writeStreamingResponse(id, ""));
+        try std.testing.expectEqual(@as(usize, 0), (try self.output()).len);
+        const payload = @as([17]u8, @splat(42));
+        if (size == 17) {
+            try std.testing.expectError(error.LimitExceeded, self.writeStreamingResponse(id, &payload));
+            continue;
+        }
+        // More total output than the finite cap, without retaining prior chunks.
+        for (0..3) |_| {
+            var caller_bytes = payload;
+            try std.testing.expect(try self.writeStreamingResponse(id, caller_bytes[0..size]));
+            @memset(&caller_bytes, 0);
+            try std.testing.expect(!try self.writeStreamingResponse(id, "next"));
+            try std.testing.expectError(error.InvalidState, self.finishResponse(id, &.{}));
+            const data = try self.output();
+            try std.testing.expectEqual(@as(usize, 9) + size, data.len);
+            try std.testing.expectEqual(@as(u8, c.NGHTTP2_DATA), data[3]);
+            try std.testing.expectEqualSlices(u8, payload[0..size], data[9..]);
+            try std.testing.expectEqual(@as(u8, 0), data[4] & c.NGHTTP2_FLAG_END_STREAM);
+            try std.testing.expect(self.find(1).?.response == null);
+            try self.consumeOutput(1);
+            try std.testing.expect(!try self.writeStreamingResponse(id, "next"));
+            try std.testing.expectError(error.InvalidState, self.finishResponse(id, &.{}));
+            try std.testing.expectEqualSlices(u8, data[1..], try self.output());
+            try self.consumeOutput(data.len - 1);
+        }
+        try self.finishResponse(id, &.{.{ .name = "x-result", .value = "done" }});
+        try std.testing.expectError(error.InvalidState, self.writeStreamingResponse(id, ""));
+        try std.testing.expectError(error.InvalidState, self.finishResponse(id, &.{}));
+        try drainTestOutput(self);
+    }
+}
+
+test "streaming zero credit permits terminal headers but reset releases queued data" {
+    for ([_]bool{ false, true }) |queued| {
+        var context: u8 = 0;
+        const self = try Engine.create(std.testing.allocator, .{}, TestObserver.observer(&context));
+        defer self.destroy();
+        try openTestStream(self);
+        // SETTINGS_INITIAL_WINDOW_SIZE = 0.
+        try self.receive("\x00\x00\x06\x04\x00\x00\x00\x00\x00\x00\x04\x00\x00\x00\x00");
+        const id: StreamId = @fromBackingInt(@intCast(1));
+        try self.beginStreamingResponse(id, 200, &.{});
+        try drainTestOutput(self);
+        if (queued) {
+            try std.testing.expect(try self.writeStreamingResponse(id, "blocked"));
+            try std.testing.expectEqual(@as(usize, 0), (try self.output()).len);
+            try std.testing.expect(!try self.writeStreamingResponse(id, "next"));
+            try self.receive("\x00\x00\x04\x03\x00\x00\x00\x00\x01\x00\x00\x00\x08");
+            try std.testing.expect(self.find(1) == null);
+            try std.testing.expectError(error.Closed, self.writeStreamingResponse(id, "next"));
+        } else {
+            try self.finishResponse(id, &.{});
+            try drainTestOutput(self);
+            try std.testing.expectEqual(@as(usize, 0), self.activeStreams());
+        }
+    }
+}
+
+test "streaming allocation failures release copies and allow failed chunk admission retry" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn run(allocator: std.mem.Allocator) !void {
+            var context: u8 = 0;
+            const self = try Engine.create(allocator, .{}, TestObserver.observer(&context));
+            defer self.destroy();
+            try openTestStream(self);
+            const id: StreamId = @fromBackingInt(@intCast(1));
+            try self.beginStreamingResponse(id, 200, &.{});
+            try drainTestOutput(self);
+            try std.testing.expect(try self.writeStreamingResponse(id, "chunk"));
+            try drainTestOutput(self);
+            try self.finishResponse(id, &.{.{ .name = "x-result", .value = "done" }});
+            try drainTestOutput(self);
+        }
+    }.run, .{});
+    var context: u8 = 0;
+    const self = try Engine.create(std.testing.allocator, .{}, TestObserver.observer(&context));
+    defer self.destroy();
+    try openTestStream(self);
+    const id: StreamId = @fromBackingInt(@intCast(1));
+    try std.testing.expectError(error.InvalidHeaders, self.beginStreamingResponse(id, 200, &.{.{ .name = "content-length", .value = "0" }}));
+    try std.testing.expectError(error.InvalidState, self.beginStreamingResponse(id, 204, &.{}));
+    try self.beginStreamingResponse(id, 200, &.{});
+    try drainTestOutput(self);
+    const limit = self.memory.limit;
+    self.memory.limit = self.memory.used;
+    try std.testing.expectError(error.OutOfMemory, self.writeStreamingResponse(id, "chunk"));
+    try std.testing.expect(self.find(1).?.response == null);
+    self.memory.limit = limit;
+    try std.testing.expect(try self.writeStreamingResponse(id, "chunk"));
+    try self.cancel(id);
+    try drainTestOutput(self);
+}
+
+test "streaming provider spans frames and connection credit without growing retained chunks" {
+    var context: u8 = 0;
+    const self = try Engine.create(std.testing.allocator, .{ .stream_chunk_bytes = 65536 }, TestObserver.observer(&context));
+    defer self.destroy();
+    try openTestStream(self);
+    // Stream credit exceeds the default connection window.
+    try self.receive("\x00\x00\x06\x04\x00\x00\x00\x00\x00\x00\x04\x00\x02\x00\x00");
+    const id: StreamId = @fromBackingInt(@intCast(1));
+    try self.beginStreamingResponse(id, 200, &.{});
+    try drainTestOutput(self);
+    const payload: [65536]u8 = @splat(42);
+    try std.testing.expect(try self.writeStreamingResponse(id, &payload));
+    var sent: usize = 0;
+    while (true) {
+        const bytes = try self.output();
+        if (bytes.len == 0) break;
+        try std.testing.expectEqual(@as(u8, c.NGHTTP2_DATA), bytes[3]);
+        sent += bytes.len - 9;
+        try self.consumeOutput(bytes.len);
+    }
+    try std.testing.expectEqual(@as(usize, 65535), sent);
+    try std.testing.expect(self.find(1).?.response != null);
+    try std.testing.expect(!try self.writeStreamingResponse(id, "next"));
+    try std.testing.expectError(error.InvalidState, self.finishResponse(id, &.{}));
+    // One byte of connection credit releases the final byte and its owned chunk.
+    try self.receive("\x00\x00\x04\x08\x00\x00\x00\x00\x00\x00\x00\x00\x01");
+    const last = try self.output();
+    try std.testing.expectEqual(@as(usize, 10), last.len);
+    try std.testing.expect(self.find(1).?.response == null);
+    try self.consumeOutput(last.len);
+    try self.finishResponse(id, &.{});
+    try drainTestOutput(self);
+    try std.testing.expectEqual(@as(usize, 0), self.activeStreams());
 }
