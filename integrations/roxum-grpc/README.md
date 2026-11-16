@@ -1,18 +1,75 @@
-# gRPC protocol foundation
+# Unary gRPC integration
 
 This package provides finite Unary wire helpers, typed handlers, and opt-in
 generated service bindings using roxum's HTTP/2 capabilities. Generated routes
 install deadlines before waiting for request bodies and register a final gRPC
 status response on expiry. Independent generated clients and raw HTTP/2 checks
 cover direct TCP/Unix listeners and nginx TLS termination; see
-[Unary acceptance](../../tests/grpc-unary/README.md). Distribution verification
-remains part of the first Unary release gate. The byte-oriented wire helpers do
+[Unary acceptance](../../tests/grpc-unary/README.md). A
+[runnable greeting service](example/README.md) and
+[distribution guide](DISTRIBUTION.md) cover generated clients and verified
+release-artifact use outside the checkout. The byte-oriented wire helpers do
 not require a Protobuf dependency.
 
 The contract follows [gRPC over HTTP/2](https://grpc.github.io/grpc/core/md_doc__p_r_o_t_o_c_o_l-_h_t_t_p2.html).
 
-## Framing
+## Typed Unary services
+Generate codecs alone with the existing `wire=<path>` option. To also generate
+roxum service modules, use `wire=<path>,grpc=<integration path>,pf=<platform path>`
+with protoc-gen-roc. All paths are relative to the generated package root.
+The application and generated package must use the same platform identity.
 
+A service `Greeter` generates `GreeterService.register(router, handlers, limits,
+codec_limits)`. Its `Greet` method requires a typed `call_greet!` callback receiving
+application model, decoded request, and metadata. The callback returns
+`Try(GrpcUnary.Response(Output), GrpcUnary.Failure)`. `GrpcUnary.response(value)`
+and `GrpcUnary.failure(code, message)` construct the common cases; response
+records also support initial and trailing metadata.
+
+Registration adds exact POST routes using the original fully qualified service
+and method names. Callback field names use `call_` plus the lowercase method
+name and `!`; collisions are rejected. Existing router fallbacks continue to
+handle unknown routes (the default HTTP 404 is mapped by gRPC clients to
+UNIMPLEMENTED). Service and method options, streaming RPCs, missing or invisible
+message types, and module/binding name collisions fail generation atomically.
+This includes `Handlers`, the generated callback record type.
+Codec-only generation retains its platform-free package and ignores services.
+
+`GrpcUnary.Limits` separates request/response payload bytes, encoded status bytes,
+and metadata limits. Generated codec callbacks also enforce `ProtobufWire.Limits`.
+Malformed input is INVALID_ARGUMENT; oversized envelopes are RESOURCE_EXHAUSTED.
+Response encoding errors, invalid application status or output metadata become
+INTERNAL without exposing codec diagnostics. Application failures return `Err`
+to preserve the platform middleware rejection path.
+
+These handlers run after finite body assembly. Generated registration installs
+`GrpcTimeout.layer` before body reception. Manual `GrpcUnary.handler` users must
+attach that layer themselves; the handler alone does not install deadlines.
+Start with the [greeting example](example/README.md) for registration and handlers.
+
+## Timeout and cancellation
+`GrpcTimeout.parse` accepts one to eight ASCII digits and the case-sensitive
+units H/M/S/m/u/n. Zero expires immediately. Large valid durations saturate at
+U64 nanoseconds. Duplicate, empty, signed, fractional or malformed fields are
+INVALID_ARGUMENT; a missing field leaves the server execution cap unchanged.
+The layer validates protocol headers before installing a duration through
+`RequestExecution.limit_with_response!`, registering a bounded HTTP 200 response
+with `grpc-status: 4` and `grpc-message: deadline%20exceeded`. The host anchors
+the duration at initial header completion, so time spent queued or in earlier middleware is not added back.
+
+Host expiry and client reset abandon suspended request execution and release
+request resources. They cannot preempt arbitrary pure computation. A committed
+response wins over later execution expiry; output still has its write timeout.
+
+Expiry sends the registered DEADLINE_EXCEEDED response independently of request
+cleanup, including while the request body is incomplete. Response delivery remains
+subject to connection memory limits, peer cancellation, and I/O timeouts. A server
+execution cap that expires before the layer runs still resets the stream because
+no integration response has been registered. A client reset never triggers this
+response. See [reverse proxy deployment](../../docs/guides/reverse-proxy.md#native-grpc-over-tls)
+for the tested TLS-termination configuration.
+
+## Framing
 `GrpcFrame.decode_unary(bytes, maximum)` requires exactly one complete,
 uncompressed message. The five-byte prefix contains a flag followed by a
 big-endian U32 payload length. Empty payloads still require the prefix. Missing,
@@ -27,7 +84,6 @@ body buffering before handler entry. Configure the server's finite request and
 response byte limits as well as the codec limits.
 
 ## Metadata
-
 `GrpcMetadata.Entry` is `Text(name, value)` or `Binary(name, bytes)`. Names are
 lowercase ASCII letters, digits, `_`, `-`, and `.`, and binary names include the
 `-bin` suffix. Ordered lists preserve duplicate values. The decoder splits
@@ -57,7 +113,6 @@ and middleware additions in mind. These are logical bounds, not exact allocator
 or CPU quotas.
 
 ## Request and response helpers
-
 `GrpcWire.request_metadata(version, method, headers, limits)` checks HTTP/2,
 POST, a single supported content type, and `te: trailers`. Media types are
 case-insensitive; `application/grpc` and `application/grpc+proto` are accepted,
@@ -92,76 +147,12 @@ do not rewrite host admission failures or transport resets. HTTP compression or
 keep-alive middleware must not alter gRPC response bytes.
 
 ## Verification
+Run a group with `python3 tools/check.py --only <group>`; prefix the command with
+`bash tools/linux/test.sh` to run it on Linux.
 
-```sh
-python3 tools/check.py --only test-grpc-wire
-bash tools/linux/test.sh python3 tools/check.py --only test-grpc-wire
-```
-
-The group runs module expectations and independent grpcio and HTTP/2 clients on
-TCP and Unix listeners across backend/allocator combinations. It checks exact
-response bytes and final status, initial/duplicate/binary metadata, UTF-8 status
-messages, split DATA, size/count boundaries and invalid envelopes/headers.
-Deterministic arbitrary-byte and structured framing/Base64 corpora exercise the
-new parsers against independent Python models. A valid call after failures
-checks connection survival. The fixture supplies bytes without generated
-service bindings; it is not the final Unary release acceptance test.
-
-## Typed Unary services
-
-Generate codecs alone with the existing `wire=<path>` option. To also generate
-roxum service modules, use `wire=<path>,grpc=<integration path>,pf=<platform path>`
-with protoc-gen-roc. All paths are relative to the generated package root.
-The application and generated package must use the same platform identity.
-
-A service `Greeter` generates `GreeterService.register(router, handlers, limits,
-codec_limits)`. Its `Greet` method requires a typed `call_greet!` callback receiving
-application model, decoded request, and metadata. The callback returns
-`Try(GrpcUnary.Response(Output), GrpcUnary.Failure)`. `GrpcUnary.response(value)`
-and `GrpcUnary.failure(code, message)` construct the common cases; response
-records also support initial and trailing metadata.
-
-Registration adds exact POST routes using the original fully qualified service
-and method names. Callback field names use `call_` plus the lowercase method
-name and `!`; collisions are rejected. Existing router fallbacks continue to
-handle unknown routes (the default HTTP 404 is mapped by gRPC clients to
-UNIMPLEMENTED). Service and method options, streaming RPCs, missing or invisible
-message types, and module/binding name collisions fail generation atomically.
-This includes `Handlers`, the generated callback record type.
-Codec-only generation retains its platform-free package and ignores services.
-
-`GrpcUnary.Limits` separates request/response payload bytes, encoded status bytes,
-and metadata limits. Generated codec callbacks also enforce `ProtobufWire.Limits`.
-Malformed input is INVALID_ARGUMENT; oversized envelopes are RESOURCE_EXHAUSTED.
-Response encoding errors, invalid application status or output metadata become
-INTERNAL without exposing codec diagnostics. Application failures return `Err`
-to preserve the platform middleware rejection path.
-
-These handlers run after finite body assembly. Generated registration installs
-`GrpcTimeout.layer` before body reception. Manual `GrpcUnary.handler` users must
-attach that layer themselves; the handler alone does not install deadlines.
-See `tests/grpc-unary/app.roc` for runnable registration and handlers.
-Verify with `python3 tools/check.py --only test-grpc-unary`.
-
-## Timeout and cancellation
-
-`GrpcTimeout.parse` accepts one to eight ASCII digits and the case-sensitive
-units H/M/S/m/u/n. Zero expires immediately. Large valid durations saturate at
-U64 nanoseconds. Duplicate, empty, signed, fractional or malformed fields are
-INVALID_ARGUMENT; a missing field leaves the server execution cap unchanged.
-The layer validates protocol headers before installing a duration through
-`RequestExecution.limit_with_response!`, registering a bounded HTTP 200 response
-with `grpc-status: 4` and `grpc-message: deadline%20exceeded`. The host anchors
-the duration at initial header completion, so time spent queued or in earlier middleware is not added back.
-
-Host expiry and client reset abandon suspended request execution and release
-request resources. They cannot preempt arbitrary pure computation. A committed
-response wins over later execution expiry; output still has its write timeout.
-
-Expiry sends the registered DEADLINE_EXCEEDED response independently of request
-cleanup, including while the request body is incomplete. Response delivery remains
-subject to connection memory limits, peer cancellation, and I/O timeouts. A server
-execution cap that expires before the layer runs still resets the stream because
-no integration response has been registered. A client reset never triggers this
-response. See [reverse proxy deployment](../../docs/guides/reverse-proxy.md#native-grpc-over-tls)
-for the tested TLS-termination configuration.
+| Group | Coverage |
+|---|---|
+| `test-grpc-example` | Runnable generated greeting service across backends and allocators. |
+| `test-grpc-wire` | Finite framing/metadata helpers, independent grpcio and HTTP/2 clients, boundary and invalid inputs, parser corpora against Python models, and connection survival. |
+| `test-grpc-unary` | [Generated-client acceptance](../../tests/grpc-unary/README.md), including deadlines, cancellation and TLS proxy deployment. |
+| `test-m13a` | [Release-artifact consumer](DISTRIBUTION.md), rebuilt outside the checkout. |

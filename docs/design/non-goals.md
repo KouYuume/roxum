@@ -18,7 +18,7 @@ To keep its focus on backend services, roxum does not aim to provide:
 
 Serving HTML, static assets, or an API used by a browser remains in scope. Applications can use rendering libraries and database integrations without roxum owning the surrounding UI or database toolchain. Existing static-page support is not excluded by this boundary.
 
-IPv4/IPv6 and Unix listeners are core networking capabilities. Finite HTTP/2 listeners and response trailers are implemented; RPC deadlines remain a planned foundation for gRPC server support; see the [implementation plan](../plans/grpc.md). Inbound TLS remains a separate candidate. WebSocket is deferred until a concrete use case that existing HTTP requests plus SSE cannot satisfy, or a WebSocket interoperability requirement, justifies its implementation and maintenance cost. This does not assume that another Roc platform supplies a replacement backend.
+IPv4/IPv6 and Unix listeners are core networking capabilities. Finite HTTP/2 listeners, response trailers, and request execution deadlines support the [Unary gRPC integration](../../integrations/roxum-grpc/README.md). Inbound TLS remains a separate candidate. WebSocket is deferred until a concrete use case that existing HTTP requests plus SSE cannot satisfy, or a WebSocket interoperability requirement, justifies its implementation and maintenance cost. This does not assume that another Roc platform supplies a replacement backend.
 
 ## Choosing a Roc platform for your application
 
@@ -55,7 +55,7 @@ gRPC-specific message envelopes, metadata conventions, timeout parsing, service 
 
 The core supplies generic HTTP/2 transport, response trailers, and request-scoped I/O, deadline, and cancellation capabilities. The host enforces connection and stream lifetimes without interpreting Protobuf schemas or gRPC statuses. Full-duplex I/O must be designed explicitly before streaming RPC APIs are published; existing HTTP streaming support is not a promise of that capability.
 
-The [gRPC plan](../plans/grpc.md) starts with server-side Unary RPC and then expands to streaming. These are planned capabilities, not current support. Outbound gRPC and inbound TLS are separate work.
+Server-side uncompressed Unary RPC is implemented. The [gRPC plan](../plans/grpc.md) records its acceptance gates and future streaming candidates; streaming RPCs are not supported. Outbound gRPC and inbound TLS are separate work.
 
 ### HTML templates and AOT generation
 

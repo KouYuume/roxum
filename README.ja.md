@@ -15,13 +15,14 @@ roxumは、[Roc](https://github.com/roc-lang/roc)の思想に沿ったWebサー�
 - **ルートをビルド時に検査する。** トップレベルで定義したルーターの不正なパターンや重複をコンパイル時に検出。
 - **タグと実行段階でミドルウェアを制御する。** 独自の型付きタグで対象を絞り、`BeforeBody`・`OnChunk`・`AfterBody`・`AfterHandler` に処理を配置。[ミドルウェア](docs/guides/middleware.md)と[タグとミドルウェアの例](examples/middleware/README.md)を参照してください。
 
-ホストはリクエスト単位のメモリ再利用・回収も管理します。ストリーミング、SSE、ファイル配信、gzip、PostgreSQL、外向きHTTPSにも対応。[アーキテクチャ](docs/design/architecture.md)と[メモリモデル](docs/design/execution-model.md)で仕組みを説明しています。
+ホストはリクエスト単位のメモリ再利用・回収も管理します。HTTP/1ではストリーミング、SSE、ファイル配信に対応。gzip、PostgreSQL、外向きHTTPSも利用できます。[アーキテクチャ](docs/design/architecture.md)と[メモリモデル](docs/design/execution-model.md)で仕組みを説明しています。
 
 ## axum・Goとの比較
 
-roxumはaxumと同じく、ハンドラーの入力を型で受け取り、Goにない型による検査（error処理、null、data race、網羅的なmatch）を持ちます。axumに加えて、ドメインの純粋性をコンパイラが保証し、routeをビルド時に検査します。その代わり、受信のTLSとWebSocketには対応せず（TLSはリバースプロキシを前に置きます）、明示的に選択するHTTP/2も現時点では有限のレスポンスに限られ、ミドルウェアはroxumのintegrationだけを使え、まだ若いプロジェクトです。実行性能はまだaxumに届かず、2コアで固定応答を返す負荷ではaxumの73〜96%でした。最適化ビルドは、変更がなくても約3秒かかります。
-
-観点ごとの評価と根拠は[比較](docs/comparison.md)、測定は[性能の現状](docs/performance.md)にあります。
+roxumは、型付きHTTP処理とRocによる純粋性の保証・明示的な副作用を組み合わせます。
+まだ若いプラットフォームで、エコシステムと通信機能の対応範囲は限定的です。
+機能の違いは[比較](docs/comparison.md)、ワークロードごとの測定結果は
+[性能の現状](docs/performance.md)を参照してください。
 
 ## クイックスタート
 
@@ -51,6 +52,7 @@ routes = Router.new
 
 | 分野 | パッケージ |
 |---|---|
+| RPC | [Unary gRPC](integrations/roxum-grpc/README.md) · [実行例](integrations/roxum-grpc/example/README.md) |
 | データと外部API | [PostgreSQL](integrations/roxum-postgres/README.md)、[HTTPクライアント](integrations/roxum-http-client/README.md) |
 | ブラウザクライアント | [CORS](integrations/roxum-cors/README.md)、[Cookie](integrations/roxum-cookie/README.md)、[Server-Sent Events](integrations/roxum-sse/README.md) |
 | トラフィック制御 | [レート制限](integrations/roxum-rate-limit/README.md)、[同時実行数の制限](integrations/roxum-concurrency-limit/README.md) |
@@ -60,14 +62,11 @@ routes = Router.new
 
 ## 制約
 
-- IPv4・IPv6のTCPとファイルパスを使うUnixソケットに対応。HTTP/1.1が既定で、[有限のレスポンス向けに平文HTTP/2を明示的に選択可能](docs/guides/deployment.md#opt-in-http2)。受信TLS・HTTP/3は[リバースプロキシ](docs/guides/reverse-proxy.md)で終端。native gRPCは未対応。
-- [有限のHTTP/2レスポンスのトレーラー](docs/guides/responses.md#finite-http2-trailers)に対応。HTTP/1トレーラー、WebSocket、CONNECT、TRACE、拡張メソッドは未対応。
-- CONNECT、TRACE、任意の拡張メソッドは、強い利用者要望がない限り[対応対象外](docs/design/non-goals.md)とする。
+- IPv4・IPv6のTCPとファイルパスを使うUnixソケットに対応。HTTP/1.1が既定です。[平文HTTP/2を明示的に選択](docs/guides/deployment.md#opt-in-http2)すると、有限レスポンス・トレーラー・非圧縮のUnary gRPCを利用できます。HTTP/2のレスポンスストリーミングとストリーミングRPCは未対応です。
+- 受信TLS・HTTP/3は[リバースプロキシ](docs/guides/reverse-proxy.md)で終端します。WebSocketとHTTP/1トレーラーは未対応、CONNECT・TRACE・任意の拡張メソッドは[対応対象外](docs/design/non-goals.md)です。
 - タイムアウトで任意のRocの計算を強制中断することはできません。
-- 実行時圧縮はgzip。事前圧縮したBrotliは配信可能、複数バイトレンジは未対応。
-- セッション、CSRF対策、OAuth、JWT、OpenAPIはコアに含みません。
-- セッション、CSRF対策、OAuth、JWTはライブラリまたはintegrationが担い、コアでは必要な汎用能力の提供を検討します。[対応範囲の方針](docs/design/non-goals.md#sessions-csrf-oauth-and-jwt)を参照してください。
-- OpenAPIの生成・検証・ドキュメントUIはライブラリまたはintegrationが担います。[対応範囲の方針](docs/design/non-goals.md#openapi)を参照してください。
+- 実行時圧縮はgzip。事前圧縮したBrotliは配信可能、複数バイトレンジは未対応です。
+- セッション・CSRF・OAuth・JWT・OpenAPIはライブラリまたはintegrationが担います。[対応範囲の方針](docs/design/non-goals.md#features-owned-by-libraries-and-integrations)を参照してください。
 - 配信ルート配下はドットファイルも公開対象です。非公開ファイルは外に置いてください。
 
 ## 貢献・問い合わせ

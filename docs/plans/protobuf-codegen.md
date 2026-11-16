@@ -19,7 +19,8 @@ entry defaults, last-key-wins replacement, and shared wire budgets. Real oneofs
 use tagged selections with an explicit unset state, message merge, and case
 replacement. Recursive schemas use co-located cyclic components and bounded
 encoder traversal. Standalone distribution and the matched tool/library contract
-complete the packaging gate; Unary RPC remains the next milestone.
+complete the packaging gate. Unary RPC is covered separately by the
+[gRPC integration](../../integrations/roxum-grpc/README.md).
 A [handwritten layout fixture](../../tests/protobuf-layouts/README.md)
 checks bounded self-recursion, mutual recursion, recursive lists, and imported
 payload records on the pinned compiler. The generator retains fully qualified
@@ -31,7 +32,7 @@ before generation. Generated scalar codecs expose `decode_into` and
 shared-budget fixtures. Fully qualified message references resolve through
 direct/public imports; generated message codecs share reader budgets
 and bounded child output.
-This is the next stage of the [gRPC plan](grpc.md), following
+This records milestone 2 of the [gRPC plan](grpc.md), following
 [finite HTTP/2 acceptance](http2-finite-acceptance.md).
 
 ## Inventory and direction
@@ -53,7 +54,7 @@ license, or decoder limits have been validated by this assessment.
 
 Proceed with a pure Roc library under `libraries/` and a separate build-time
 generator. Neither requires a new hosted effect. Generated message codecs must
-work without importing roxum; service registration belongs to the later gRPC
+work without importing roxum; service registration belongs to the gRPC
 integration. This follows the [platform boundary](../design/platform-boundary.md).
 
 Use a Python `protoc` plugin with the official Python Protobuf descriptor types
@@ -201,8 +202,8 @@ Milestone 2 acceptance requires generated code to compile with the pinned
 compiler and the advertised schema subset to pass independent interoperability
 and negative tests. The checks below provide this evidence. Compare values and presence rather than encoded-byte
 identity; check signed zero and NaN semantics explicitly instead of using an
-ordinary floating-point equality assertion. The first public Unary integration
-remains milestone 3.
+ordinary floating-point equality assertion. Unary integration acceptance is
+recorded separately in the [gRPC plan](grpc.md).
 
 ## Evidence and limits of this assessment
 
@@ -328,4 +329,4 @@ Together with `test-protobuf-codegen` and `test-protobuf` on macOS/Linux, the
 standalone consumer closes milestone 2 for this subset. It does not establish
 support for excluded schemas, all compiler versions, or gRPC services. Typed
 Unary dispatch, framing, status, metadata, deadlines, and client acceptance
-remain milestone 3.
+are covered by the separate [milestone 3 acceptance](../../tests/grpc-unary/README.md).

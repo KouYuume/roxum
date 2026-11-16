@@ -1,0 +1,5 @@
+syntax = "proto3";
+package unary;
+message Greeting { string name = 1; }
+message ReplyText { string greeting = 1; }
+service Greeter { rpc Greet(Greeting) returns (ReplyText); }

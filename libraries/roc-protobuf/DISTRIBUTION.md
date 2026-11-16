@@ -22,8 +22,11 @@ List all imported schema files as generation targets too. The `wire` parameter
 is relative to the generated `main.roc`, not the working directory. For the
 separate Roc bundle, replace the `--roc_opt` value with `wire=<URL>` using the wire URL in the release's `protobuf.json`.
 Import `generated/main.roc` as a package from an application on any compatible
-Roc platform. Services in schemas are ignored; this distribution supplies codecs,
-not RPC registration or a gRPC runtime.
+Roc platform. With only `wire`, services in schemas are ignored and generation remains
+platform-free. Opt into roxum Unary registration by also supplying `grpc` and
+`pf`; follow the gRPC distribution guide in the matching roxum release.
+The generated service needs roxum-grpc and its matching platform; the Protobuf
+wire package itself has no gRPC runtime dependency.
 
 `setup.py` installs pinned `protoc` 33.5 and Python Protobuf 6.33.5 into
 `zig-out/protobuf-codegen` within this extracted directory. It verifies upstream

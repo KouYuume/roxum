@@ -234,7 +234,8 @@
       "package_root": "integrations/roxum-grpc/package/main.roc",
       "applications": [
         "tests/grpc-wire/app.roc",
-        "tests/grpc-unary/app.roc"
+        "tests/grpc-unary/app.roc",
+        "integrations/roxum-grpc/example/app.roc"
       ],
       "platform_versions": "^0.1",
       "requires_platform_sha256": "43abbc43ce4a19da4694e2edcc7512ac9a4fc333bdb0fe11d68158acf08d83ce",
@@ -264,9 +265,23 @@
         "tools/protoc-gen-roc/schema.py",
         "tools/protoc-gen-roc/services.py",
         "tools/protoc-gen-roc/setup.py",
-        "tests/grpc-unary/generated/ReplyText.roc"
+        "tests/grpc-unary/generated/ReplyText.roc",
+        "integrations/roxum-grpc/example/service.proto",
+        "integrations/roxum-grpc/example/generate.py",
+        "integrations/roxum-grpc/example/client.py",
+        "integrations/roxum-grpc/example/verify.py",
+        "integrations/roxum-grpc/example/checks.sh",
+        "integrations/roxum-grpc/example/requirements.txt",
+        "integrations/roxum-grpc/example/generated/main.roc",
+        "integrations/roxum-grpc/example/generated/GreeterService.roc",
+        "integrations/roxum-grpc/example/generated/Greeting.roc",
+        "integrations/roxum-grpc/example/generated/ReplyText.roc",
+        "tests/release/verify_grpc.py",
+        "tests/release/run.sh",
+        "tests/release/verify_metadata.py",
+        "integrations/roxum-grpc/example/test_generate.py"
       ],
-      "compatibility_sha256": "d9e2c0a89b8de534e7350075fd5cd98fa26abbccc5dd5017fa7d74a136ba3c49",
+      "compatibility_sha256": "61d8289b428d07e905dcda874c21e891ab413fbdaa24e646d897b3adbf223369",
       "max_unpacked_bytes": 65536
     }
   ]
