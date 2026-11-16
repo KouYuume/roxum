@@ -1,11 +1,13 @@
 # gRPC protocol foundation
 
-This package provides finite Unary wire helpers using roxum's HTTP/2 capabilities.
-It is the protocol foundation for the planned typed Unary integration, not a
-complete RPC server API. Opt-in generated service bindings and finite typed Unary handlers are available.
-Timeout installation is supported; final deadline status delivery and proxy/client
-acceptance remain separate work. No new host effect or
-Protobuf dependency is required by these byte-oriented helpers.
+This package provides finite Unary wire helpers, typed handlers, and opt-in
+generated service bindings using roxum's HTTP/2 capabilities. Generated routes
+install deadlines before waiting for request bodies and register a final gRPC
+status response on expiry. Independent generated clients and raw HTTP/2 checks
+cover direct TCP/Unix listeners and nginx TLS termination; see
+[Unary acceptance](../../tests/grpc-unary/README.md). Distribution verification
+remains part of the first Unary release gate. The byte-oriented wire helpers do
+not require a Protobuf dependency.
 
 The contract follows [gRPC over HTTP/2](https://grpc.github.io/grpc/core/md_doc__p_r_o_t_o_c_o_l-_h_t_t_p2.html).
 
@@ -161,5 +163,5 @@ cleanup, including while the request body is incomplete. Response delivery remai
 subject to connection memory limits, peer cancellation, and I/O timeouts. A server
 execution cap that expires before the layer runs still resets the stream because
 no integration response has been registered. A client reset never triggers this
-response. Final proxy/client acceptance and distribution verification remain part
-of the first Unary release gate.
+response. See [reverse proxy deployment](../../docs/guides/reverse-proxy.md#native-grpc-over-tls)
+for the tested TLS-termination configuration.

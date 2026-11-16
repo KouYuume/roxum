@@ -374,7 +374,9 @@ The adapter accepts final statuses 200 through 599. It shares the existing HTTP/
 policy that application Content-Length, Transfer-Encoding, and Connection fields
 are errors, and also rejects HTTP/2 connection-specific fields, pseudo-fields,
 invalid syntax, and values with leading or trailing whitespace. The host adds
-Content-Length except on 204 and 304. HEAD retains the representation length with
+Content-Length except on 204, 304, and responses with trailers. HTTP/2 frames
+delimit those bodies; omitting the length also prevents intermediaries from
+ending an empty response before forwarding its trailers. HEAD retains the representation length with
 an empty transmitted body. Nonempty bodies on 204, 205, and 304 are rejected,
 including for HEAD, consistently with the existing finite response contract.
 

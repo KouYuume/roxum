@@ -161,6 +161,7 @@ def verify(executable, unix, debug=False):
                             assert bodies[stream] == expected
                             assert trailers[stream] == {'grpc-status': '0'}
                             assert 'grpc-status' not in headers[stream]
+                            assert 'content-length' not in headers[stream]
                         if route == '/empty-trailers':
                             client.update_settings({SettingCodes.INITIAL_WINDOW_SIZE: 65535})
                             sock.sendall(client.data_to_send())

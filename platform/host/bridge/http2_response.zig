@@ -53,7 +53,9 @@ pub const OwnedResponse = struct {
         };
         const plan = try framing.plan(response.status, body.len, framing.ResponseConnection.keep_alive, semantics);
         if (body.len > limits.body_bytes) return error.LimitExceeded;
-        const add_length = response.status != 204 and response.status != 304;
+        // HTTP/2 framing delimits the body. Omit Content-Length when trailers
+        // follow so intermediaries do not finish an empty response at its head.
+        const add_length = final_fields.len == 0 and response.status != 204 and response.status != 304;
         const fields = response.headers.items();
         // Match the engine's finite response field cap, including synthetic fields.
         if (fields.len > 64 - @as(usize, @intFromBool(add_length))) return error.LimitExceeded;
