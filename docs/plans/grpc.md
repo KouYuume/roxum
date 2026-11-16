@@ -5,11 +5,12 @@ Milestone 2 inventory is recorded in the [codec and generator assessment](protob
 Bounded pure-Roc wire primitives and proto3 schema codecs are implemented,
 including recursive messages. Milestone 2 includes standalone distribution,
 matched tool/library compatibility metadata, and independent interoperability
-acceptance. The next milestone is the Unary integration.
+acceptance. The Unary integration is in final release preparation.
 The [gRPC protocol foundation](../../integrations/roxum-grpc/README.md) provides
 finite framing, metadata and status helpers. Finite typed Unary handlers and opt-in service registration generation are implemented.
 Generated routes install grpc-timeout before body waits using the header-time
-anchor. Deadline status delivery and final release acceptance remain open.
+anchor. Deadline status delivery and generated-client/proxy acceptance are
+implemented; distribution verification remains open.
 See the [transport decision and evidence](http2-transport.md). The responsibility
 split is agreed; API names,
 dependencies, and the detailed implementation below remain proposals until their
@@ -197,8 +198,10 @@ construction, typed Unary handlers, and opt-in generated service registration.
 Independent clients verify TCP/Unix behavior across compiler
 backends and allocators, including malformed input and connection survival.
 Pre-body deadline status delivery is implemented through a generic host
-expiry-response capability. The full milestone gate below is not yet satisfied:
-final proxy/client acceptance and distribution verification remain open. Expiry before integration registration still uses the host stream reset.
+expiry-response capability. The generated grpcio client and raw HTTP/2 checks
+cover direct TCP/Unix listeners and nginx TLS termination with HTTP/2 TCP/Unix
+upstreams. The full milestone gate below is not yet satisfied: distribution
+verification and the release-facing example remain open. Expiry before integration registration still uses the host stream reset.
 
 Add a separately versioned `roxum-grpc` integration using the core capabilities
 and generated codecs. Provide typed service registration, exactly one request

@@ -1,6 +1,6 @@
 # Running behind a reverse proxy
 
-Terminate inbound TLS at a reverse proxy or load balancer. The configurations below connect to roxum over IPv4 HTTP/1.1. For explicit
+Terminate inbound TLS at a reverse proxy or load balancer. The general HTTP configurations below connect to roxum over IPv4 HTTP/1.1; the gRPC configuration uses HTTP/2. For explicit
 cleartext HTTP/2 upstreams and their current limits, see [deployment](deployment.md#opt-in-http2). Outbound PostgreSQL and HTTP connections can use TLS; see [database](database.md) and [HTTP client](http-client.md).
 
 ## Keep-alive
@@ -89,10 +89,48 @@ example.com {
 
 For a load balancer, configure an HTTPS listener and an HTTP target pointing to roxum. Use a health-check route that returns 200 without depending on external services. Keep the backend network private; the proxy-to-roxum connection is plaintext.
 
+## Native gRPC over TLS
+
+Enable roxum's [HTTP/2 listener](deployment.md#opt-in-http2), then use nginx's
+[gRPC module](https://nginx.org/en/docs/http/ngx_http_grpc_module.html) for HTTP/2
+on both sides of TLS termination:
+
+```nginx
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name rpc.example.com;
+    ssl_certificate     /etc/ssl/rpc.example.com.crt;
+    ssl_certificate_key /etc/ssl/rpc.example.com.key;
+
+    location / {
+        grpc_pass grpc://127.0.0.1:8080;
+        grpc_next_upstream off;
+        grpc_connect_timeout 5s;
+        grpc_read_timeout 60s;
+        grpc_send_timeout 60s;
+    }
+}
+```
+
+For a Unix listener, replace `grpc_pass` with
+`grpc_pass unix:/run/roxum/rpc.sock;` and grant the nginx worker access to the
+socket and its parent directories. Keep TCP upstreams on a private network.
+The upstream connection is cleartext HTTP/2, without an HTTP/1 upgrade.
+
+Retries are disabled because RPCs may mutate application state. Match proxy body
+limits and I/O timeouts to the service; they are separate from `grpc-timeout` and
+may terminate a call before its application deadline. Do not translate HTTP 200
+into RPC success: clients must consume the final `grpc-status`.
+The [Unary acceptance fixture](../../tests/grpc-unary/README.md) exercises this
+configuration with a generated client, verified TLS, TCP/Unix upstreams,
+empty error responses, deadlines, and client cancellation. Its evidence is
+specific to the pinned nginx version; other proxies require equivalent checks.
+
 ## Server behavior
 
 - Bind to `127.0.0.1` when only a proxy on the same host should connect.
 - Request heads are limited to 32 KiB. Buffered bodies default to 2 MiB; streaming bodies have no default size limit. Configure `Server.Limits` and route `BodyLimit` values deliberately.
 - A handler crash before sending the head returns 500 and closes the connection. A crash after a streaming head closes without another status line.
 - An initialization crash terminates the worker and drops its connections. Restrict proxy retries to requests safe to repeat.
-- HTTP/2 or HTTP/3 may be used between clients and the proxy; the backend connection in these configurations remains HTTP/1.1.
+- HTTP/2 or HTTP/3 may be used between clients and the proxy; the general HTTP examples use HTTP/1.1 upstreams; native gRPC uses HTTP/2.

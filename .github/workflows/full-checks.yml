@@ -72,6 +72,12 @@ jobs:
         env:
           ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
         run: zig build test-grpc-probe
+      - name: Verify typed Unary clients through direct and TLS proxy connections
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: |
+          brew list openssl@3 >/dev/null || brew install openssl@3
+          zig build test-grpc-unary
       - name: Verify platform-dependent package boundary
         env:
           ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
