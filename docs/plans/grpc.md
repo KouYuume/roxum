@@ -5,7 +5,9 @@ Use the [integration API](../../integrations/roxum-grpc/README.md),
 [greeting example](../../integrations/roxum-grpc/example/README.md), and
 [distribution guide](../../integrations/roxum-grpc/DISTRIBUTION.md) for current behavior.
 Publishing and release version selection remain maintainer operations.
-Streaming RPCs below are proposals, not supported capabilities or delivery commitments.
+Streaming RPCs are the planned 0.3 release scope, not currently supported
+capabilities. The [0.3 implementation plan](grpc-streaming-0.3.md) defines the
+PR sequence, design decisions and release acceptance gates.
 
 ## Scope and responsibilities
 
