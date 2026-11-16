@@ -6,7 +6,7 @@ Changes to the roxum platform and its integrations, newest first. The platform a
 
 ### Breaking changes
 
-- `Http.Version` includes `Http20`; exhaustive matches must handle the new variant. This represents HTTP/2 request metadata; production listeners still accept only HTTP/1.0 and HTTP/1.1.
+- `Http.Version` includes `Http20`; exhaustive matches must handle the new variant. Production HTTP/2 listeners are opt-in; HTTP/1 remains the default.
 
 - Listener settings use `Server.Endpoint.Tcp({ address, port })` or `Server.Endpoint.Unix({ path })`; request peers use `RemoteAddr.Tcp({ ip, port })` or `RemoteAddr.Unix`. Match on the transport before using IP-based policies.
 
@@ -14,35 +14,13 @@ Changes to the roxum platform and its integrations, newest first. The platform a
 
 ### Added
 
-- roxum-grpc: timeout parsing and pre-body execution-limit installation for generated Unary routes, with receipt-time deadline and client cancellation checks. Deadline status trailers remain pending.
+- roxum-grpc: finite, uncompressed typed Unary services with opt-in generated registration, bounded messages and metadata, status trailers, and pre-body deadlines. Cancellation and deadline expiry abandon suspended work; registered expiry responses deliver `DEADLINE_EXCEEDED`. Direct TCP/Unix and nginx TLS proxy acceptance use independent generated clients.
 
-- roxum-grpc: finite typed Unary handlers and opt-in protoc service registration bindings, with independent client interoperability checks.
-
-- roxum-grpc: finite Unary framing, bounded ASCII/binary metadata, status encoding and HTTP/2 reply helpers; deadline status delivery remains pending.
+- roxum-grpc: runnable greeting service and release-artifact verification using the distributed generator and URL imports for the platform, gRPC integration and Protobuf library.
 
 - roc-protobuf: standalone pure Roc bundle and matched protoc-gen-roc source distribution, with compiler compatibility metadata and bounded proto3 codecs including recursive messages.
 
-- HTTP/2 real-Roc fixture integration with the production wait registry and kqueue/epoll, verifying timer collection and cancellation wakes before fiber cleanup. Production worker integration remains pending.
-
-- HTTP/2 real-Roc fixture coverage for stopping sleeping invocations on reset/disconnect, reclaiming their request heaps, and releasing held concurrency permits before peer dispatch. Production worker integration remains pending.
-
-- HTTP/2 real-Roc fixture coverage for request fibers, hosted sleep/resume, detached request heaps, peer progress, and late-response cleanup after reset or disconnect. Production scheduling and effect cancellation remain pending.
-
-- Real Roc HTTP/2 execution checks across all compiler backends and allocator modes, covering finite request/response ownership, repeated model use, reset, and error cleanup. Production HTTP/2 listener and worker integration remain pending.
-
-- Internal HTTP/2 request handoff guarded by execution tickets and protocol state, with input release on conversion failure. Independent-client checks pass through both Roc ownership boundaries; live Roc dispatch remains pending.
-
-- Internal HTTP/2 owner submission of finite Roc responses with generation-checked execution tickets and cleanup on success or failure. Independent-client checks now exercise this ownership boundary; production worker dispatch remains pending.
-
-- Internal finite Roc-to-HTTP/2 response mapping with bounded header scratch, host-owned Content-Length, and explicit response cleanup. Production response dispatch remains pending.
-
-- Internal HTTP/2 stream registry combining bounded input and execution leases, with deferred cancellation and generation-safe cleanup after reset or disconnect. Production worker integration remains pending.
-
-- Internal HTTP/2 handoff from completed connection input to independently owned Roc request values, including bounded conversion scratch and cleanup on failure. Production dispatch remains pending.
-
-- Internal HTTP/2 request input storage with per-stream header/body limits, a shared connection memory budget, and reset/disconnect cleanup. Production scheduler integration remains pending.
-
-- Internal HTTP/2 initial-header mapping into Roc request metadata, including authority handling and split Cookie fields. Production HTTP/2 listener and scheduler integration remain pending.
+- Opt-in cleartext HTTP/2 TCP/Unix listeners with finite response trailers, bounded connection/stream resources, worker scheduling, cancellation, execution deadlines and concurrent-stream shutdown. Inbound TLS remains a reverse-proxy responsibility.
 
 - Filesystem Unix domain sockets for application and metrics listeners, with shared worker descriptors and identity-checked shutdown cleanup.
 - roxum-proxy-headers: explicit `trust_unix` / `try_trust_unix` policies; ordinary CIDR trust rejects Unix forwarding headers.

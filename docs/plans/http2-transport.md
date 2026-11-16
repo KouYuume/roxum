@@ -1,9 +1,10 @@
-# HTTP/2 transport decision and lifetime sketch
+# HTTP/2 transport decision
 
-Status: milestone 0 experiment completed. This is a design input for milestone 1,
-not a description of supported roxum behavior. The reproducible
-[spike](../../tools/http2-spike/README.md) and its independent-client checks are
-isolated from the production build. The parent [gRPC plan](grpc.md) defines scope.
+Status: milestone 0 experiment completed; finite production HTTP/2 and Unary gRPC
+are implemented. This record preserves the engine decision and isolated spike
+evidence. Current behavior and lifetime contracts live in the
+[engine design](../design/http2-engine.md); acceptance and future streaming gates
+are tracked in the [gRPC plan](grpc.md).
 
 ## Engine choice
 
@@ -12,10 +13,10 @@ Use **nghttp2 1.71.0** as the starting engine for core HTTP/2. The spike pins th
 `c0f55121d88650e4b9227aec28cebaf664d2417ca60fe70be0f8d38829f52116`.
 The host build pins the same version's Git source with a Zig content hash in
 [`build.zig.zon`](../../build.zig.zon).
-The spike establishes the initial transport evidence. The first milestone 1
-slice adds [host build integration and an internal engine adapter](../design/http2-engine.md);
-finite production listeners, Roc scheduler integration and finite response
-trailers are implemented; RPC deadlines and incremental streaming remain pending.
+
+The production dependency, replacement boundary, and upgrade checks are documented
+in the [engine contract](../design/http2-engine.md). The alternatives below record
+the milestone 0 assessment, not a continuously updated market comparison.
 
 | Candidate | Fit and cost | Decision |
 |---|---|---|
@@ -40,73 +41,11 @@ ReleaseSafe executables measured in this experiment were 745,200 bytes on macOS
 arm64, 5,268,024 bytes for Linux arm64 musl, and 5,420,784 bytes for Linux x86_64
 musl. These include Zig, fibers, libc linkage, and debug information according to
 the target defaults. They are not incremental production dependency sizes or
-comparable stripped sizes. Measure the production archive delta in milestone 1.
+comparable stripped sizes. For the production package budget, see the engine contract.
 
-## Ownership and scheduling
+## Spike evidence and limits
 
-The following is the implementation direction, not a claim that the existing
-HTTP/1 scheduler already supports it:
-
-- A connection owner retains the socket, nghttp2 session, HPACK state, output
-  cursor, connection limits, and active-stream registry. Only that owner enters
-  the session. Preserve unsent output across partial socket writes before asking
-  the engine for another output buffer.
-- Each admitted stream owns one request lifetime: fiber, request allocation
-  domain, request body queue, response writer, execution deadline, and effects.
-  Stream-local failures do not close unrelated streams. Do not reuse HTTP/1's
-  connection teardown as request cleanup.
-- Callbacks record input, closure, and wakeups. They may submit protocol frames
-  as allowed by the engine, but do not resume application code or recursively
-  call the engine's send/receive functions. Resume fibers after the callback batch.
-- Bound input and output queues per stream and in aggregate per connection.
-  Replenish stream receive credit as the application consumes data. Keep
-  connection credit accounting separate enough for unrelated streams to progress,
-  without exceeding the aggregate admitted memory budget. A slow socket must yield
-  to other connections; a stream waiting for credit must yield to other streams.
-- Identify pending work by connection/stream generation, not a recycled pointer.
-  Reset or disconnect invalidates wakeups, cancels suspended effects, and resumes
-  cleanup. Free request memory only after its fiber and pending operations can no
-  longer reference it. Callback closure and fiber completion are distinct events;
-  release each resource once.
-
-Keep application initialization in the existing single-threaded initialization
-phase before request workers begin. Do not initialize an application per HTTP/2
-stream. A worker owns each connection throughout its session; any dispatch to
-other execution machinery must return protocol operations to that owner.
-
-Drain stops admitting new connections and sends GOAWAY with an explicit
-last-accepted stream ID. Existing admitted streams may finish within the shutdown
-budget; later streams are refused. On budget expiry, cancel outstanding effects,
-finish stream cleanup, flush what the bounded shutdown policy permits, then close
-the session/socket. Specify repeated GOAWAY, peer disconnect, and completion races
-in milestone 1 tests. The spike does not implement drain or worker coordination.
-
-## Minimum API capabilities
-
-These are semantic commitments for the next design step; spelling and Roc types
-remain subject to implementation review.
-
-| Capability | Proposed contract |
-|---|---|
-| Listener protocol | Add an explicit HTTP/1 versus prior-knowledge cleartext HTTP/2 choice, with HTTP/1 as default. Keep it separate from `Server.Endpoint.Tcp/Unix`. No automatic Upgrade or TLS negotiation in this milestone. |
-| Response completion | A request-scoped writer accepts body bytes and one terminal completion with validated final fields. Completion is exactly once; later writes/completions fail. Support empty-body/trailers-only responses. For HTTP/1, reject unsupported trailer operations explicitly until a separate contract exists. |
-| Early metadata handling | Make initial request metadata available before body waits. The integration can validate metadata and install a deadline before consuming input or dispatching business logic. Do not wait for `Handler.streaming`'s final callback to do this. |
-| Deadline | Capture a monotonic anchor when initial headers are complete. Expose elapsed time and a generic operation to bound execution by a duration relative to that anchor, clamped by server limits. Parsing `grpc-timeout` stays in Roc. If already expired, reject before application work; queueing must not restart the duration. |
-| Duplex execution | A request-scoped handler can alternate reads and writes while input remains open. Receive EOF and response completion are independent half-closes. Handles cannot outlive the request. The spike proves the transport shape; a supported Roc duplex API remains a later milestone. |
-
-Resolve deadline/completion races through the owner: once a terminal outcome is
-committed, subsequent events cannot change it or complete again. After deadline
-expiry, do not start new effects; wake suspended effects for cancellation. This
-cannot preempt arbitrary pure Roc computation. Define what the application sees
-at effect boundaries and which pending writes are discarded before publishing
-these APIs. Keep idle I/O timeouts separate from execution deadlines.
-
-The integration chooses gRPC metadata and final status. Core validates generic
-HTTP fields, enforces state/lifetime limits, and transmits or resets the stream.
-Host admission or transport failures need not become gRPC statuses. Generic HTTP
-compression and middleware must not rewrite RPC framing implicitly.
-
-## Observations and remaining gates
+Reproduce the experiment using the [spike instructions](../../tools/http2-spike/README.md).
 
 Executed with pinned Zig 0.17.1 and hyper-h2 4.3.0 on macOS arm64 and Linux arm64
 musl (Docker). Linux x86_64 musl was cross-compiled, not executed. Both executed
@@ -126,37 +65,16 @@ scheduler, request arenas, ABI, worker lifecycle, or production memory bounds.
 The spike uses a single connection and bounded blocking socket calls, so it makes
 no multi-connection fairness or performance claim.
 
-Before milestone 1 is complete:
+## Implementation boundaries
 
-- Integrate dependency packaging, license notices, generated C bindings, and all
-  supported builds. Map session allocations to connection accounting, not a
-  request arena. Bound bytes as well as allocation counts and handle allocation
-  failure without assertions.
-- Implement the serialized owner in the real readiness scheduler, generation-safe
-  wakeups, partial writes, aggregate flow control, admission/header limits, and
-  request memory/effect cancellation. Include reset storms and malformed input.
-- Implement and test metadata-time deadlines and drain, including already-expired
-  queued requests and completion races. Add fuzzing and independent conformance
-  coverage; the happy-path engine test is not a security assessment.
-- Regenerate any changed ABI glue and run the affected Roc backend/allocator and
-  Linux execution matrices. Exercise TCP and Unix listeners and retain HTTP/1
-  regressions. The isolated spike does not replace these checks.
+The host owns sockets, serialized engine access, resource budgets, stream leases,
+and cancellation. Roc integrations own Protobuf, RPC metadata, timeout parsing,
+and final status. Engine callbacks only record or copy work; application code runs
+outside them. These responsibilities remain independent of the selected engine.
 
-The engine, finite request/response bridges and nonblocking owner are integrated
-with opt-in TCP/Unix listeners, the production connection table, work queues,
-request fibers and wait registry. Connection locks serialize protocol operations;
-stream leases pin queued/running requests through cleanup. Independent-client
-checks exercise real Roc backends and allocator modes, socket-effect cancellation,
-input limits/timeouts, request IDs, observability and GOAWAY drain. Isolated fixtures
-retain framing, allocator-failure and controlled lifetime coverage.
-
-Milestone 1 is still incomplete. The internal deadline lifecycle and configurable
-server execution cap are implemented, and the
-[fixed-byte gRPC interoperability probe](../../tests/grpc-probe/README.md) verifies
-finite Unary exchanges on TCP and Unix sockets. `RequestExecution` exposes
-metadata-anchored elapsed time and deadline tightening in finite handlers.
-Roc metadata-phase dispatch remains required to install those limits before body
-waits. Broader
-cancellation/slow-consumer coverage and incremental streaming capabilities should
-be added in focused changes. Native gRPC is not supported until the later
-integration gates pass.
+The [finite acceptance record](http2-finite-acceptance.md) covers the production
+scheduler, TCP/Unix listeners, resource recovery, metadata-time deadlines and drain.
+The [Unary integration](../../integrations/roxum-grpc/README.md) adds generated
+services and independent-client acceptance. Incremental receive credit, response
+streaming and duplex execution require the separate gates in the gRPC plan;
+the spike's duplex exchange does not make them supported application APIs.

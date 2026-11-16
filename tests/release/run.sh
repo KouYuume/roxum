@@ -75,3 +75,6 @@ if [[ "$downloads" -ne 3 ]]; then
 	echo "expected 3 bundle downloads, the server saw $downloads" >&2
 	exit 1
 fi
+
+# Exercise the distributed generator and the gRPC/wire/platform bundles together.
+python3 tests/release/verify_grpc.py "http://127.0.0.1:$port" "$task_tmp/http.log"

@@ -1,9 +1,9 @@
 # Finite HTTP/2 acceptance
 
 Milestone 1 of the [gRPC plan](grpc.md) is complete for finite request and
-response capabilities, including concurrent-stream drain. Milestone 2 follows the
-[codec/generator assessment](protobuf-codegen.md). This does not establish a reusable gRPC
-service API or streaming RPC support.
+response capabilities, including concurrent-stream drain. This record covers the
+transport gate; later codec and Unary integration gates are recorded in the plan.
+It does not establish streaming RPC support.
 
 ## Gate and evidence
 
@@ -48,13 +48,7 @@ suite required by [contributing](../contributing.md).
 
 ## Concurrent-stream drain verification
 
-The production listener check now admits two requests on the same connection.
-Each connects to a test upstream that withholds its response. Both connections
-must be accepted before SIGTERM starts draining. The client observes GOAWAY
-before supplying distinct upstream bytes, then checks both HTTP 200 responses,
-exact payloads, one EOF per stream, absence of resets and successful process exit.
-This exercises simultaneous unfinished requests rather than combining separate
-single-stream drain and peer-progress results.
+The concurrent-stream case in the evidence table extends the baseline above.
 
 `python3 tools/check.py --only test-http2-listener` passed on macOS arm64 and
 through `tools/linux/test.sh` on Linux arm64 for this extension. Both runs cover
@@ -72,8 +66,6 @@ The gRPC probe neither generates codecs nor implements grpc-timeout parsing,
 service registration, compression or single-HEADERS trailers-only replies.
 TLS/proxy interoperability belongs to the Unary integration gate, not this gate.
 
-The [codec/generator assessment](protobuf-codegen.md) records the reuse inventory,
-proposed schema target, and bounded decoding requirements for milestone 2.
-Its wire primitives and budgets are implemented; descriptor-to-Roc feasibility
-is the next slice.
+See the [gRPC plan](grpc.md) for codec, generated-service, and Unary acceptance.
+
 Protobuf and gRPC status policy remain outside the host.

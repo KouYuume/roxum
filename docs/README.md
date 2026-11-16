@@ -5,6 +5,7 @@
 - [Getting started](guides/getting-started.md) and [toolchain setup](toolchain.md)
 - [Routing](guides/routing.md), [extractors](guides/extractors.md), [responses](guides/responses.md), and [middleware](guides/middleware.md)
 - [Streaming](guides/streaming.md), [files and compression](guides/files.md), and [static pages](guides/static-pages.md)
+- [Unary gRPC](../integrations/roxum-grpc/README.md), [runnable service](../integrations/roxum-grpc/example/README.md), and [distribution](../integrations/roxum-grpc/DISTRIBUTION.md)
 - [Database](guides/database.md) and [HTTP client](guides/http-client.md)
 - [Deployment](guides/deployment.md), [reverse proxies](guides/reverse-proxy.md), and [observability](guides/observability.md)
 
@@ -27,10 +28,10 @@ These documents describe the current implementation, its invariants, and the pro
 These documents describe implementation plans, acceptance evidence, and remaining
 gates. Completed evidence is distinguished from proposed capabilities.
 
-- [gRPC server support](plans/grpc.md): host/integration boundaries, Unary RPC first, and staged streaming support
+- [gRPC server support](plans/grpc.md): host/integration boundaries, completed Unary gates, and future streaming candidates
 - [Protobuf codec and generator assessment](plans/protobuf-codegen.md): reuse inventory, schema target, decoder bounds, and milestone 2 implementation slices
-- [Finite HTTP/2 acceptance](plans/http2-finite-acceptance.md): milestone 1 evidence and limits before codec/generator work
-- [HTTP/2 transport decision](plans/http2-transport.md): milestone 0 evidence, engine choice, and proposed ownership/API contracts
+- [Finite HTTP/2 acceptance](plans/http2-finite-acceptance.md): milestone 1 transport evidence and limits
+- [HTTP/2 transport decision](plans/http2-transport.md): engine choice, isolated spike evidence, and links to implemented contracts
 
 ## Performance
 

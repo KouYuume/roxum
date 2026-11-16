@@ -33,8 +33,9 @@ HTTP/2 routing and `BeforeBody` middleware run after initial headers; ordinary
 handlers receive complete finite bodies. Request IDs and effects use the worker's
 existing request fibers. A reset cancels the affected suspended request without
 closing its peers. Responses are finite, optionally with trailers. Response
-streaming, SSE, file responses, incremental request-body processing, and native
-gRPC remain unsupported; attempting a streamed response resets that stream.
+streaming, SSE, file responses, and incremental request-body processing remain
+unsupported; attempting a streamed response resets that stream. For uncompressed
+Unary gRPC, use the [integration](../../integrations/roxum-grpc/README.md).
 
 To bound HTTP/2 execution, set a listener-wide cap:
 
@@ -50,8 +51,7 @@ unless an expiry response is registered; it cannot preempt arbitrary Roc computa
 and checks at request conversion and response admission, not a real-time guarantee.
 Once a finite response has been admitted, its existing response-write timeout
 governs delivery even if the execution duration later elapses. A valid setting
-has no effect on HTTP/1. Rebuild host archives together with platform sources
-when adopting these APIs; the hosted ABI includes execution controls.
+has no effect on HTTP/1.
 
 Inside an HTTP/2 handler, `RequestExecution.elapsed_nanoseconds!({})` returns
 elapsed time from initial header completion, and
@@ -66,12 +66,8 @@ expiry resets the stream unless an expiry response has been registered.
 The elapsed-time operation also checks expiry before returning. Duration addition
 saturates at `U64.highest`; a large value cannot remove an existing limit. These
 effects apply to the current request and expose no reusable resource handle.
-HTTP/2 routing and `BeforeBody` middleware run after initial headers, before
-waiting for the finite body. An integration can parse its timeout in Roc and call
-`RequestExecution.limit_nanoseconds!` in that stage. The duration still starts at
-header receipt, so queueing and metadata effects cannot grant a fresh budget.
-Ordinary handlers and `AfterBody` middleware run after body EOF. The listener cap
-also bounds work before Roc begins and cannot be extended by the integration.
+Install integration deadlines in `BeforeBody`, before body waits. Ordinary handlers
+and `AfterBody` run after EOF. The listener cap also bounds work before Roc begins.
 
 The configured finite body limit applies. Each connection admits at most 16
 streams, with 16 KiB field sections and at most 2 MiB per finite response. Input
@@ -100,8 +96,8 @@ reset before its write timeout closes the connection.
 Shutdown sends GOAWAY, allows admitted streams to finish, and retains connection
 storage until queued/running handlers finish cleanup. The configured drain timeout
 still bounds the process shutdown. [Finite response trailers](responses.md#finite-http2-trailers)
-are supported. RPC execution deadlines and streaming completion remain later
-additions, described in the [gRPC plan](../plans/grpc.md).
+are supported; incremental streaming remains outside the current scope. See the
+[gRPC roadmap](../plans/grpc.md) for future capability gates.
 
 ## Building for Linux
 
@@ -220,7 +216,7 @@ On SIGTERM or SIGINT the server drains:
 
 1. It stops accepting at once; connections no process has accepted yet are refused
 2. It closes keep-alive connections waiting for their next request
-3. Requests and streams in progress finish; each response says `Connection: close`
+3. Requests and streams in progress finish; HTTP/1 responses say `Connection: close`, while HTTP/2 sends GOAWAY and lets admitted streams finish
 4. Once nothing is left it exits 0
 
 `drain_timeout_milliseconds` in `Server.ListenOptions` (20 s by default, 1 ms to one hour) bounds the drain. Past it,
@@ -369,45 +365,9 @@ List the addresses your proxies connect from. For AWS ALB, whose addresses chang
 
 ## Proxy examples
 
-nginx:
-
-```nginx
-upstream roxum {
-    server 127.0.0.1:8080;
-    keepalive 32;
-    keepalive_timeout 60s;
-}
-
-server {
-    listen 443 ssl;
-    http2 on;
-    client_max_body_size 2m;   # raise it where a route takes more
-
-    location / {
-        proxy_pass http://roxum;
-        proxy_http_version 1.1;
-        proxy_set_header Connection "";
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-```
-
-Caddy:
-
-```caddyfile
-example.com {
-    reverse_proxy 127.0.0.1:8080 {
-        transport http {
-            keepalive 2m
-        }
-    }
-}
-```
-
-AWS ALB: an HTTPS listener with an ACM certificate forwards to an HTTP target group on roxum's port. Give the health
-check a route that answers `200` without touching dependencies.
+See [reverse proxy deployment](reverse-proxy.md) for nginx and Caddy HTTP/1
+configurations, and [native gRPC over TLS](reverse-proxy.md#native-grpc-over-tls)
+for nginx TLS termination with an HTTP/2 upstream.
 
 ## Logs
 

@@ -1,275 +1,94 @@
-# gRPC server implementation plan
+# gRPC scope and roadmap
 
-Status: milestone 1 complete for finite HTTP/2, including concurrent-stream drain.
-Milestone 2 inventory is recorded in the [codec and generator assessment](protobuf-codegen.md).
-Bounded pure-Roc wire primitives and proto3 schema codecs are implemented,
-including recursive messages. Milestone 2 includes standalone distribution,
-matched tool/library compatibility metadata, and independent interoperability
-acceptance. The Unary integration is in final release preparation.
-The [gRPC protocol foundation](../../integrations/roxum-grpc/README.md) provides
-finite framing, metadata and status helpers. Finite typed Unary handlers and opt-in service registration generation are implemented.
-Generated routes install grpc-timeout before body waits using the header-time
-anchor. Deadline status delivery and generated-client/proxy acceptance are
-implemented; distribution verification remains open.
-See the [transport decision and evidence](http2-transport.md). The responsibility
-split is agreed; API names,
-dependencies, and the detailed implementation below remain proposals until their
-milestone's design checks pass. This document does not describe current support.
+Finite, uncompressed Unary RPC is implemented and its acceptance gates are complete.
+Use the [integration API](../../integrations/roxum-grpc/README.md),
+[greeting example](../../integrations/roxum-grpc/example/README.md), and
+[distribution guide](../../integrations/roxum-grpc/DISTRIBUTION.md) for current behavior.
+Publishing and release version selection remain maintainer operations.
+Streaming RPCs below are proposals, not supported capabilities or delivery commitments.
 
-## Objective and scope
+## Scope and responsibilities
 
-Enable an independently deployed roxum service to answer native gRPC clients.
-The first usable milestone is a generated, typed Unary RPC service tested with an
-independent client. Subsequent milestones add server, client, and bidirectional
-streaming. Completion of Unary RPC must not be advertised as support for all RPC
-forms.
+The first release target is a generated, typed Unary service usable by independent
+native gRPC clients. Configure cleartext prior-knowledge HTTP/2 on TCP or Unix
+behind a [TLS-terminating proxy with an HTTP/2 upstream](../guides/reverse-proxy.md#native-grpc-over-tls).
+HTTP/1 remains the default. There is no automatic HTTP/1 Upgrade negotiation.
 
-Start with explicitly configured cleartext HTTP/2 using prior knowledge behind a
-TLS-terminating proxy. The proxy must use HTTP/2 to reach roxum for native gRPC;
-the existing HTTP/1.1 upstream configuration is insufficient. Keep HTTP/1.1 as
-the default and retain the TCP/Unix endpoint distinction. Protocol selection is
-separate from endpoint addressing; its public API is a milestone 0 decision.
-Do not require HTTP/1.1 Upgrade negotiation for this first transport.
+Inbound TLS, outbound gRPC, gRPC-Web, reflection, compression, automatic retries,
+and service discovery are outside this target. WebSocket is independent and
+remains deferred under the [scope policy](../design/non-goals.md).
 
-Inbound TLS, outbound gRPC clients, gRPC-Web, reflection, message compression,
-automatic retries, and service discovery are outside the first release. They
-can be added independently when required. WebSocket remains deferred until a
-concrete use case or interoperability requirement justifies it; gRPC does not
-depend on WebSocket support.
+| Layer | Responsibility |
+|---|---|
+| Zig host | HTTP/2 framing, header compression, flow control, scheduling, bounded resources, cancellation, deadlines and shutdown. No Protobuf types or gRPC status policy. |
+| Core Roc API | HTTP metadata, finite body access, trailers and request-scoped execution controls. No socket pointers or stream IDs in the application API. |
+| Protobuf library | Pure encoding and bounded decoding, independent of roxum and hosted effects. |
+| Build-time generator | Schema descriptors to Roc codecs and optional service bindings; no runtime schema compiler. |
+| gRPC integration | Envelopes, metadata, timeout parsing, status mapping and typed method dispatch. |
+| Application | Business logic, authorization, persistence and deployment policy. |
 
-## Responsibilities
+These boundaries follow the [platform design](../design/platform-boundary.md).
+Normal integration failures become gRPC statuses; host admission and transport
+failures may remain HTTP errors or resets. Generic HTTP compression or keep-alive
+middleware must not alter RPC framing. HTTP DATA and gRPC message boundaries differ.
 
-| Layer | Responsibility | Boundary |
-|---|---|---|
-| Zig host | HTTP/2 framing and header compression, connection and stream state, flow control, scheduling, resource limits, cancellation, deadlines, and shutdown | Own OS resources and enforce their lifetimes. No service descriptors, Protobuf types, or gRPC status policy. |
-| Core Roc API | Typed access to HTTP metadata, body I/O, response completion with trailers, and request-scoped execution controls | Expose capabilities rather than socket pointers or HTTP/2 stream IDs. |
-| Independent Protobuf library | Pure encoding and bounded decoding of supported Protobuf types | No dependency on roxum or hosted effects. |
-| Build-time generator | Turn supported schema descriptors into Roc types/codecs and service bindings | Run before the application build; no schema compiler in the runtime host. |
-| gRPC integration | Message envelopes, metadata conventions, timeout parsing, status mapping, method dispatch, and RPC APIs | Interpret gRPC using core HTTP capabilities and the Protobuf library. |
-| Application | Business behavior, authorization, persistence, and deployment policy | Compose integration handlers with application services. |
+## Completed milestones and acceptance gates
 
-The split follows the [platform boundary](../design/platform-boundary.md),
-[public API layout](../design/public-api-layout.md), and
-[execution model](../design/execution-model.md). An existing native library is
-not by itself a reason to put pure application protocol logic in the host.
+| Milestone | Evidence and boundary |
+|---|---|
+| 0. Transport feasibility | [Decision and isolated spike](http2-transport.md): independent streams, cancellation, trailers and output before request EOF. The spike does not establish a public duplex API. |
+| 1. Finite HTTP/2 core | [Acceptance matrix](http2-finite-acceptance.md): production TCP/Unix listeners, ownership, resource bounds, backpressure, cancellation, metadata-time deadlines and concurrent-stream drain. |
+| 2. Protobuf codecs and generator | [Assessment](protobuf-codegen.md) and [distribution contract](../../libraries/roc-protobuf/DISTRIBUTION.md): documented proto3 subset, independent interoperability, malformed input and resource boundaries, matched tools/library and standalone artifacts. |
+| 3. Unary integration | The checks below cover generated services, protocol errors, deadlines, TLS proxying and release-artifact use. |
 
-For a reply, the integration encodes a value, adds the gRPC message envelope,
-writes HTTP body bytes, and supplies final metadata including `grpc-status`.
-The host validates and transmits HTTP fields without interpreting that status.
-HTTP DATA chunks and gRPC messages have independent boundaries; the integration
-must handle both split and coalesced messages. See the
-[gRPC wire protocol](https://grpc.github.io/grpc/core/md_doc__p_r_o_t_o_c_o_l-_h_t_t_p2.html).
+| Check | Unary acceptance evidence |
+|---|---|
+| `test-grpc-wire` | Exact envelopes, initial/duplicate/binary metadata, status encoding, malformed and oversized input, missing/extra messages, parser corpora and connection survival. |
+| `test-grpc-unary` | Generated independent client; successful and rejected calls on direct TCP/Unix and nginx TLS-to-HTTP/2 upstreams. Raw HTTP/2 assertions require final deadline status, not a client-local timeout or reset. Partial input and queued expiry must not restart budgets or invoke expired work; cancelled handlers must not resume. |
+| `test-grpc-example` | Runnable greeting service and generated client across all compiler backends and allocators. |
+| `test-m13a` | Release metadata/hashes, extracted generator, fresh URL imports of platform/gRPC/wire packages, and RPC calls outside the checkout in all three backends. |
 
-## Current gaps and design checks
+Finite errors can return no response message. The host currently sends initial
+headers and a final trailer block, not a single-HEADERS trailers-only response.
+Deadline status delivery requires registration before expiry; cancellation and
+I/O limits can still prevent delivery. See the integration contract for exact
+[timeout behavior](../../integrations/roxum-grpc/README.md#timeout-and-cancellation).
 
-- `platform/host/http1/`, `connection.zig`, and `server.zig` implement HTTP/1.x
-  framing and request execution. HTTP/2 needs a connection owner that can keep
-  several independent request lifetimes alive. A stream failure must not reuse
-  connection-wide cleanup that terminates unrelated RPCs.
-- `Handler.streaming` in `platform/Handler.roc` consumes request chunks before
-  its `done!` returns a reply. `Reply.stream` and `ResponseWriter` write a reply
-  after dispatch. They do not establish a public full-duplex contract. Design
-  and test that contract before committing to an RPC streaming API.
-- Trailers need an explicit completion operation: final fields may only be
-  known after body writes. Define header validation, completion exactly once,
-  trailers-only replies, and failure after headers. Response trailers are
-  required for the first gRPC service. Request-trailer access and HTTP/1.1 trailer
-  support are separate extensions, not prerequisites to claim in this plan.
-- Parse `grpc-timeout` in Roc and pass a bounded execution deadline to the host.
-  Define a monotonic receipt-time anchor for the initial request headers and
-  make elapsed time available to the integration. Apply the parsed timeout
-  before waiting for the body; account for time already spent queued or in
-  metadata processing rather than starting a fresh timeout at handler entry.
-  An already-expired RPC must not begin application work. The exact timing API
-  is a milestone 0 design decision, not a reason to parse gRPC headers in Zig.
-  Distinguish the RPC deadline from idle/read/write timeouts and from configured
-  server limits. Cancellation must release suspended I/O and request resources;
-  it does not promise preemption of arbitrary Roc computation. Define observable
-  outcomes for completion/deadline races. See the gRPC
-  [deadline](https://grpc.io/docs/guides/deadlines/) and
-  [cancellation](https://grpc.io/docs/guides/cancellation/) guides.
-- Specify how middleware and host-generated failures interact with gRPC. Normal
-  integration failures use gRPC statuses; HTTP admission failures and fatal
-  transport failures may remain HTTP errors or stream resets. Do not add hidden
-  gRPC-specific error rewriting in Zig. Authentication must run before dispatch,
-  and generic HTTP body compression or keep-alive bytes must not alter RPC data.
-- Record the policy for slow consumers, stream admission, header sizes, message
-  sizes, decoded allocation, nesting, and queued writes. Set limits before
-  allocating from untrusted lengths. A stopped consumer must not cause unbounded
-  buffering or indefinitely prevent unrelated streams from progressing.
-
-## Milestones and acceptance gates
-
-Execute milestones in dependency order. Each may require several focused PRs;
-do not combine the entire plan into a single implementation PR. Publish current
-design contracts only when their implementation is accepted.
-
-### 0. Prove the transport and lifetime design
-
-Completed by the [isolated spike and transport decision](http2-transport.md).
-The requirements below define its gate; production integration remains milestone 1.
-
-Compare maintained HTTP/2 implementations usable from Zig against a custom
-implementation. Assess license, dependency size, supported targets, incremental
-I/O, allocator control, cancellation, and maintenance cost. Prefer reuse when it
-fits, but record the actual choice and pin before introducing a dependency.
-The host owns integration with the chosen engine; this does not require writing
-the protocol engine from scratch.
-
-Sketch the smallest protocol-selection, trailer-completion, deadline, and duplex
-capabilities. Use [HTTP/2 RFC 9113](https://www.rfc-editor.org/rfc/rfc9113.html) as
-the protocol baseline. Make stream ownership, connection ownership, and the
-mapping to fibers explicit, including application initialization and worker drain.
-
-Gate: a disposable interoperability spike runs two exchanges on one connection,
-cancels one without killing the other, completes a response with trailers, and
-demonstrates a reply before request EOF. Use an independent HTTP/2 client. The
-spike is evidence for architecture, not a supported API or a production server.
-Record unresolved constraints before advancing; revise the design if the current
-execution model cannot express the required lifetimes safely.
-
-### 1. Build core HTTP/2 capabilities
-
-Completed: [finite transport acceptance](http2-finite-acceptance.md), supported by the
-[host dependency, internal engine, and nonblocking connection owner](../design/http2-engine.md).
-Opt-in TCP/Unix HTTP/2 listeners now dispatch finite requests through the production
-worker scheduler. Finite Roc responses expose final metadata through
-`Reply.with_trailers` and `Response.trailers`, with owned copies and independent
-client verification. Internal execution leases now enforce metadata-anchored
-budgets and stream-local expiry. `Server.Limits.http2_execution` installs an optional
-server cap before body waits. The [fixed-byte gRPC probe](../../tests/grpc-probe/README.md)
-checks successful and rejected Unary exchanges with an independent native gRPC
-client on TCP and Unix sockets. `RequestExecution` exposes elapsed time and
-per-request deadline tightening in handlers and `BeforeBody` middleware. Production
-metadata dispatch now runs before finite input EOF; body reads suspend the fiber,
-retain bounded connection input, and resume on completion or cancel on stream
-failure. Early replies discard later input while retaining its timeout. Independent
-clients verify metadata-time expiry, body resumption, cancellation and peer progress.
-The [acceptance matrix](http2-finite-acceptance.md) maps this gate to production
-and isolated test evidence, including draining multiple active streams on one
-connection. The codec/generator work follows the milestone 2 assessment. Streaming response
-completion belongs to the later streaming RPC milestones.
-
-Implement explicit opt-in HTTP/2 listeners and bounded stream execution, generic
-response trailers, deadlines, and cancellation. Keep gRPC schemas and status
-codes out of core. Preserve the existing HTTP/1.1 behavior and endpoint API.
-Include connection-level shutdown and per-stream cleanup, memory accounting,
-admission, logs, and metrics; distinguish requests/streams from connections.
-
-Gate: ordinary HTTP/2 requests and a fixed-byte gRPC interoperability probe work
-on TCP and Unix listeners. Verify slow readers, resets, partial input, invalid
-frames/headers, resource exhaustion, and draining with concurrent streams. The
-probe must validate the response body and final status, not merely HTTP 200.
-HTTP/1.1 and existing integrations retain their contract tests. No public gRPC
-support claim is made yet.
-
-### 2. Build reusable Protobuf support and code generation
-
-The [codec and generator assessment](protobuf-codegen.md) records the inventory,
-schema target, resource contracts, and implementation evidence. This milestone
-is complete for the documented `proto3-v1` subset: the standalone package check
-uses an extracted generator and a URL-fetched wire bundle without roxum imports,
-while the codec and wire checks cover independent interoperability across
-backends and allocators. This does not establish Unary RPC support.
-
-First inventory reusable Roc codecs and generators. If none meets the required
-contracts, implement a pure library under `libraries/` and an independent
-build-time generator. Prefer consuming `protoc` descriptors or its
-[plugin interface](https://protobuf.dev/reference/cpp/api-docs/google.protobuf.compiler.plugin.pb/)
-over implementing a second `.proto` parser.
-
-Define and document the initial schema support matrix, starting with proto3:
-scalar values, messages, repeated/packed fields, maps, enums, field presence,
-and oneof semantics. Explicitly reject unsupported schema features during
-generation. Define unknown-field handling and decoder resource bounds. Keep
-codec generation independent of optional roxum service bindings.
-
-Gate: generated Roc code compiles with the pinned compiler; independent Protobuf
-implementations exchange values in both directions. Test malformed/truncated
-input, length and integer boundaries, unknown fields, and supported presence
-semantics. Compare decoded values rather than requiring one canonical encoding.
-See the [Protobuf encoding specification](https://protobuf.dev/programming-guides/encoding/).
-
-### 3. Deliver the first usable Unary RPC integration
-
-The protocol foundation is implemented in `integrations/roxum-grpc`: finite
-Unary envelopes, bounded ASCII/binary metadata, status messages and HTTP reply
-construction, typed Unary handlers, and opt-in generated service registration.
-Independent clients verify TCP/Unix behavior across compiler
-backends and allocators, including malformed input and connection survival.
-Pre-body deadline status delivery is implemented through a generic host
-expiry-response capability. The generated grpcio client and raw HTTP/2 checks
-cover direct TCP/Unix listeners and nginx TLS termination with HTTP/2 TCP/Unix
-upstreams. The full milestone gate below is not yet satisfied: distribution
-verification and the release-facing example remain open. Expiry before integration registration still uses the host stream reset.
-
-Add a separately versioned `roxum-grpc` integration using the core capabilities
-and generated codecs. Provide typed service registration, exactly one request
-and response message for successful Unary RPC, metadata, deadlines, and gRPC
-status handling. Errors may complete without a response message, including
-trailers-only responses.
-Start with uncompressed messages and explicitly reject unsupported encodings.
-Include a small runnable service and a reproducible independent client fixture;
-the fixture must not require server reflection.
-
-Gate: an independent generated client calls success and application-error paths,
-checks trailers and trailers-only failures, and exercises unknown methods,
-invalid metadata/messages, missing or extra Unary messages, cancellation,
-deadline expiry, and limits. Include a delayed or partial request body and a
-request queued past its deadline; neither may acquire a fresh timeout when the
-handler starts, and expired queued calls must not invoke application work.
-Another RPC on the same connection survives a
-stream-local failure. Test through a proxy with downstream TLS and upstream
-HTTP/2 as well as direct cleartext connections. Register package compatibility,
-release metadata, examples, and checks using the existing integration workflow.
-
-This is the first release target. Do not defer resource safety or cancellation
-correctness to the later streaming milestones.
+## Remaining milestones
 
 ### 4. Add server-streaming RPC
 
-Expose incremental response messages and final status through the integration.
-Keep completion metadata distinct from body bytes and avoid retaining earlier
-messages. Specify application failure after some messages have been sent.
+Provide incremental response messages and terminal metadata without retaining
+previous messages. Define failure after headers or after some messages have been
+sent, and exactly-once completion. Finite trailers alone are not this capability.
 
-Gate: an independent client observes messages before completion, receives the
-final status, and can cancel a blocked writer without affecting another stream.
-Measure bounded memory with a slow consumer and verify deadline and drain paths.
+Gate: an independent client receives messages before completion and then the
+final status; cancellation of a blocked writer preserves another stream. Verify
+bounded memory with slow consumers, deadlines, drain and resource cleanup.
 
 ### 5. Add client-streaming and bidirectional RPC
 
-Promote the duplex design proven in milestone 0 into a supported core capability
-and typed integration API. The server must be able to send while request input
-remains open. Define independent half-close, receive/send waits, finalization,
-and cancellation without handles escaping their request lifetime. Do not emulate
-bidirectional RPC by buffering the complete request first.
+`Handler.streaming` and `Reply.stream` do not establish a public full-duplex API.
+Design request-scoped incremental reads/writes, receive-credit accounting,
+aggregate backpressure and independent half-closes before exposing streaming RPCs.
+Keep connection and stream credit separate enough for peers to progress, and bound
+queued bytes, decoded allocations, nesting and message sizes before allocation.
+Request-trailer access and HTTP/1 trailers are separate extensions.
 
 Gate: a client waits for the first server response before sending its next
-message, proving interleaving. Exercise both half-close orders, blocked reads and
-writes, deadlines, disconnects, and shutdown; verify resource return to baseline
-and progress of unrelated streams. Enable and test each RPC form explicitly.
+message, proving interleaving rather than whole-request buffering. Exercise both
+half-close orders, blocked reads/writes, deadlines, disconnects and shutdown.
+Require peer progress and resources returning to baseline. Enable and verify
+each RPC form explicitly; the transport spike is not runtime acceptance.
 
-## Verification and delivery
+## Verification policy
 
-Every implementation milestone includes meaningful negative tests and exact
-boundary cases, as required by `AGENTS.md`. New parsing/state machines need
-fuzz coverage. Keep independent-client interoperability tests separate from
-internal round trips so shared encoder/decoder bugs cannot validate themselves.
-Pin test-client and generator versions and retain reproducible fixtures.
+Use pinned independent clients and meaningful negative/boundary cases; shared
+encoder/decoder round trips cannot establish interoperability. Fuzz new parsers
+and state machines. ABI, ownership and execution changes require paired host/Roc
+builds and the [toolchain verification matrix](../toolchain.md), including Linux.
+Distinguish executed architectures from cross-compilation. Run the committed-tree
+full suite before push or PR creation as required by [contributing](../contributing.md).
 
-For ABI, ownership, or execution changes, regenerate glue, rebuild host and Roc
-sources together, and run the affected backend/allocator matrix on macOS and
-Linux, ownership contracts, and semantic ABI checks. Build all supported targets;
-state which architectures were executed rather than only cross-compiled. Run
-the complete committed-tree suite before push or PR creation, following
-[contributing](../contributing.md) and [toolchain](../toolchain.md).
-
-Do not claim a throughput improvement from HTTP/2 support alone. Any comparative
-performance work follows the existing benchmark protocol. During correctness
-work, measure resource bounds and fairness without turning those diagnostics
-into general performance claims.
-
-Before each implementation milestone, resolve its API/dependency choices from
-the spike and existing contracts. Escalate only decisions that change agreed
-scope or require a new product tradeoff. No delivery dates or new public type
-names are committed by this plan.
+Correctness diagnostics do not establish throughput improvements. Comparative
+claims require the [benchmark protocol](../../bench/m13/protocol.md).
