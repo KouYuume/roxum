@@ -2346,6 +2346,65 @@ comptime {
     }
 }
 
+/// Tag discriminant for Http.ResponseBody.
+pub const HttpResponseBodyTag = enum(u8) {
+    @"Bytes" = 0,
+    @"Empty" = 1,
+};
+
+/// Payload union for Http.ResponseBody.
+pub const HttpResponseBodyPayload = extern union {
+        @"bytes": RocListWith(u8, false),
+        @"empty": [0]u8,
+};
+
+/// Tag union: Http.ResponseBody
+pub const HttpResponseBody = if (@sizeOf(usize) == 4) extern struct {
+    payload: [12]u8 align(4),
+    tag: HttpResponseBodyTag,
+    pub fn payload_bytes(self: *const @This()) RocListWith(u8, false) {
+        const ptr: *const RocListWith(u8, false) = @ptrCast(@alignCast(&self.payload));
+        return ptr.*;
+    }
+    /// Recursively decrement Roc-owned payloads.
+    pub fn decref(self: @This(), roc_host: *RocHost) void {
+        decrefHttpResponseBody(self, roc_host);
+    }
+
+    /// Increment Roc-owned payloads.
+    pub fn incref(self: @This(), amount: isize) void {
+        increfHttpResponseBody(self, amount);
+    }
+} else extern struct {
+    payload: HttpResponseBodyPayload,
+    tag: HttpResponseBodyTag,
+    pub fn payload_bytes(self: *const @This()) RocListWith(u8, false) {
+        return self.payload.@"bytes";
+    }
+    /// Recursively decrement Roc-owned payloads.
+    pub fn decref(self: @This(), roc_host: *RocHost) void {
+        decrefHttpResponseBody(self, roc_host);
+    }
+
+    /// Increment Roc-owned payloads.
+    pub fn incref(self: @This(), amount: isize) void {
+        increfHttpResponseBody(self, amount);
+    }
+};
+
+comptime {
+    if (@sizeOf(usize) == 8) {
+        if (@sizeOf(HttpResponseBody) != 32) @compileError("HttpResponseBody size mismatch");
+        if (@alignOf(HttpResponseBody) != 8) @compileError("HttpResponseBody alignment mismatch");
+        if (@offsetOf(HttpResponseBody, "tag") != 24) @compileError("HttpResponseBody tag offset mismatch");
+    }
+    if (@sizeOf(usize) == 4) {
+        if (@sizeOf(HttpResponseBody) != 16) @compileError("HttpResponseBody size mismatch");
+        if (@alignOf(HttpResponseBody) != 4) @compileError("HttpResponseBody alignment mismatch");
+        if (@offsetOf(HttpResponseBody, "tag") != 12) @compileError("HttpResponseBody tag offset mismatch");
+    }
+}
+
 /// Tag discriminant for HostSecret.Load.
 pub const HostSecretLoadTag = enum(u8) {
     @"Failed" = 0,
@@ -2412,65 +2471,6 @@ comptime {
         if (@sizeOf(HostSecretLoad) != 16) @compileError("HostSecretLoad size mismatch");
         if (@alignOf(HostSecretLoad) != 8) @compileError("HostSecretLoad alignment mismatch");
         if (@offsetOf(HostSecretLoad, "tag") != 8) @compileError("HostSecretLoad tag offset mismatch");
-    }
-}
-
-/// Tag discriminant for Http.ResponseBody.
-pub const HttpResponseBodyTag = enum(u8) {
-    @"Bytes" = 0,
-    @"Empty" = 1,
-};
-
-/// Payload union for Http.ResponseBody.
-pub const HttpResponseBodyPayload = extern union {
-        @"bytes": RocListWith(u8, false),
-        @"empty": [0]u8,
-};
-
-/// Tag union: Http.ResponseBody
-pub const HttpResponseBody = if (@sizeOf(usize) == 4) extern struct {
-    payload: [12]u8 align(4),
-    tag: HttpResponseBodyTag,
-    pub fn payload_bytes(self: *const @This()) RocListWith(u8, false) {
-        const ptr: *const RocListWith(u8, false) = @ptrCast(@alignCast(&self.payload));
-        return ptr.*;
-    }
-    /// Recursively decrement Roc-owned payloads.
-    pub fn decref(self: @This(), roc_host: *RocHost) void {
-        decrefHttpResponseBody(self, roc_host);
-    }
-
-    /// Increment Roc-owned payloads.
-    pub fn incref(self: @This(), amount: isize) void {
-        increfHttpResponseBody(self, amount);
-    }
-} else extern struct {
-    payload: HttpResponseBodyPayload,
-    tag: HttpResponseBodyTag,
-    pub fn payload_bytes(self: *const @This()) RocListWith(u8, false) {
-        return self.payload.@"bytes";
-    }
-    /// Recursively decrement Roc-owned payloads.
-    pub fn decref(self: @This(), roc_host: *RocHost) void {
-        decrefHttpResponseBody(self, roc_host);
-    }
-
-    /// Increment Roc-owned payloads.
-    pub fn incref(self: @This(), amount: isize) void {
-        increfHttpResponseBody(self, amount);
-    }
-};
-
-comptime {
-    if (@sizeOf(usize) == 8) {
-        if (@sizeOf(HttpResponseBody) != 32) @compileError("HttpResponseBody size mismatch");
-        if (@alignOf(HttpResponseBody) != 8) @compileError("HttpResponseBody alignment mismatch");
-        if (@offsetOf(HttpResponseBody, "tag") != 24) @compileError("HttpResponseBody tag offset mismatch");
-    }
-    if (@sizeOf(usize) == 4) {
-        if (@sizeOf(HttpResponseBody) != 16) @compileError("HttpResponseBody size mismatch");
-        if (@alignOf(HttpResponseBody) != 4) @compileError("HttpResponseBody alignment mismatch");
-        if (@offsetOf(HttpResponseBody, "tag") != 12) @compileError("HttpResponseBody tag offset mismatch");
     }
 }
 
@@ -3669,6 +3669,14 @@ pub const HostRequestExecutionLimit_nanosecondsArgs = extern struct {
     arg0: u64,
 };
 
+/// Arguments for HostRequestExecution.limit_with_response!
+/// Roc signature: U64, Http.Response => U8
+/// Refcounted fields are owned by the hosted function.
+pub const HostRequestExecutionLimit_with_responseArgs = extern struct {
+    arg0: u64,
+    arg1: HttpResponse,
+};
+
 /// Arguments for HostRateCounter.add!
 /// Roc signature: U64, Str, U64 => HostRateCounter.Counted
 /// Refcounted fields are owned by the hosted function.
@@ -4010,9 +4018,9 @@ pub const HostTcpWrite_derivedArgs = extern struct {
 // Platform Type Aliases
 
 pub const HostFilesFileOpenedOpened = __AnonStruct_ffafd7a563bb9a6a;
-pub const HostRateCounterCountedCounted = __AnonStruct_8fa85c66081ab890;
 pub const HttpResponseHeaders = HttpResponseHeader;
 pub const HttpResponseTrailers = HttpResponseHeader;
+pub const HostRateCounterCountedCounted = __AnonStruct_8fa85c66081ab890;
 pub const HostTcpAcquire_originArg0 = __AnonStruct_7534307d805cbbcd;
 pub const HostTcpConfigure_originsArg0 = __AnonStruct_de1446c11164b88b;
 pub const HostTcpPoolArg0 = __AnonStruct_f35e5645cca1b32b;
@@ -4289,38 +4297,6 @@ pub const HostRequestExecutionElapsedRelease = struct {
     }
 };
 
-fn decrefHostSecretLoad(value: HostSecretLoad, roc_host: *RocHost) void {
-    _ = roc_host;
-    switch (value.tag) {
-        .@"Failed" => {},
-        .@"Loaded" => {},
-        .@"NotFound" => {},
-        .@"NotSet" => {},
-        .@"PermissionDenied" => {},
-        .@"TableFull" => {},
-        .@"TooLarge" => {},
-    }
-}
-
-fn increfHostSecretLoad(value: HostSecretLoad, amount: isize) void {
-    _ = amount;
-    switch (value.tag) {
-        .@"Failed" => {},
-        .@"Loaded" => {},
-        .@"NotFound" => {},
-        .@"NotSet" => {},
-        .@"PermissionDenied" => {},
-        .@"TableFull" => {},
-        .@"TooLarge" => {},
-    }
-}
-
-pub const HostSecretLoadRelease = struct {
-    pub fn release(value: HostSecretLoad, roc_host: *RocHost) void {
-        value.decref(roc_host);
-    }
-};
-
 pub const HttpResponseRelease = struct {
     pub fn release(value: HttpResponse, roc_host: *RocHost) void {
         value.decref(roc_host);
@@ -4353,6 +4329,38 @@ pub const HttpResponseBodyRelease = struct {
 
 pub const HttpResponseHeaderRelease = struct {
     pub fn release(value: HttpResponseHeader, roc_host: *RocHost) void {
+        value.decref(roc_host);
+    }
+};
+
+fn decrefHostSecretLoad(value: HostSecretLoad, roc_host: *RocHost) void {
+    _ = roc_host;
+    switch (value.tag) {
+        .@"Failed" => {},
+        .@"Loaded" => {},
+        .@"NotFound" => {},
+        .@"NotSet" => {},
+        .@"PermissionDenied" => {},
+        .@"TableFull" => {},
+        .@"TooLarge" => {},
+    }
+}
+
+fn increfHostSecretLoad(value: HostSecretLoad, amount: isize) void {
+    _ = amount;
+    switch (value.tag) {
+        .@"Failed" => {},
+        .@"Loaded" => {},
+        .@"NotFound" => {},
+        .@"NotSet" => {},
+        .@"PermissionDenied" => {},
+        .@"TableFull" => {},
+        .@"TooLarge" => {},
+    }
+}
+
+pub const HostSecretLoadRelease = struct {
+    pub fn release(value: HostSecretLoad, roc_host: *RocHost) void {
         value.decref(roc_host);
     }
 };
@@ -4973,6 +4981,13 @@ pub extern fn roxum_request_execution_elapsed() callconv(.c) HostRequestExecutio
 /// Hosted symbol for HostRequestExecution.limit_nanoseconds!
 /// Roc signature: U64 => Bool
 pub extern fn roxum_request_execution_limit(arg0: u64) callconv(.c) bool;
+
+/// Hosted symbol for HostRequestExecution.limit_with_response!
+/// Roc signature: U64, Http.Response => U8
+/// Owned arguments. Release each exactly once before returning, unless it is
+/// moved into storage or into the result:
+///     arg1.decref(roc_host);
+pub extern fn roxum_request_execution_limit_with_response(arg0: u64, arg1: HttpResponse) callconv(.c) u8;
 
 /// Hosted symbol for HostRateCounter.add!
 /// Roc signature: U64, Str, U64 => HostRateCounter.Counted

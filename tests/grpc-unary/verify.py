@@ -4,7 +4,7 @@ import socket
 import time
 import struct
 from h2.connection import H2Connection
-from h2.events import StreamReset, StreamEnded, DataReceived, TrailersReceived
+from h2.events import StreamReset, StreamEnded, DataReceived, TrailersReceived, ResponseReceived
 import json
 import pathlib
 import select
@@ -82,26 +82,39 @@ def verify(executable, unix):
                     def no_forbidden_work():
                         text = log_text()
                         assert 'forbidden-' not in text and 'Roc crashed:' not in text, text
-                    def reset(stream):
+                    def deadline_response(stream):
+                        status = None
+                        http_status = None
                         while True:
                             packet = sock.recv(65536)
                             assert packet, "unexpected connection close"
-                            events = h2.receive_data(packet)
-                            for event in events:
-                                if isinstance(event, StreamReset) and event.stream_id == stream:
-                                    assert event.error_code == 8, event
+                            for event in h2.receive_data(packet):
+                                if getattr(event, 'stream_id', None) != stream:
+                                    continue
+                                assert not isinstance(event, StreamReset), event
+                                if isinstance(event, ResponseReceived):
+                                    http_status = dict(event.headers).get(b':status')
+                                if isinstance(event, TrailersReceived):
+                                    status = dict(event.headers).get(b'grpc-status')
+                                    assert dict(event.headers).get(b'grpc-message') == b'deadline%20exceeded'
+                                if isinstance(event, DataReceived):
+                                    assert not event.data, 'expired RPC returned a message'
+                                if isinstance(event, StreamEnded):
+                                    assert http_status == b'200' and status == b'4', (http_status, status)
+                                    # Complete the still-open request half after receiving the error.
+                                    if stream in (1, 3): h2.end_stream(stream)
+                                    sock.sendall(h2.data_to_send())
                                     return
-                                assert not (isinstance(event, StreamEnded) and event.stream_id == stream), 'expired request returned a reply'
                     # Zero and a finite deadline both expire while input is incomplete.
                     begin(1, '0n')
-                    reset(1)
+                    deadline_response(1)
                     begin(3, '50m')
-                    reset(3)
+                    deadline_response(3)
                     # Deadline expiry and client RST both abandon suspended application work.
                     payload = service_pb2.Greeting(name='must-timeout').SerializeToString()
                     begin(5, '500m', payload)
                     started('must-timeout')
-                    reset(5)
+                    deadline_response(5)
                     begin(7, None, service_pb2.Greeting(name='must-cancel').SerializeToString())
                     started('must-cancel')
                     h2.reset_stream(7)
@@ -110,7 +123,7 @@ def verify(executable, unix):
                     no_forbidden_work()
                     assert process.poll() is None, 'cancelled handler resumed'
                     begin(9, '20m', service_pb2.Greeting(name='must-not-start').SerializeToString(), delayed=True)
-                    reset(9)
+                    deadline_response(9)
                     begin(11, None, service_pb2.Greeting(name='after').SerializeToString())
                     output = b''
                     status = None

@@ -45,8 +45,8 @@ limits: { http2_execution: Server.ExecutionLimit.Milliseconds(5_000) },
 The default is `Server.ExecutionLimit.Unlimited`. Finite values take 1 to
 18,446,744,073,709 milliseconds; zero or larger values stop startup. The duration
 starts when initial headers complete and includes body waits, queueing and
-handler execution. Expiry resets only that stream and cancels suspended effects;
-it cannot preempt arbitrary Roc computation. Detection follows scheduler ticks
+handler execution. Expiry cancels suspended effects and resets only that stream
+unless an expiry response is registered; it cannot preempt arbitrary Roc computation. Detection follows scheduler ticks
 and checks at request conversion and response admission, not a real-time guarantee.
 Once a finite response has been admitted, its existing response-write timeout
 governs delivery even if the execution duration later elapses. A valid setting
@@ -61,7 +61,7 @@ origin. These return `Err(Unavailable)` in `init!` and on HTTP/1. For example,
 time spent receiving the body or queueing is already charged. Repeated calls
 can only shorten the current deadline, including the listener's cap. Zero or an
 already-elapsed duration terminates the request without returning to Roc code;
-expiry resets the stream rather than producing an HTTP response or gRPC status.
+expiry resets the stream unless an expiry response has been registered.
 
 The elapsed-time operation also checks expiry before returning. Duration addition
 saturates at `U64.highest`; a large value cannot remove an existing limit. These
@@ -78,6 +78,18 @@ streams, with 16 KiB field sections and at most 2 MiB per finite response. Input
 and conversion storage have a 16 MiB connection budget; the protocol session and
 pending output have another 16 MiB budget. A shared 128 MiB worker ceiling covers
 HTTP/2 transport allocations, separately from Roc request-memory accounting.
+
+`RequestExecution.limit_with_response!(duration, response)` additionally registers
+an `Http.Response` to send if execution expires. Build a finite response directly,
+or convert a finite reply with `Respond.to_response`. The host validates and copies
+it before changing the deadline; `InvalidResponse` leaves the prior configuration
+unchanged. Successful repeated calls replace the response while only tightening
+the deadline. Normal response commitment discards it. Expiry bypasses response
+middleware and cancels the request, so it cannot execute an application callback.
+Client reset and I/O timeout do not use this response. Delivery still depends on
+connection memory, peer availability, and write timeout. Register it before body
+waits; expiry before registration still resets the stream.
+
 Exhausted stream/input limits reset streams; connection or worker allocation
 failure can close a connection. Header/body timeouts and pending-response write
 timeouts bound incomplete work. An unfinished header block closes the connection;

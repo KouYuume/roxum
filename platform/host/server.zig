@@ -519,6 +519,7 @@ fn RequestFiber(comptime Environment: type) type {
         /// When the Roc thread took the request from the queue.
         started_at: u64 = 0,
         http2_stream_attempted: bool = false,
+        http2_semantics: bridge.ResponseRequestSemantics = bridge.ResponseRequestSemantics.regular,
         http2_body: struct {
             offset: usize = 0,
             whole_limit: u64 = 0,
@@ -647,6 +648,40 @@ fn RequestFiber(comptime Environment: type) type {
             self.thread.io.finishHttp2(self.dispatch, if (failed) access_log.Outcome.encode_failed else null);
         }
 
+        fn requestExecutionResponse(ptr: *anyopaque, duration: u64, response: bridge.HttpResponse, roc_host: *bridge.RocHost) @import("effect/request_execution.zig").Result {
+            const Result = @import("effect/request_execution.zig").Result;
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            const item = &self.shared.handoff.connections[self.dispatch.slot];
+            item.lock.lock();
+            defer item.lock.unlock();
+            const protocol = item.http2 orelse {
+                response.decref(roc_host);
+                return Result.closed;
+            };
+            const ticket = self.dispatch.http2.?;
+            const now = net.monotonicNanoseconds() catch diagnostics.fatal("monotonic clock read failed");
+            protocol.expire(now);
+            const id = protocol.streams.leases.runningStream(ticket);
+            if (protocol.failed or protocol.closed or id == null) {
+                response.decref(roc_host);
+                return Result.closed;
+            }
+            var owned = @import("bridge/http2_response.zig").OwnedResponse.init(response, roc_host, protocol.budget.allocator(), self.http2_semantics, .{
+                .header_bytes = protocol.owner.engine.limits.header_bytes,
+                .body_bytes = protocol.owner.engine.limits.response_bytes,
+            }) catch return Result.invalid;
+            defer owned.deinit();
+            var copied = @import("http2/deferred_response.zig").Response.init(protocol.budget.allocator(), protocol.owner.engine, id.?, owned.response.status, owned.headers, owned.body, owned.trailers) catch return Result.invalid;
+            if (!protocol.streams.leases.limitExecution(ticket, duration, std.math.maxInt(u64))) {
+                copied.deinit();
+                return Result.closed;
+            }
+            protocol.streams.clearExpiryResponse(ticket);
+            protocol.streams.entries[ticket.slot].expiry_response = copied;
+            protocol.expire(net.monotonicNanoseconds() catch diagnostics.fatal("monotonic clock read failed"));
+            return if (protocol.streams.leases.runningStream(ticket) == null) Result.closed else Result.installed;
+        }
+
         fn requestExecution(ptr: *anyopaque, duration: ?u64) ?u64 {
             const self: *Self = @ptrCast(@alignCast(ptr));
             const item = &self.shared.handoff.connections[self.dispatch.slot];
@@ -760,9 +795,10 @@ fn RequestFiber(comptime Environment: type) type {
                 break :blk try protocol.owner.requestMetadataOwned(&protocol.streams, ticket, body_token, remote, id.slice(), .{ .roc_host = &self.roc_host, .try_alloc = runtime.tryAllocWithHost });
             };
             const semantics = if (request.method == bridge.HttpMethod.head) bridge.ResponseRequestSemantics.head else bridge.ResponseRequestSemantics.regular;
+            self.http2_semantics = semantics;
             const writer = @import("effect/response_writer.zig");
             const locals = fiber.currentLocals() orelse unreachable;
-            locals.request_execution = .{ .context = self, .apply = requestExecution };
+            locals.request_execution = .{ .context = self, .apply = requestExecution, .limit_response = requestExecutionResponse };
             defer locals.request_execution = null;
             writer.activate(.{ .context = self, .start = refuseHttp2Stream, .write = refuseHttp2Write, .abort = refuseHttp2Abort });
             const answered = bridge.rocHandle(self.shared.model_root.retainForHandle(), request);
@@ -776,13 +812,17 @@ fn RequestFiber(comptime Environment: type) type {
             item.lock.lock();
             defer item.lock.unlock();
             const protocol = item.http2 orelse unreachable;
-            if (protocol.access[ticket.slot]) |*entry| {
-                entry.route.set(answered.route.asSlice());
-                entry.status = answered.response.status;
-                entry.body_bytes = if (semantics == bridge.ResponseRequestSemantics.head) 0 else switch (answered.response.body.tag) {
-                    bridge.HttpResponseBodyTag.Bytes => answered.response.body.payload_bytes().items().len,
-                    else => 0,
-                };
+            // Expiry may already have submitted its response while pure Roc
+            // computation continued. Its access fields belong to that response.
+            if (protocol.streams.leases.runningStream(ticket) != null) {
+                if (protocol.access[ticket.slot]) |*entry| {
+                    entry.route.set(answered.route.asSlice());
+                    entry.status = answered.response.status;
+                    entry.body_bytes = if (semantics == bridge.ResponseRequestSemantics.head) 0 else switch (answered.response.body.tag) {
+                        bridge.HttpResponseBodyTag.Bytes => answered.response.body.payload_bytes().items().len,
+                        else => 0,
+                    };
+                }
             }
             try protocol.owner.respondOwnedWithDebug(&protocol.streams, ticket, answered.response, &self.roc_host, semantics, true);
             protocol.deadlines[ticket.slot] = (net.monotonicNanoseconds() catch 0) +| protocol.write_timeout;

@@ -9,8 +9,10 @@ checks decoded values, binary trailers, application status text, malformed and
 oversized requests, invalid application outputs, unknown methods, and successful
 calls after failures. Framing and metadata parser corpora remain in
 `tests/grpc-wire`; timeout parsing, pre-body expiry, stale metadata-time deadlines, and suspended
-handler cancellation are covered here. Final deadline-status delivery and proxy
-deployment acceptance remain subsequent work.
+handler cancellation are covered here. Raw HTTP/2 assertions require HTTP 200,
+no response message, and final `grpc-status: 4` on expiry; a client-local timeout
+or stream reset cannot satisfy them. Proxy deployment acceptance remains
+subsequent work.
 
 Run `python3 tools/check.py --only test-grpc-unary` for all backend/allocator
 combinations. `test_generator.py` covers opt-in generation and atomic rejection

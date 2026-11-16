@@ -635,6 +635,30 @@ def verify_execution_limit(executable, unix, request_limits=False, metadata=Fals
                         time.sleep(.01)
                         stream += 2
 
+                    if request_limits:
+                        for route, status, body in (('/expiry-zero', '504', b'immediate'),
+                                                    ('/expiry-invalid', '504', b'original'),
+                                                    ('/expiry-replace', '503', b'replacement'),
+                                                    ('/expiry-normal', '200', b'normal')):
+                            stream += 2
+                            request(stream, route)
+                            receive(lambda: stream in ended or stream in reset)
+                            assert stream not in reset, route
+                            assert headers[stream][':status'] == status and bodies[stream] == body, route
+                        # Expired execution is cleaned up while its response waits for credit.
+                        client.update_settings({SettingCodes.INITIAL_WINDOW_SIZE: 0})
+                        flush()
+                        stream += 2
+                        request(stream, '/expiry-zero')
+                        receive(lambda: stream in headers)
+                        assert stream not in ended and not bodies[stream]
+                        time.sleep(.3)
+                        client.increment_flow_control_window(1024, stream_id=stream)
+                        flush()
+                        receive(lambda: stream in ended or stream in reset)
+                        assert stream not in reset and bodies[stream] == b'immediate'
+                        assert headers[stream][':status'] == '504'
+
                     if not request_limits:
                         stream += 2
                         request(stream, '/execution-cap')

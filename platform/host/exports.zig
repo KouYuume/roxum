@@ -21,6 +21,7 @@ const tcp_effect = @import("effect/tcp.zig");
 pub fn exportRuntime() void {
     @export(&request_execution_effect.hostedElapsed, .{ .name = "roxum_request_execution_elapsed", .visibility = std.builtin.SymbolVisibility.hidden });
     @export(&request_execution_effect.hostedLimit, .{ .name = "roxum_request_execution_limit", .visibility = std.builtin.SymbolVisibility.hidden });
+    @export(&request_execution_effect.hostedLimitWithResponse, .{ .name = "roxum_request_execution_limit_with_response", .visibility = std.builtin.SymbolVisibility.hidden });
     @export(&runtime.rocAlloc, .{ .name = "roc_alloc" });
     @export(&runtime.rocDealloc, .{ .name = "roc_dealloc" });
     @export(&runtime.rocRealloc, .{ .name = "roc_realloc" });

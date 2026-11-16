@@ -10,7 +10,10 @@ pub const Active = struct {
     /// Null duration reads elapsed time; a duration also tightens the deadline.
     /// Null result means execution ended and must not return to application code.
     apply: *const fn (*anyopaque, ?u64) ?u64,
+    limit_response: ?*const fn (*anyopaque, u64, abi.HttpResponse, *abi.RocHost) Result = null,
 };
+
+pub const Result = enum { installed, invalid, closed };
 
 fn active() ?Active {
     const locals = fiber.currentLocals() orelse return null;
@@ -41,6 +44,29 @@ pub fn hostedLimit(duration: u64) callconv(std.builtin.CallingConvention.c) bool
     const current = active() orelse return false;
     _ = apply(current, duration);
     return true;
+}
+
+pub fn hostedLimitWithResponse(duration: u64, response: abi.HttpResponse) callconv(std.builtin.CallingConvention.c) u8 {
+    const context = @import("../allocator/context.zig").current() orelse @panic("allocator context is not set");
+    var roc_host = @import("../runtime.zig").makeRocHost(@ptrCast(context.host_allocator));
+    const current = active();
+    if (current) |value| {
+        if (value.limit_response) |callback| {
+            // The callback consumes the response before cancellation can abandon
+            // the fiber stack. No deferred Roc cleanup may follow this point.
+            switch (callback(value.context, duration, response, &roc_host)) {
+                Result.installed => return 0,
+                Result.invalid => return 2,
+                Result.closed => {
+                    const target = fiber.current() orelse unreachable;
+                    _ = target.stop.cmpxchgStrong(fiber.Stop.none, fiber.Stop.client_gone, std.builtin.AtomicOrder.acq_rel, std.builtin.AtomicOrder.acquire);
+                    fiber_wait.cancelCurrent();
+                },
+            }
+        }
+    }
+    response.decref(&roc_host);
+    return 1;
 }
 
 test "execution controls are unavailable outside a request fiber" {

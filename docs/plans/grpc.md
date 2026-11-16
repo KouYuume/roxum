@@ -196,11 +196,9 @@ Unary envelopes, bounded ASCII/binary metadata, status messages and HTTP reply
 construction, typed Unary handlers, and opt-in generated service registration.
 Independent clients verify TCP/Unix behavior across compiler
 backends and allocators, including malformed input and connection survival.
-This does not satisfy the full milestone gate below: pre-body
-deadline status delivery and final proxy/client acceptance remain open. Host
-expiry currently resets streams; the integration must still deliver an appropriate
-gRPC deadline status through a generic host capability before the release gate
-is satisfied.
+Pre-body deadline status delivery is implemented through a generic host
+expiry-response capability. The full milestone gate below is not yet satisfied:
+final proxy/client acceptance and distribution verification remain open. Expiry before integration registration still uses the host stream reset.
 
 Add a separately versioned `roxum-grpc` integration using the core capabilities
 and generated codecs. Provide typed service registration, exactly one request
