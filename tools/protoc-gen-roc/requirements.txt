@@ -1,0 +1,2 @@
+# Official platform-independent Python wheel, BSD-3-Clause.
+https://files.pythonhosted.org/packages/py3/p/protobuf/protobuf-6.33.5-py3-none-any.whl --hash=sha256:69915a973dd0f60f31a08b8318b73eab2bd6a392c79184b3612226b0a3f8ec02

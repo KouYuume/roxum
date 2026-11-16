@@ -13,7 +13,10 @@ routes =
 			match tag {
 				Limit(limit) => Ok(RateLimit.Check.{
 					counter: model.per_minute,
-					key: "search:${RateLimit.client_ip(head.remote_addr.ip)}",
+					key: match head.remote_addr {
+						Tcp({ ip, .. }) => "search:${RateLimit.client_ip(ip)}"
+						Unix => "search:unix"
+					},
 					limit,
 					on_full: RateLimit.OnFull.Allow,
 				})
@@ -57,3 +60,5 @@ window's keys end with it, so the counter opens again when the attack stops.
 Each process has its own counts, and a restart starts from nothing. All threads of a process share them. With the default
 of one process that is the whole instance; with several instances, or with `processes` above 1, the limit applies to
 each process. For a limit across instances, keep the counts in a shared store.
+
+Unix peers have no IP address. The `unix` key above shares one limit across them; use an authenticated application identity when per-client limits are needed.

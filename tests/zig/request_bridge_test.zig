@@ -216,7 +216,7 @@ test "request bridge constructs normalized owned request" {
         "abc",
         request.body.payload_bytes().items(),
     );
-    try std.testing.expectEqual(@as(u16, 54321), request.remote_addr.port);
+    try std.testing.expectEqual(@as(u16, 54321), request.remote_addr.payload_tcp().port);
     try std.testing.expectEqualStrings("9f86d081884c7d659a2feaa0c55ad015", request.request_id.asSlice());
 }
 
@@ -658,7 +658,7 @@ test "request bridge preserves all eight IPv6 segments" {
     );
     defer request.decref(&roc_host);
 
-    const actual = request.remote_addr.ip.payload_v6();
+    const actual = request.remote_addr.payload_tcp().ip.payload_v6();
     try std.testing.expectEqual(segments[0], actual._0);
     try std.testing.expectEqual(segments[1], actual._1);
     try std.testing.expectEqual(segments[2], actual._2);
@@ -669,7 +669,7 @@ test "request bridge preserves all eight IPv6 segments" {
     try std.testing.expectEqual(segments[7], actual._7);
     try std.testing.expectEqual(
         std.math.maxInt(u16),
-        request.remote_addr.port,
+        request.remote_addr.payload_tcp().port,
     );
 }
 
@@ -837,5 +837,456 @@ test "request byte values share one allocation that the last value releases" {
             values[if (reverse) values.len - 1 - position else position].decref(&host);
         }
         try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
+    }
+}
+
+test "metadata entry owns input and rolls back every failed allocation" {
+    const Version = @TypeOf(@as(bridge.RequestMetadata, undefined).version);
+    var reached_success = false;
+    for (0..16) |fail_index| {
+        var environment = TestEnvironment{ .allocator = std.testing.allocator, .fail_index = fail_index };
+        var roc_host = environment.rocHost();
+        var target = "/owned?query=bytes".*;
+        var value = "borrowed header value".*;
+        const request = bridge.requestFromMetadata(.{
+            .method = bridge.HttpMethod.get,
+            .version = Version.http11,
+            .target = &target,
+            .headers = &.{.{ .name = "X-Value", .value = &value }},
+        }, "body", bridge.RemoteAddress.unix, "id", TestEnvironment.requestHost(&roc_host)) catch |err| {
+            try std.testing.expectEqual(error.OutOfMemory, err);
+            try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
+            continue;
+        };
+        var released = false;
+        errdefer if (!released) request.decref(&roc_host);
+        @memset(&target, 'x');
+        @memset(&value, 'x');
+        try std.testing.expectEqualStrings("/owned?query=bytes", request.raw_target.items());
+        try std.testing.expectEqualStrings("/owned", request.path.asSlice());
+        try std.testing.expectEqualStrings("query=bytes", request.query.items());
+        try std.testing.expectEqualStrings("x-value", request.headers.items()[0].name.asSlice());
+        try std.testing.expectEqualStrings("borrowed header value", request.headers.items()[0].value.items());
+        request.decref(&roc_host);
+        released = true;
+        try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
+        reached_success = true;
+        break;
+    }
+    try std.testing.expect(reached_success);
+}
+
+test "metadata entry rejects unsupported target forms and noncanonical paths before allocation" {
+    const Version = @TypeOf(@as(bridge.RequestMetadata, undefined).version);
+    for ([_][]const u8{ "", "relative", "http://example.com/", "/a//b", "/a/../b", "/./" }) |target| {
+        var environment = TestEnvironment{ .allocator = std.testing.allocator };
+        var roc_host = environment.rocHost();
+        try std.testing.expectError(error.InvalidTarget, bridge.requestFromMetadata(.{ .method = bridge.HttpMethod.get, .version = Version.http11, .target = target, .headers = &.{} }, "", bridge.RemoteAddress.unix, "", TestEnvironment.requestHost(&roc_host)));
+        try std.testing.expectEqual(@as(usize, 0), environment.allocation_attempts);
+    }
+}
+
+test "metadata entry preserves root and asterisk requests including empty values" {
+    const Version = @TypeOf(@as(bridge.RequestMetadata, undefined).version);
+    const Case = struct { target: []const u8, method: bridge.HttpMethod, version: Version, body: []const u8, id: []const u8 };
+    for ([_]Case{
+        .{ .target = "/", .method = bridge.HttpMethod.get, .version = Version.http11, .body = "payload", .id = "request-id" },
+        .{ .target = "*", .method = bridge.HttpMethod.options, .version = Version.http10, .body = "", .id = "" },
+        .{ .target = "/rpc", .method = bridge.HttpMethod.post, .version = Version.http20, .body = "rpc bytes", .id = "http2-id" },
+    }) |case| {
+        var environment = TestEnvironment{ .allocator = std.testing.allocator };
+        var roc_host = environment.rocHost();
+        {
+            const request = try bridge.requestFromMetadata(.{
+                .method = case.method,
+                .version = case.version,
+                .target = case.target,
+                .headers = &.{},
+            }, case.body, .{ .v4 = .{ .octets = .{ 127, 0, 0, 1 }, .port = 4321 } }, case.id, TestEnvironment.requestHost(&roc_host));
+            defer request.decref(&roc_host);
+            try std.testing.expectEqual(case.method, request.method);
+            try std.testing.expectEqual(case.version, request.version);
+            try std.testing.expectEqualStrings(case.target, request.raw_target.items());
+            try std.testing.expectEqualStrings(case.target, request.path.asSlice());
+            try std.testing.expectEqual(@as(usize, 0), request.query.items().len);
+            try std.testing.expectEqual(@as(usize, 0), request.headers.items().len);
+            try std.testing.expectEqualStrings(case.id, request.request_id.asSlice());
+            try std.testing.expectEqual(@as(u16, 4321), request.remote_addr.payload_tcp().port);
+            if (case.body.len == 0) {
+                try std.testing.expectEqual(bridge.HttpRequestBodyTag.Empty, request.body.tag);
+            } else {
+                try std.testing.expectEqual(bridge.HttpRequestBodyTag.Bytes, request.body.tag);
+                try std.testing.expectEqualStrings(case.body, request.body.payload_bytes().items());
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
+    }
+}
+
+const http2_fields = [_]bridge.RequestMetadataHeader{
+    .{ .name = ":method", .value = "POST" },
+    .{ .name = ":scheme", .value = "https" },
+    .{ .name = ":path", .value = "/rpc?name=%2F" },
+    .{ .name = ":authority", .value = "[::1]:443" },
+};
+
+test "HTTP/2 metadata maps control fields and joins zero one or multiple cookie fields" {
+    // The cookie join boundary is one field; zero, one, and two are distinct.
+    for (0..3) |cookie_count| {
+        var environment = TestEnvironment{ .allocator = std.testing.allocator };
+        var roc_host = environment.rocHost();
+        var fields = http2_fields ++ [_]bridge.RequestMetadataHeader{
+            .{ .name = "x-repeat", .value = "first" },
+            .{ .name = "x-repeat", .value = "second" },
+            .{ .name = "cookie", .value = "a=1" },
+            .{ .name = "cookie", .value = "b=2" },
+        };
+        const value = try bridge.requestFromHttp2(std.testing.allocator, fields[0 .. 6 + cookie_count], "body", bridge.RemoteAddress.unix, "id", TestEnvironment.requestHost(&roc_host));
+        {
+            defer value.decref(&roc_host);
+            try std.testing.expectEqual(bridge.HttpMethod.post, value.method);
+            try std.testing.expectEqual(@as(u8, 2), @backingInt(value.version));
+            try std.testing.expectEqualStrings("/rpc?name=%2F", value.raw_target.items());
+            try std.testing.expectEqualStrings("/rpc", value.path.asSlice());
+            try std.testing.expectEqualStrings("name=%2F", value.query.items());
+            const headers = value.headers.items();
+            try std.testing.expectEqual(@as(usize, if (cookie_count == 0) 3 else 4), headers.len);
+            try std.testing.expectEqualStrings("host", headers[0].name.asSlice());
+            try std.testing.expectEqualStrings("[::1]:443", headers[0].value.items());
+            try std.testing.expectEqualStrings("first", headers[1].value.items());
+            try std.testing.expectEqualStrings("second", headers[2].value.items());
+            if (cookie_count != 0) try std.testing.expectEqualStrings(if (cookie_count == 1) "a=1" else "a=1; b=2", headers[3].value.items());
+            try std.testing.expectEqualStrings("body", value.body.payload_bytes().items());
+            try std.testing.expectEqualStrings("id", value.request_id.asSlice());
+        }
+        try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
+    }
+}
+
+test "HTTP/2 method domain and asterisk target follow the existing application contract" {
+    const Case = struct { text: []const u8, method: bridge.HttpMethod };
+    for ([_]Case{
+        .{ .text = "GET", .method = bridge.HttpMethod.get },
+        .{ .text = "HEAD", .method = bridge.HttpMethod.head },
+        .{ .text = "POST", .method = bridge.HttpMethod.post },
+        .{ .text = "PUT", .method = bridge.HttpMethod.put },
+        .{ .text = "DELETE", .method = bridge.HttpMethod.delete },
+        .{ .text = "PATCH", .method = bridge.HttpMethod.patch },
+        .{ .text = "OPTIONS", .method = bridge.HttpMethod.options },
+        .{ .text = "QUERY", .method = bridge.HttpMethod.query },
+    }) |case| {
+        var fields = http2_fields;
+        fields[0].value = case.text;
+        fields[2].value = if (case.method == bridge.HttpMethod.options) "*" else "/";
+        var environment = TestEnvironment{ .allocator = std.testing.allocator };
+        var roc_host = environment.rocHost();
+        const value = try bridge.requestFromHttp2(std.testing.allocator, &fields, "", bridge.RemoteAddress.unix, "", TestEnvironment.requestHost(&roc_host));
+        defer value.decref(&roc_host);
+        try std.testing.expectEqual(case.method, value.method);
+        try std.testing.expectEqualStrings(fields[2].value, value.path.asSlice());
+    }
+}
+
+test "HTTP/2 mapping rejects invalid metadata before Roc allocation" {
+    const H = bridge.RequestMetadataHeader;
+    const Case = struct { fields: []const H, expected: anyerror };
+    for ([_]Case{
+        // Missing, duplicate, unknown, and out-of-order control fields.
+        .{ .fields = &.{}, .expected = error.InvalidHeaders },
+        .{ .fields = http2_fields[1..], .expected = error.InvalidHeaders },
+        .{ .fields = &.{ http2_fields[0], http2_fields[2], http2_fields[3] }, .expected = error.InvalidHeaders },
+        .{ .fields = &.{ http2_fields[0], http2_fields[1], http2_fields[3] }, .expected = error.InvalidHeaders },
+        .{ .fields = &http2_fields ++ &[_]H{http2_fields[0]}, .expected = error.InvalidHeaders },
+        .{ .fields = &http2_fields ++ &[_]H{.{ .name = ":status", .value = "200" }}, .expected = error.InvalidHeaders },
+        .{ .fields = &.{ .{ .name = "x", .value = "y" }, http2_fields[0] }, .expected = error.InvalidHeaders },
+        .{ .fields = &.{.{ .name = ":method", .value = "CONNECT" }}, .expected = error.UnsupportedMethod },
+        // Authority ambiguity is rejected, rather than leaking a conflicting Host.
+        .{ .fields = http2_fields[0..3], .expected = error.InvalidHeaders },
+        .{ .fields = &http2_fields ++ &[_]H{.{ .name = "host", .value = "other.example" }}, .expected = error.InvalidHeaders },
+        .{ .fields = &http2_fields ++ &[_]H{ .{ .name = "host", .value = "[::1]:443" }, .{ .name = "host", .value = "[::1]:443" } }, .expected = error.InvalidHeaders },
+    }) |case| {
+        var environment = TestEnvironment{ .allocator = std.testing.allocator };
+        var roc_host = environment.rocHost();
+        try std.testing.expectError(case.expected, bridge.requestFromHttp2(std.testing.allocator, case.fields, "", bridge.RemoteAddress.unix, "", TestEnvironment.requestHost(&roc_host)));
+        try std.testing.expectEqual(@as(usize, 0), environment.allocation_attempts);
+    }
+    const Invalid = struct { index: usize, value: []const u8, expected: anyerror };
+    for ([_]Invalid{
+        .{ .index = 0, .value = "TRACE", .expected = error.UnsupportedMethod },
+        .{ .index = 0, .value = "CUSTOM", .expected = error.UnsupportedMethod },
+        .{ .index = 0, .value = "get", .expected = error.UnsupportedMethod },
+        .{ .index = 1, .value = "", .expected = error.InvalidHeaders },
+        .{ .index = 1, .value = "1http", .expected = error.InvalidHeaders },
+        .{ .index = 1, .value = "ht tp", .expected = error.InvalidHeaders },
+        .{ .index = 2, .value = "", .expected = error.InvalidTarget },
+        .{ .index = 2, .value = "*", .expected = error.InvalidTarget },
+        .{ .index = 2, .value = "http://example.com/", .expected = error.InvalidTarget },
+        .{ .index = 2, .value = "/a#fragment", .expected = error.InvalidTarget },
+        .{ .index = 2, .value = "/bad%2", .expected = error.InvalidTarget },
+        .{ .index = 2, .value = "/bad%GG", .expected = error.InvalidTarget },
+        .{ .index = 2, .value = "/a\r\nb", .expected = error.InvalidTarget },
+        .{ .index = 2, .value = "/a//b", .expected = error.InvalidTarget },
+        .{ .index = 2, .value = "/a/../b", .expected = error.InvalidTarget },
+        .{ .index = 3, .value = "", .expected = error.InvalidHeaders },
+        .{ .index = 3, .value = "user@example.com", .expected = error.InvalidHeaders },
+        .{ .index = 3, .value = "example.com:65536", .expected = error.InvalidHeaders },
+    }) |case| {
+        var fields = http2_fields;
+        fields[case.index].value = case.value;
+        var environment = TestEnvironment{ .allocator = std.testing.allocator };
+        var roc_host = environment.rocHost();
+        try std.testing.expectError(case.expected, bridge.requestFromHttp2(std.testing.allocator, &fields, "", bridge.RemoteAddress.unix, "", TestEnvironment.requestHost(&roc_host)));
+        try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
+    }
+}
+
+test "HTTP/2 authority fallback and matching Host produce one authority header" {
+    for ([_][]const u8{ "example.com:65534", "example.com:65535", "[::1]:443" }) |host_value| {
+        for ([_]bool{ false, true }) |with_authority| {
+            var fields = http2_fields ++ [_]bridge.RequestMetadataHeader{.{ .name = "host", .value = host_value }};
+            fields[3] = .{ .name = if (with_authority) ":authority" else "x-extra", .value = host_value };
+            var environment = TestEnvironment{ .allocator = std.testing.allocator };
+            var roc_host = environment.rocHost();
+            const value = try bridge.requestFromHttp2(std.testing.allocator, &fields, "", bridge.RemoteAddress.unix, "", TestEnvironment.requestHost(&roc_host));
+            defer value.decref(&roc_host);
+            try std.testing.expectEqualStrings(host_value, value.headers.items()[0].value.items());
+            try std.testing.expectEqual(@as(usize, if (with_authority) 1 else 2), value.headers.items().len);
+        }
+    }
+}
+
+fn http2ScratchAllocationCheck(allocator: std.mem.Allocator) !void {
+    const fields = http2_fields ++ [_]bridge.RequestMetadataHeader{
+        .{ .name = "cookie", .value = "a=1" },
+        .{ .name = "cookie", .value = "b=2" },
+    };
+    var environment = TestEnvironment{ .allocator = std.testing.allocator };
+    var roc_host = environment.rocHost();
+    const value = try bridge.requestFromHttp2(allocator, &fields, "body", bridge.RemoteAddress.unix, "id", TestEnvironment.requestHost(&roc_host));
+    value.decref(&roc_host);
+    try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
+}
+
+test "HTTP/2 scratch allocation failures release temporary storage" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, http2ScratchAllocationCheck, .{});
+}
+
+test "HTTP/2 Roc allocation failures roll back and input bytes are copied" {
+    var reached_success = false;
+    for (0..32) |fail_index| {
+        var host_value = "borrowed.example".*;
+        var cookie_value = "a=borrowed".*;
+        const fields = http2_fields[0..3].* ++ [_]bridge.RequestMetadataHeader{
+            .{ .name = ":authority", .value = &host_value },
+            .{ .name = "cookie", .value = &cookie_value },
+            .{ .name = "cookie", .value = "b=2" },
+        };
+        var environment = TestEnvironment{ .allocator = std.testing.allocator, .fail_index = fail_index };
+        var roc_host = environment.rocHost();
+        const value = bridge.requestFromHttp2(std.testing.allocator, &fields, "body", bridge.RemoteAddress.unix, "id", TestEnvironment.requestHost(&roc_host)) catch |err| {
+            try std.testing.expectEqual(error.OutOfMemory, err);
+            try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
+            continue;
+        };
+        @memset(&host_value, 'x');
+        @memset(&cookie_value, 'x');
+        {
+            defer value.decref(&roc_host);
+            try std.testing.expectEqualStrings("borrowed.example", value.headers.items()[0].value.items());
+            try std.testing.expectEqualStrings("a=borrowed; b=2", value.headers.items()[1].value.items());
+        }
+        try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
+        reached_success = true;
+        break;
+    }
+    try std.testing.expect(reached_success);
+}
+
+test "HTTP/2 Cookie joining preserves empty crumbs and interleaved field order" {
+    const fields = http2_fields ++ [_]bridge.RequestMetadataHeader{
+        .{ .name = "cookie", .value = "" },
+        .{ .name = "x-between", .value = "kept" },
+        .{ .name = "cookie", .value = "b=2" },
+        .{ .name = "cookie", .value = "" },
+    };
+    var environment = TestEnvironment{ .allocator = std.testing.allocator };
+    var roc_host = environment.rocHost();
+    const value = try bridge.requestFromHttp2(std.testing.allocator, &fields, "", bridge.RemoteAddress.unix, "", TestEnvironment.requestHost(&roc_host));
+    defer value.decref(&roc_host);
+    try std.testing.expectEqual(@as(usize, 3), value.headers.items().len);
+    try std.testing.expectEqualStrings("; b=2; ", value.headers.items()[1].value.items());
+    try std.testing.expectEqualStrings("x-between", value.headers.items()[2].name.asSlice());
+    try std.testing.expectEqualStrings("kept", value.headers.items()[2].value.items());
+}
+
+fn completedHttp2Input(budget: *bridge.Http2InputBudget, fields: []const bridge.RequestMetadataHeader, body: []const u8) !bridge.Http2Input {
+    var input = bridge.Http2Input.init(budget, .{ .header_bytes = 2048, .body_bytes = 4096 });
+    errdefer input.deinit();
+    for (fields) |field| try input.header(field);
+    try input.headersComplete();
+    try input.data(body);
+    try input.end();
+    return input;
+}
+
+test "HTTP/2 handoff owns request values after input release and budget reuse" {
+    for ([_][]const u8{ "", "finite body" }) |body| {
+        var budget = bridge.Http2InputBudget{ .backing = std.testing.allocator, .limit = 8192 };
+        const fields = http2_fields ++ [_]bridge.RequestMetadataHeader{
+            .{ .name = "cookie", .value = "a=1" },
+            .{ .name = "cookie", .value = "b=2" },
+        };
+        var input = try completedHttp2Input(&budget, &fields, body);
+        defer input.deinit();
+        var environment = TestEnvironment{ .allocator = std.testing.allocator };
+        var roc_host = environment.rocHost();
+        var id = "owned-request-id".*;
+        const value = try bridge.requestFromHttp2Input(&input, .{ .v4 = .{ .octets = .{ 127, 0, 0, 1 }, .port = 4321 } }, &id, TestEnvironment.requestHost(&roc_host));
+        {
+            defer value.decref(&roc_host);
+            try std.testing.expectEqual(@as(usize, 0), budget.used);
+            try std.testing.expect(input.headers() == null);
+            try std.testing.expect(input.body() == null);
+            const attempts = environment.allocation_attempts;
+            try std.testing.expectError(error.InvalidState, bridge.requestFromHttp2Input(&input, bridge.RemoteAddress.unix, "", TestEnvironment.requestHost(&roc_host)));
+            try std.testing.expectEqual(attempts, environment.allocation_attempts);
+            @memset(&id, 'x');
+            // Reusing the connection domain must not mutate the earlier request.
+            var replacement = try completedHttp2Input(&budget, &http2_fields, "replacement");
+            defer replacement.deinit();
+            const Version = @TypeOf(value.version);
+            try std.testing.expectEqual(Version.http20, value.version);
+            try std.testing.expectEqual(bridge.HttpMethod.post, value.method);
+            try std.testing.expectEqualStrings("/rpc?name=%2F", value.raw_target.items());
+            try std.testing.expectEqualStrings("/rpc", value.path.asSlice());
+            try std.testing.expectEqualStrings("name=%2F", value.query.items());
+            try std.testing.expectEqualStrings("[::1]:443", value.headers.items()[0].value.items());
+            try std.testing.expectEqualStrings("a=1; b=2", value.headers.items()[1].value.items());
+            try std.testing.expectEqualStrings("owned-request-id", value.request_id.asSlice());
+            try std.testing.expectEqual(@as(u16, 4321), value.remote_addr.payload_tcp().port);
+            if (body.len == 0) {
+                try std.testing.expectEqual(bridge.HttpRequestBodyTag.Empty, value.body.tag);
+            } else {
+                try std.testing.expectEqualStrings(body, value.body.payload_bytes().items());
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
+        try std.testing.expectEqual(@as(usize, 0), budget.used);
+    }
+}
+
+test "HTTP/2 handoff refuses incomplete and rejected input without consuming it" {
+    var budget = bridge.Http2InputBudget{ .backing = std.testing.allocator, .limit = 4096 };
+    var input = bridge.Http2Input.init(&budget, .{ .header_bytes = 1024, .body_bytes = 64 });
+    defer input.deinit();
+    var environment = TestEnvironment{ .allocator = std.testing.allocator };
+    var roc_host = environment.rocHost();
+    for (http2_fields) |field| try input.header(field);
+    const retained = budget.used;
+    const initial_phase = input.phase;
+    try std.testing.expectError(error.InvalidState, bridge.requestFromHttp2Input(&input, bridge.RemoteAddress.unix, "", TestEnvironment.requestHost(&roc_host)));
+    try std.testing.expectEqual(initial_phase, input.phase);
+    try std.testing.expectEqual(retained, budget.used);
+    try input.headersComplete();
+    try input.data("partial");
+    const before_eof = budget.used;
+    const body_phase = input.phase;
+    try std.testing.expectError(error.InvalidState, bridge.requestFromHttp2Input(&input, bridge.RemoteAddress.unix, "", TestEnvironment.requestHost(&roc_host)));
+    try std.testing.expectEqual(body_phase, input.phase);
+    try std.testing.expectEqual(before_eof, budget.used);
+    input.reject();
+    try std.testing.expectError(error.InvalidState, bridge.requestFromHttp2Input(&input, bridge.RemoteAddress.unix, "", TestEnvironment.requestHost(&roc_host)));
+    try std.testing.expectEqual(@as(usize, 0), budget.used);
+    try std.testing.expectEqual(@as(usize, 0), environment.allocation_attempts);
+}
+
+test "HTTP/2 handoff consumes invalid metadata and preserves another stream" {
+    var budget = bridge.Http2InputBudget{ .backing = std.testing.allocator, .limit = 8192 };
+    var peer = try completedHttp2Input(&budget, &http2_fields, "peer");
+    defer peer.deinit();
+    const peer_used = budget.used;
+    var fields = http2_fields;
+    fields[0].value = "CONNECT";
+    var input = try completedHttp2Input(&budget, &fields, "");
+    defer input.deinit();
+    var environment = TestEnvironment{ .allocator = std.testing.allocator };
+    var roc_host = environment.rocHost();
+    try std.testing.expectError(error.UnsupportedMethod, bridge.requestFromHttp2Input(&input, bridge.RemoteAddress.unix, "", TestEnvironment.requestHost(&roc_host)));
+    try std.testing.expectEqual(peer_used, budget.used);
+    try std.testing.expectEqualStrings("peer", peer.body().?);
+    try std.testing.expect(input.body() == null);
+    try std.testing.expectEqual(@as(usize, 0), environment.allocation_attempts);
+}
+
+test "HTTP/2 handoff scratch exhaustion releases only its input" {
+    var budget = bridge.Http2InputBudget{ .backing = std.testing.allocator, .limit = 8192 };
+    var peer = try completedHttp2Input(&budget, &http2_fields, "peer");
+    defer peer.deinit();
+    const peer_used = budget.used;
+    var input = try completedHttp2Input(&budget, &http2_fields, "input");
+    defer input.deinit();
+    budget.limit = budget.used;
+    var environment = TestEnvironment{ .allocator = std.testing.allocator };
+    var roc_host = environment.rocHost();
+    try std.testing.expectError(error.OutOfMemory, bridge.requestFromHttp2Input(&input, bridge.RemoteAddress.unix, "", TestEnvironment.requestHost(&roc_host)));
+    try std.testing.expectEqual(peer_used, budget.used);
+    try std.testing.expectEqualStrings("peer", peer.body().?);
+    try std.testing.expect(input.body() == null);
+    try std.testing.expectEqual(@as(usize, 0), environment.allocation_attempts);
+}
+
+test "HTTP/2 handoff rolls back every failed Roc allocation and frees connection input" {
+    var reached_success = false;
+    for (0..32) |fail_index| {
+        var budget = bridge.Http2InputBudget{ .backing = std.testing.allocator, .limit = 8192 };
+        const fields = http2_fields ++ [_]bridge.RequestMetadataHeader{
+            .{ .name = "cookie", .value = "a=1" },
+            .{ .name = "cookie", .value = "b=2" },
+        };
+        var input = try completedHttp2Input(&budget, &fields, "body");
+        defer input.deinit();
+        var environment = TestEnvironment{ .allocator = std.testing.allocator, .fail_index = fail_index };
+        var roc_host = environment.rocHost();
+        const value = bridge.requestFromHttp2Input(&input, bridge.RemoteAddress.unix, "id", TestEnvironment.requestHost(&roc_host)) catch |err| {
+            try std.testing.expectEqual(error.OutOfMemory, err);
+            try std.testing.expectEqual(@as(usize, 0), budget.used);
+            try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
+            try std.testing.expect(input.body() == null);
+            continue;
+        };
+        value.decref(&roc_host);
+        try std.testing.expectEqual(@as(usize, 0), budget.used);
+        try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
+        reached_success = true;
+        break;
+    }
+    try std.testing.expect(reached_success);
+}
+
+test "HTTP/2 handoff accounts for normalized fields and Cookie scratch at budget boundary" {
+    const fields = http2_fields ++ [_]bridge.RequestMetadataHeader{
+        .{ .name = "cookie", .value = "a=1" },
+        .{ .name = "cookie", .value = "b=2" },
+    };
+    // Three temporary field slots plus eight Cookie bytes, each with a 16-byte prefix.
+    const scratch_bytes = 3 * @sizeOf(bridge.RequestMetadataHeader) + 16 + 8 + 16;
+    for ([_]usize{ scratch_bytes - 1, scratch_bytes, scratch_bytes + 1 }) |available| {
+        var budget = bridge.Http2InputBudget{ .backing = std.testing.allocator, .limit = 8192 };
+        var input = try completedHttp2Input(&budget, &fields, "body");
+        defer input.deinit();
+        budget.limit = budget.used + available;
+        var environment = TestEnvironment{ .allocator = std.testing.allocator };
+        var roc_host = environment.rocHost();
+        const result = bridge.requestFromHttp2Input(&input, bridge.RemoteAddress.unix, "", TestEnvironment.requestHost(&roc_host));
+        if (available < scratch_bytes) {
+            try std.testing.expectError(error.OutOfMemory, result);
+            try std.testing.expectEqual(@as(usize, 0), environment.allocation_attempts);
+        } else {
+            const value = try result;
+            value.decref(&roc_host);
+        }
+        try std.testing.expectEqual(@as(usize, 0), budget.used);
+        try std.testing.expectEqual(@as(usize, 0), environment.live_allocations);
+        try std.testing.expect(input.body() == null);
     }
 }

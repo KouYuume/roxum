@@ -355,9 +355,10 @@ pub fn ParserWithCapacity(comptime max_headers: usize) type {
         /// Starts a new head. The header array is written before it is read,
         /// so it is left as it is: a safe build would fill all of it.
         pub fn reset(self: *Self) void {
-            inline for (std.meta.fields(Self)) |field| {
-                if (comptime !std.mem.eql(u8, field.name, "parsed_headers")) {
-                    @field(self, field.name) = field.defaultValue().?;
+            const info = @typeInfo(Self).@"struct";
+            inline for (info.field_names, 0..) |name, i| {
+                if (comptime !std.mem.eql(u8, name, "parsed_headers")) {
+                    @field(self, name) = info.field_attrs[i].defaultValue(info.field_types[i]).?;
                 }
             }
         }
@@ -369,9 +370,9 @@ pub fn ParserWithCapacity(comptime max_headers: usize) type {
 
         /// Takes over `other`'s state, copying only the headers it holds.
         pub fn copyFrom(self: *Self, other: *const Self) void {
-            inline for (std.meta.fields(Self)) |field| {
-                if (comptime !std.mem.eql(u8, field.name, "parsed_headers")) {
-                    @field(self, field.name) = @field(other, field.name);
+            inline for (@typeInfo(Self).@"struct".field_names) |name| {
+                if (comptime !std.mem.eql(u8, name, "parsed_headers")) {
+                    @field(self, name) = @field(other, name);
                 }
             }
             const count = other.parsed_header_count;

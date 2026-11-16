@@ -25,7 +25,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       publish: ${{ steps.version.outputs.publish }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           # The tags, to tell whether this version is released.
           fetch-depth: 0
@@ -58,20 +58,20 @@ jobs:
       ROC_SRC: ${{ github.workspace }}/.roc-src
       ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+      - uses: actions/checkout@v7.0.1
+      - uses: mlugg/setup-zig@v2.2.1
         with:
-          version: 0.16.0
+          version: 0.17.1
       - name: Check out the pinned Roc source
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@v7.0.1
         with:
           repository: roc-lang/roc
           # Keep this ref in sync with .roc-revision; check-roc-toolchain.sh enforces it.
-          ref: 262206271cf05db948eef2b96fae88a1aca07b19
+          ref: 9e85de7aba79eaeb8ca589ab6a1ea581274c8930
           path: .roc-src
       - name: Install the pinned Roc nightly
-        # The pinned Roc needs a newer Zig to build than the host uses, so CI
-        # takes the nightly built from it; the source above is for the checks.
+        # Use the nightly built from the pinned revision;
+        # the source above is for the checks.
         run: |
           tools/install-roc-nightly.sh "$GITHUB_WORKSPACE/.roc-bin"
           echo "$GITHUB_WORKSPACE/.roc-bin" >> "$GITHUB_PATH"
@@ -84,7 +84,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: >-
           gh release create "v$VERSION"
-          zig-out/release/*.tar.zst zig-out/release/release.json
+          zig-out/release/*.tar.zst zig-out/release/*-source.tar.gz
+          zig-out/release/release.json zig-out/release/protobuf.json
           --target "$GITHUB_SHA"
           --title "roxum $VERSION"
           --notes-file zig-out/release/release-notes.md

@@ -1,7 +1,11 @@
+import Http
+
 Server :: [].{
-	## An IPv4 address, such as `(127, 0, 0, 1)` or `(0, 0, 0, 0)` for all
-	## interfaces.
-	Ipv4Address := (U8, U8, U8, U8)
+
+	## A TCP listener or a filesystem Unix socket. Unix paths must be absolute,
+	## 1 to 103 UTF-8 bytes, without NUL, CR, or LF. The parent directory must
+	## exist. Existing paths are never replaced; permissions follow the umask.
+	Endpoint := [Tcp({ address : Http.IpAddr, port : U16 }), Unix({ path : Str })]
 
 	## Connection time limits in milliseconds. Every value must be at least 1;
 	## the host refuses to start otherwise. Behind a load balancer, set
@@ -11,17 +15,22 @@ Server :: [].{
 	Timeouts := {
 		## Time to receive the first byte of the first request on a connection.
 		initial_request_milliseconds : U64,
+
 		## Time an idle keep-alive connection waits for the next request.
 		keep_alive_idle_milliseconds : U64,
+
 		## Time to receive a whole request head after its first byte.
 		request_head_milliseconds : U64,
+
 		## Time to receive a whole request body.
 		request_body_milliseconds : U64,
+
 		## Time to write a whole response, or, for a streamed response, each of
 		## its parts: the head and every chunk get this long, so a stream may
 		## run longer in total while the client keeps reading.
 		response_write_milliseconds : U64,
 	}.{
+
 		## 5 s for the first request and each request head, 15 s keep-alive idle,
 		## and 30 s for each request body and response write.
 		defaults : Server.Timeouts
@@ -47,14 +56,23 @@ Server :: [].{
 	## `Unlimited`.
 	BodyLimit := [Unlimited, Bytes(U64)]
 
+	## Execution time from initial HTTP/2 headers, including body and queue waits.
+	## Milliseconds takes 1 to 18_446_744_073_709; Unlimited adds no execution cap.
+	ExecutionLimit := [Unlimited, Milliseconds(U64)]
+
 	## A limit for one process. `Auto` is the value given for each limit
 	## below times the process's threads; `Fixed(count)` is the process's
 	## own.
 	Count := [Auto, Fixed(U64)]
 
-	## What one process holds at once. Every value must be at least 1; the
-	## host refuses to start otherwise.
+	## Resource and execution limits. Count limits and finite execution durations
+	## must be at least 1; the host refuses to start otherwise.
 	Limits := {
+		## HTTP/2 only. Expiry resets the stream and cancels suspended effects;
+		## arbitrary Roc computation is not forcibly interrupted. A finite response
+		## admitted before expiry remains governed by the response write timeout.
+		http2_execution : Server.ExecutionLimit ?? Server.ExecutionLimit.Unlimited,
+
 		## Streamed responses the process writes at once (`Auto`: 64 for each
 		## thread). A handler that returns a stream past this limit is answered
 		## `503 Service Unavailable` instead, and its stream never runs. Each
@@ -95,7 +113,8 @@ Server :: [].{
 		## A route's `BodyLimit` layers change either for its requests.
 		maximum_streamed_body_bytes : Server.BodyLimit ?? Server.BodyLimit.Unlimited,
 	}.{
-		## Every limit `Auto`.
+
+		## Default count, memory, body, and execution limits.
 		defaults : Server.Limits
 		defaults = {}
 	}
@@ -145,22 +164,30 @@ Server :: [].{
 	## 200 while at least one process is up and the server is not draining,
 	## and 503 otherwise. Neither checks the app's own dependencies; write a
 	## route for that.
-	Metrics := [Off, Listen({ address : Server.Ipv4Address, port : U16 })]
+	Metrics := [Off, Listen(Server.Endpoint)]
+
+	## Explicit cleartext protocol selection. Http2 uses prior knowledge; no Upgrade.
+	## Http2 currently buffers request bodies and supports finite responses only.
+	## Finite response trailers support Unary gRPC integrations; streaming and files are unsupported.
+	Protocol := [Http1, Http2]
 
 	## Where the server listens, its connection timeouts, its limits, and how
 	## many threads and processes serve it. Returned by the app's `init!`;
 	## `threads`, `processes`, `drain_timeout_milliseconds`, `request_id`,
-	## `access_log`, and `metrics` may be left out. The processes (1 to 64, 1
-	## by default) share nothing: each runs `init!` and has its own model,
+	## `access_log`, `metrics`, and `protocol` may be left out. The processes
+	## (1 to 64, 1 by default) share nothing: each runs `init!` and has its own model,
 	## pools, and limits. One process with a thread per CPU shares them all;
 	## more processes keep a host failure in one from stopping the others.
 	ListenOptions := {
-		address : Server.Ipv4Address,
-		port : U16,
+		## V6 listeners accept IPv6 only; groups are host-order U16 values.
+		## Scoped addresses requiring an interface identifier are not supported.
+		endpoint : Server.Endpoint,
+		protocol : Server.Protocol ?? Server.Protocol.Http1,
 		timeouts : Server.Timeouts,
 		limits : Server.Limits,
 		threads : Server.Threads ?? Server.Threads.Auto,
 		processes : U16 ?? 1,
+
 		## On SIGTERM or SIGINT the server stops accepting, closes idle
 		## keep-alive connections, and lets requests and streams in progress
 		## finish, each response closing its connection; it exits 0 once they

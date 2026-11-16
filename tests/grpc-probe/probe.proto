@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package probe;
+
+// Describes the fixed bytes used by the transport probe. No generated code is used.
+message Text {
+  string value = 1;
+}
+
+message Empty {}
+
+service Echo {
+  rpc Say(Text) returns (Text);
+  rpc Empty(.probe.Empty) returns (.probe.Empty);
+  rpc Reject(Text) returns (Text);
+  // Deliberately invalid server responses used to check the client assertions.
+  rpc MissingStatus(Text) returns (Text);
+  rpc BadLength(Text) returns (Text);
+}

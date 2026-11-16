@@ -81,6 +81,15 @@ def contract_verify(script, *apps):
 CONTRACT_ENV = {"ROXUM_CONTRACT_ALLOC": "{contract}"}
 
 TESTS = [
+    Test("test-protobuf-layouts", {"app": "tests/protobuf-layouts/app.roc"},
+         ["python3", "tests/protobuf-layouts/verify.py", "{exe:app}"], env=CONTRACT_ENV),
+    # The verification process needs the toolchain and bindings produced by checks.
+    Test("test-protobuf-codegen", {"app": "tests/protobuf-codegen/app.roc"},
+         ["zig-out/protobuf-codegen/venv/bin/python", "tests/protobuf-codegen/verify.py", "{exe:app}"],
+         checks=[["bash", "tests/protobuf-codegen/checks.sh"]], env=CONTRACT_ENV, timing=True),
+    Test("test-protobuf", {"app": "tests/protobuf/app.roc"},
+         ["python3", "tests/protobuf/verify.py", "{exe:app}"],
+         checks=[["bash", "tests/protobuf/unit.sh"]], env=CONTRACT_ENV),
     Test("test-m9p1", {"app": "tests/platform-package/app.roc"}, ["python3", "tests/platform-package/verify.py", "{exe:app}"],
          allocators=ARENA, checks=[["bash", "tests/platform-package/checks.sh"]]),
     Test("test-m9p4", {"app": "integrations/roxum-sse/example/app.roc"},
@@ -139,6 +148,23 @@ TESTS = [
          env=CONTRACT_ENV, timing=True),
     Test("test-observability", {"app": "tests/observability/app.roc"}, contract_verify("tests/observability/verify.py", "app"),
          env=CONTRACT_ENV, timing=True),
+    Test("test-unix-socket", {"app": "tests/unix-socket/app.roc"}, contract_verify("tests/unix-socket/verify.py", "app"), env=CONTRACT_ENV),
+    Test("test-http2-listener", {"app": "tests/http2-listener/app.roc"},
+         ["zig-out/http2-listener/venv/bin/python", "tests/http2-listener/verify.py", "{exe:app}"],
+         env=CONTRACT_ENV, timing=True, checks=[["bash", "tests/http2-listener/setup.sh"]], tolerate_build_status=("app",)),
+    Test("test-grpc-wire", {"app": "tests/grpc-wire/app.roc"},
+         ["zig-out/grpc-wire/venv/bin/python", "tests/grpc-wire/verify.py", "{exe:app}"],
+         env=CONTRACT_ENV, timing=True, checks=[["bash", "tests/grpc-wire/checks.sh"]]),
+    Test("test-grpc-example", {"app": "integrations/roxum-grpc/example/app.roc"},
+         ["zig-out/grpc-example/venv/bin/python", "integrations/roxum-grpc/example/verify.py", "{exe:app}"],
+         env=CONTRACT_ENV, checks=[["bash", "integrations/roxum-grpc/example/checks.sh"]]),
+    Test("test-grpc-unary", {"app": "tests/grpc-unary/app.roc"},
+         ["zig-out/grpc-unary/venv/bin/python", "tests/grpc-unary/verify.py", "{exe:app}"],
+         env=CONTRACT_ENV, timing=True, checks=[["bash", "tests/grpc-unary/checks.sh"]]),
+    Test("test-grpc-probe", {"app": "tests/grpc-probe/app.roc"},
+         ["zig-out/grpc-probe/venv/bin/python", "tests/grpc-probe/verify.py", "{exe:app}"],
+         env=CONTRACT_ENV, timing=True, checks=[["bash", "tests/grpc-probe/setup.sh"]]),
+    Test("test-ipv6", {"app": "tests/ipv6/app.roc"}, contract_verify("tests/ipv6/verify.py", "app"), env=CONTRACT_ENV),
     Test("test-tcp", {"app": "tests/tcp/app.roc"}, ["bash", "tests/tcp/variant.sh", "{exe:app}", "{out}"],
          env=CONTRACT_ENV, timing=True),
     Test("test-http-client", {"app": "tests/http-client/app.roc"},
@@ -172,6 +198,9 @@ TESTS = [
 ]
 
 COMMANDS = [
+    Command("test-protobuf-package", ["python3", "tests/protobuf-package/verify.py"], "cache"),
+    Command("test-http2-roc", ["zig", "build", "test-http2-roc"], "zig"),
+    Command("test-http2-wire", ["zig", "build", "test-http2-wire"], "zig"),
     Command("test-abi", ["zig", "build", "test-abi"], "zig"),
     Command("test", ["zig", "build", "test"], "cache"),
     Command("test-m9p2", ["bash", "tests/platform-package/identity/run.sh"], "pool"),
@@ -182,6 +211,11 @@ COMMANDS = [
     Command("test-http1-release", ["zig", "build", "test-http1-release"], "zig"),
     Command("fuzz", ["tools/fuzz.sh", "10000"], "zig"),
 ]
+# roc-fuzz 0.4.3 ships arm64mac and x64musl hosts only. The pure module and
+# differential tests still run on every supported roxum target.
+if ((sys.platform == "darwin" and os.uname().machine == "arm64") or
+        (sys.platform.startswith("linux") and os.uname().machine == "x86_64")):
+    COMMANDS.append(Command("fuzz-protobuf", ["bash", "tools/fuzz-roc-protobuf.sh"], "cache"))
 # The thread sanitizer runs on Linux only: under some macOS environments a
 # fault never becomes a signal (a parent's exception port takes it), and
 # the sanitized test then spins instead of ending.

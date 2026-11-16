@@ -14,7 +14,7 @@ pub const RocByteList = abi.RocListWith(u8, false);
 pub const RocHost = abi.RocHost;
 
 pub const Encoder = http1.Encoder;
-pub const EncodeError = http1.EncodeError || response_framing.Error;
+pub const EncodeError = http1.EncodeError || response_framing.Error || error{TrailersUnsupported};
 pub const HttpVersion = http1.HttpVersion;
 pub const ResponseConnection = response_framing.ResponseConnection;
 pub const RequestSemantics = response_framing.RequestSemantics;
@@ -201,6 +201,7 @@ fn bufferedBody(response: abi.HttpResponse) EncodeError![]const u8 {
 /// The host sets message framing itself; an application field named
 /// `content-length`, `transfer-encoding`, or `connection` is an error.
 fn validateApplicationHeaders(response: abi.HttpResponse) EncodeError!void {
+    if (response.trailers.items().len != 0) return error.TrailersUnsupported;
     for (response.headers.items()) |*header| {
         try response_framing.validateApplicationHeader(header.name.asSlice());
     }

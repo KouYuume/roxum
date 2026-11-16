@@ -15,20 +15,20 @@ jobs:
   test:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+      - uses: actions/checkout@v7.0.1
+      - uses: mlugg/setup-zig@v2.2.1
         with:
-          version: 0.16.0
+          version: 0.17.1
       - name: Check out the pinned Roc source
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@v7.0.1
         with:
           repository: roc-lang/roc
           # Keep this ref in sync with .roc-revision; check-roc-toolchain.sh enforces it.
-          ref: 262206271cf05db948eef2b96fae88a1aca07b19
+          ref: 9e85de7aba79eaeb8ca589ab6a1ea581274c8930
           path: .roc-src
       - name: Install the pinned Roc nightly
-        # The pinned Roc needs a newer Zig to build than the host uses, so CI
-        # takes the nightly built from it; the source above is for the checks.
+        # Use the nightly built from the pinned revision;
+        # the source above is for the checks.
         run: |
           tools/install-roc-nightly.sh "$GITHUB_WORKSPACE/.roc-bin"
           echo "$GITHUB_WORKSPACE/.roc-bin" >> "$GITHUB_PATH"
@@ -58,6 +58,27 @@ jobs:
           done
       - name: Run unit, differential, and incremental tests
         run: zig build test
+      - name: Verify the internal HTTP/2 engine with an independent client
+        run: zig build test-http2-wire
+      - name: Verify real Roc HTTP/2 execution in every backend and allocator mode
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-http2-roc
+      - name: Verify production HTTP/2 TCP and Unix listeners
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-http2-listener
+      - name: Verify fixed-byte gRPC interoperability on TCP and Unix listeners
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-grpc-probe
+      - name: Verify typed Unary clients through direct and TLS proxy connections
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: |
+          brew list openssl@3 >/dev/null || brew install openssl@3
+          zig build test-grpc-unary
+          zig build test-grpc-example
       - name: Verify platform-dependent package boundary
         env:
           ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
@@ -222,20 +243,20 @@ jobs:
   linux:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+      - uses: actions/checkout@v7.0.1
+      - uses: mlugg/setup-zig@v2.2.1
         with:
-          version: 0.16.0
+          version: 0.17.1
       - name: Check out the pinned Roc source
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@v7.0.1
         with:
           repository: roc-lang/roc
           # Keep this ref in sync with .roc-revision; check-roc-toolchain.sh enforces it.
-          ref: 262206271cf05db948eef2b96fae88a1aca07b19
+          ref: 9e85de7aba79eaeb8ca589ab6a1ea581274c8930
           path: .roc-src
       - name: Install the pinned Roc nightly
-        # The pinned Roc needs a newer Zig to build than the host uses, so CI
-        # takes the nightly built from it; the source above is for the checks.
+        # Use the nightly built from the pinned revision;
+        # the source above is for the checks.
         run: |
           tools/install-roc-nightly.sh "$GITHUB_WORKSPACE/.roc-bin"
           echo "$GITHUB_WORKSPACE/.roc-bin" >> "$GITHUB_PATH"
@@ -244,8 +265,8 @@ jobs:
           ROC_SRC: ${{ github.workspace }}/.roc-src
           ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
         run: tools/check-roc-toolchain.sh
-      - name: Install PostgreSQL for the roxum-postgres tests
-        run: sudo apt-get install -y --no-install-recommends postgresql
+      - name: Install PostgreSQL and TLS proxy build dependencies
+        run: sudo apt-get install -y --no-install-recommends postgresql build-essential libssl-dev
       - name: Run the release checks (x64musl)
         env:
           ROC_SRC: ${{ github.workspace }}/.roc-src

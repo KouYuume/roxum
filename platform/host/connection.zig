@@ -38,6 +38,8 @@ pub const Error = request_reader.Error ||
     bridge.ResponseAdvanceError;
 
 pub const Limits = struct {
+    /// Metadata-anchored HTTP/2 execution cap; null preserves uncapped execution.
+    http2_execution_nanoseconds: ?u64 = null,
     initial_request_timeout_milliseconds: u64 = 5_000,
     keep_alive_idle_timeout_milliseconds: u64 = 15_000,
     request_head_timeout_milliseconds: u64 = 5_000,
@@ -668,10 +670,11 @@ pub const Session = struct {
     }
 
     fn remoteAddress(self: *const Session) bridge.RemoteAddress {
-        return .{ .v4 = .{
-            .octets = self.accepted.remote_octets,
-            .port = self.accepted.remote_port,
-        } };
+        return switch (self.accepted.remote_address) {
+            net.PeerAddress.unix => bridge.RemoteAddress.unix,
+            net.PeerAddress.v4 => |octets| .{ .v4 = .{ .octets = octets, .port = self.accepted.remote_port } },
+            net.PeerAddress.v6 => |segments| .{ .v6 = .{ .segments = segments, .port = self.accepted.remote_port } },
+        };
     }
 
     fn handleReadError(
@@ -704,6 +707,8 @@ pub const Session = struct {
             // rather than end the worker.
             error.ReceiveTimeout => error_response.Kind.request_timeout,
             error.SocketFailed,
+            error.InvalidUnixPath,
+            error.SocketPathFailed,
             error.SetSocketOptionFailed,
             error.BindFailed,
             error.ListenFailed,

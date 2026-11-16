@@ -40,7 +40,7 @@ PathSegment :: { encoded : Str }.{
 	## empty, `.`, or `..` whatever the interpolated values are, which matters
 	## because a value computed at run time cannot be rejected here. Use
 	## `from_str` for a segment that is entirely computed.
-	from_interpolation : List(Str) -> Try((List(Str) -> PathSegment), [InvalidInterpolation(Str)])
+	from_interpolation : List(Str) -> Try((Iter(Str) -> PathSegment), [InvalidInterpolation(Str)])
 	from_interpolation = |segments|
 		if segments.any(|segment| Str.to_utf8(segment).any(|byte| byte != '.')) {
 			Str.from_interpolation(segments).map_ok(|assemble| |values| PathSegment.({ encoded: PercentEncoding.encode(assemble(values)) }))

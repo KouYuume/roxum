@@ -204,11 +204,11 @@ def verify(executable, directory, opt, database, tax):
     results = [result for client in clients for result in client.results]
     before = [result for result in results if result[0] < terminated_at - MARGIN_SECONDS]
     failed = [result for result in before if result[2] != 200]
-    assert before and not failed, (opt, failed)
+    assert before and not failed, (opt, failed, logs)
     in_flight = [result for result in before if result[1] > terminated_at]
-    assert in_flight, (opt, "no request was in flight at SIGTERM")
+    assert in_flight, (opt, "no request was in flight at SIGTERM", logs)
     server_errors = [result for result in results if isinstance(result[2], int) and result[2] >= 500]
-    assert not server_errors, (opt, server_errors)
+    assert not server_errors, (opt, server_errors, logs)
 
     expected = {
         requests_total("/products", "POST", "201"): 1,

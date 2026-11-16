@@ -19,7 +19,7 @@ const Allocation = struct {
 };
 
 const Tracker = struct {
-    allocations: [max_tracked]Allocation = [_]Allocation{.{}} ** max_tracked,
+    allocations: [max_tracked]Allocation = @as([max_tracked]Allocation, @splat(.{})),
     alloc_count: u64 = 0,
     dealloc_count: u64 = 0,
     live_count: u64 = 0,

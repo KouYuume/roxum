@@ -2,6 +2,7 @@ import HostBody
 import HeaderValue
 
 Http :: [].{
+
 	## A request method. The union is closed: the host answers any other method,
 	## including `CONNECT` and `TRACE`, with 501 Not Implemented and does not
 	## call the app. Method names are case-sensitive on the wire, so `get` is
@@ -33,9 +34,9 @@ Http :: [].{
 			}
 	}
 
-	## The HTTP version of a request: HTTP/1.0 or HTTP/1.1. The host answers
-	## other versions itself, so a handler never sees them.
-	Version := [Http10, Http11].{
+	## The HTTP version carried by request metadata. Http20 represents HTTP/2;
+	## listeners opt into HTTP/2; HTTP/1 remains the default.
+	Version := [Http10, Http11, Http20].{
 		is_eq : _
 	}
 
@@ -48,12 +49,9 @@ Http :: [].{
 		is_eq : _
 	}
 
-	## The address and port of the peer of the connection. Behind a proxy or
-	## load balancer this is the proxy, not the original client.
-	RemoteAddr := {
-		ip : Http.IpAddr,
-		port : U16,
-	}.{
+	## The transport peer: TCP has an IP and port; Unix has neither. Behind
+	## a proxy this is the proxy until a trusted forwarding layer resolves it.
+	RemoteAddr := [Tcp({ ip : Http.IpAddr, port : U16 }), Unix].{
 		is_eq : _
 	}
 
@@ -65,6 +63,7 @@ Http :: [].{
 	HeaderName := Str.{
 		is_eq : _
 		to_hash : _
+
 		## Returns the name as a string.
 		inner = |HeaderName.(value)| value
 	}
@@ -74,6 +73,7 @@ Http :: [].{
 	RequestHeader := {
 		## Lowercased by the host for received requests.
 		name : Http.HeaderName,
+
 		## Raw bytes of the field value.
 		value : List(U8),
 	}.{
@@ -106,14 +106,20 @@ Http :: [].{
 	## connection (`Pipeline`). The type is opaque, so app code cannot build one, and
 	## this module does not expose it. A handle is valid only while its request runs.
 	##
-	## The host receives a small body (up to 64 KiB) before the platform asks for it,
+	## On HTTP/1, the host receives a small body (up to 64 KiB) before the platform asks for it,
 	## so reading it does not wait. A larger body is read from the connection as the
 	## platform reads; while a read waits, the thread serves other requests. A client
 	## that sent `Expect: 100-continue` gets `100 Continue` at the first read that
 	## waits for it.
+	## On HTTP/2, metadata stages run before EOF, but reads wait for the complete
+	## finite body. The host retains it until execution cleanup. The configured
+	## `maximum_body_bytes` remains a hard cap, including for streamed reads.
+	## Transport failures/timeouts cancel the request instead of returning a
+	## body error; route limits can return `TooLarge` before EOF.
 	RequestStream :: U64.{
-		## Reads the next part of the request body as a stream: only this part
-		## is held, so a body of any size can be read in parts. Fails with
+
+		## Reads the next part of the request body. On HTTP/1 only this part is
+		## held, so a body of any size can be read in parts. On HTTP/1 it fails with
 		## `TooLarge` past `Server.Limits.maximum_streamed_body_bytes` (none
 		## by default) or a route's `BodyLimit.streamed`, and with `TimedOut`
 		## when no bytes arrived for `Server.Timeouts.request_body_milliseconds`.
@@ -123,11 +129,12 @@ Http :: [].{
 		## empty. Read until `End`; after the last byte of the body, the next
 		## read returns `End`. `BadRequest` means invalid framing or a
 		## connection that ended early, and `Failed` is an internal error.
-		## After a failure, later reads return the same result.
+		## On HTTP/1, after a failure, later reads return the same result.
 		read! = |RequestStream.(token), maximum_bytes| HostBody.read!(token, maximum_bytes, Bool.False)
 
 		## Like `read!`, for a body read whole into memory, as `Extract.bytes`
-		## does. When the rest of a Content-Length body has already been
+		## does. On HTTP/2, each chunk is copied from completed finite input.
+		## On HTTP/1, when the rest of a Content-Length body has already been
 		## received, a `maximum_bytes` above 16 KiB returns all of it in one
 		## `Chunk`. It fails with `TooLarge` past `Server.Limits.maximum_body_bytes`
 		## (2 MiB by default) or a route's `BodyLimit.whole`, and with
@@ -158,20 +165,25 @@ Http :: [].{
 	Request := {
 		method : Http.Method,
 		version : Http.Version,
+
 		## The request target exactly as received, including any query.
 		raw_target : List(U8),
+
 		## The path part of the target, before percent-decoding. The host
 		## answers 400 when it contains an empty segment (`//`), `.`, or `..`.
 		## For an absolute-form target it is the path after the authority, or
 		## `/` when there is none; for an asterisk-form target it is `*`.
 		path : Str,
+
 		## The bytes after the first `?` of the target, without the `?`, not
 		## parsed or decoded. Empty when the target has no query.
 		query : List(U8),
+
 		## The header fields in received order, with duplicates kept.
 		headers : List(Http.RequestHeader),
 		body : Http.RequestBody,
 		remote_addr : Http.RemoteAddr,
+
 		## The request's ID, which the host's logs use too. The host decides it
 		## as `listen.request_id` says (`Server.RequestIdSource`); the
 		## request's own `x-request-id` fields stay in `headers` as received.
@@ -223,6 +235,9 @@ Http :: [].{
 		## 304 response must have an empty body.
 		status : U16,
 		headers : List(Http.ResponseHeader),
+		## Final fields for finite HTTP/2 responses. Empty means no trailers.
+		## HTTP/1 and streamed/file responses reject nonempty trailers.
+		trailers : List(Http.ResponseHeader) ?? [],
 		body : Http.ResponseBody,
 	}
 }
@@ -251,7 +266,7 @@ expect {
 				query: [],
 				headers: [Http.RequestHeader.{ name: Http.HeaderName.("host"), value: "fallback.example".to_utf8() }],
 				body: Http.RequestBody.Empty,
-				remote_addr: Http.RemoteAddr.{ ip: Http.IpAddr.V4((127, 0, 0, 1)), port: 1 },
+				remote_addr: Http.RemoteAddr.Tcp({ ip: Http.IpAddr.V4((127, 0, 0, 1)), port: 1 }),
 				request_id: "test",
 			}
 			Http.Request.authority(request) == Ok(expected.to_utf8())
@@ -269,8 +284,20 @@ expect {
 		query: [],
 		headers: [],
 		body: Http.RequestBody.Empty,
-		remote_addr: Http.RemoteAddr.{ ip: Http.IpAddr.V4((127, 0, 0, 1)), port: 1 },
+		remote_addr: Http.RemoteAddr.Tcp({ ip: Http.IpAddr.V4((127, 0, 0, 1)), port: 1 }),
 		request_id: "test",
 	}
 	Http.Request.authority(request) == Err(MissingAuthority)
+}
+
+
+expect {
+	versions = [Http.Version.Http10, Http.Version.Http11, Http.Version.Http20]
+	List.map(versions, |version|
+		match version {
+			Http.Version.Http10 => 10
+			Http.Version.Http11 => 11
+			Http.Version.Http20 => 20
+		},
+	) == [10, 11, 20]
 }

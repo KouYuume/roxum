@@ -15,3 +15,5 @@ This example assumes a `Markdown` module and `docs_source` supplied by the appli
 All three compiler backends support this approach. `zig build test-m9b-2` checks that computed values are embedded and request allocations are released. Expensive constant evaluation adds to build time.
 
 Content that depends on path parameters, query values, or headers must be computed from the request. When the input set is bounded, initialization can precompute values into the model. For files on disk, use [file serving](files.md).
+
+HTML templates can also be compiled ahead of time into rendering functions that accept dynamic data. This does not make the rendered HTML a build-time constant. Such generators belong in independent tools and libraries; roxum does not bundle one. See [HTML templates and AOT generation](../design/non-goals.md#html-templates-and-aot-generation) for the intended boundary, including HTML fragments sent over SSE.

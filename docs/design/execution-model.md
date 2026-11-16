@@ -24,9 +24,25 @@ A suspended fiber can resume on another thread. Do not cache a thread-local addr
 
 ## Scheduling and connection ownership
 
-A supervisor retains the listening socket and restarts workers; accepted connections belong to workers. A worker shares a poller, connection table, wait registry, and work queues across its threads. The acceptance thread handles admission, deadlines, and shutdown without invoking Roc. Roc threads process requests and ready fibers.
+A supervisor retains the listening socket and restarts workers; accepted connections belong to workers. TCP and filesystem Unix listeners use the same descriptor handoff. A worker that creates a Unix listener transfers its path and filesystem identity with the descriptor; subsequent workers reuse it. The supervisor removes the owned pathname after shutdown, only if its identity still matches. Existing paths are never removed to make binding succeed. The operator controls the parent directory and handles stale paths after an interrupted ownership transfer or a killed supervisor. A worker shares a poller, connection table, wait registry, and work queues across its threads. The acceptance thread handles admission, deadlines, and shutdown without invoking Roc. Roc threads process requests and ready fibers.
 
-Connection locks protect event processing and completion. While a request is dispatched, its handler does not hold the connection lock. A request starts with the shared request heap; its first suspension detaches live allocations into its own heap so the shared heap can serve another request.
+Connection locks protect event processing and completion. Queued requests carry
+an immutable connection slot, connection generation, per-slot dispatch sequence,
+and queue timestamp. A Roc thread validates and claims that identity under the
+connection lock before admission or request execution; duplicate and stale jobs
+are discarded. Completion and failure paths validate the identity under the same
+lock before changing connection state. The sequence advances for each request,
+including keep-alive requests, survives connection-slot reuse, and never wraps:
+exhaustion closes the connection instead of issuing an older identity.
+
+Queue expiry reads the job's immutable timestamp, without looking up mutable
+connection state while holding a queue lock. After removal, it validates the
+identity and unclaimed state under the connection lock before rejecting a request.
+This avoids queue-to-connection lock ordering against dispatch's
+connection-to-queue order. HTTP/1 keeps a claimed connection slot pinned until
+completion. HTTP/2 dispatch additionally carries a stream lease; the connection
+slot stays pinned until every queued/running lease has finished cleanup.
+While a request is dispatched, its handler does not hold the connection lock. A request starts with the shared request heap; its first suspension detaches live allocations into its own heap so the shared heap can serve another request.
 
 Initialize Roc on one thread before creating the remaining Roc threads. The compiler runtime's lazy process-wide initialization must not race. Fiber switching uses host register-save routines. Socket waits use one-shot poller registration; timeout and readiness compete to resume a wait exactly once. DNS resolution runs on dedicated threads, with the request fiber waiting on a pipe under a deadline.
 
@@ -39,3 +55,27 @@ A crash outside a request fiber, host panic, or stack overflow terminates the wo
 The event loop owns final connection closure. Lingering close shuts down writes and drains unread input under bounded byte/time limits to reduce resets that could discard the response. This differs from unread-body cleanup for keep-alive, which only skips data already buffered.
 
 See [streaming lifecycle](streaming.md) for response cancellation and [deployment](../guides/deployment.md) for limits and draining. Validation includes `zig build test-contract`, `zig build test-tcp`, and Linux `zig build test-tsan`, as well as E2E tests across backends and allocator modes.
+
+## Request metadata conversion
+
+The request bridge shares one Roc-value builder between HTTP/1 parsed spans and
+borrowed transport metadata. The transport validates method, header, and request-target wire syntax (including
+control characters, fragments, and percent escapes) and supplies the request version; the builder checks target/path policy, normalizes
+header names, and copies metadata into Roc-owned storage. Allocation failure
+releases partially built values and the shared byte backing. Input slices need
+only remain valid until conversion returns.
+
+The metadata entry accepts origin-form or asterisk targets and finite body bytes.
+`Http.Version.Http20` represents HTTP/2 in the public metadata type. The entry
+has a separate HTTP/2 adapter for initial field sections, described in
+[the engine contract](http2-engine.md#request-metadata-mapping). Neither entry
+installs an HTTP/2 body reader by itself. The production metadata adapter copies
+initial fields and attaches a request-scoped body token. The shared worker scheduler
+runs routing and metadata stages before EOF; body effects suspend while bounded
+input is collected and copy results under the connection lock. Incremental network
+body delivery remains separate work.
+
+Code that exhaustively matches `Http.Version` must also handle `Http20`. Build
+Roc platform sources and host archives together after this enum extension;
+regenerated glue defines the shared tag representation. The metadata value does
+not select a listener protocol; `Server.ListenOptions.protocol` does that.

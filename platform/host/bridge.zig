@@ -1,4 +1,8 @@
 const model = @import("bridge/model.zig");
+
+test {
+    @import("std").testing.refAllDecls(model);
+}
 const request = @import("bridge/request.zig");
 const response = @import("bridge/response.zig");
 
@@ -16,6 +20,13 @@ pub const RocHost = request.RocHost;
 pub const RequestHost = request.RequestHost;
 pub const RemoteAddress = request.RemoteAddress;
 pub const RequestError = request.RequestError;
+pub const RequestMetadata = request.Metadata;
+pub const RequestMetadataHeader = request.MetadataHeader;
+pub const requestFromMetadata = request.requestFromMetadata;
+pub const requestFromHttp2 = @import("bridge/http2_request.zig").requestFromHttp2;
+pub const requestFromHttp2Input = @import("bridge/http2_request.zig").requestFromHttp2Input;
+pub const Http2Input = @import("http2/input.zig").Input;
+pub const Http2InputBudget = @import("http2/input.zig").Budget;
 pub const requestFromParsed = request.requestFromParsed;
 pub const requestFromParsedStream = request.requestFromParsedStream;
 pub const validateParsedRequestHead = request.validateParsedHead;
@@ -44,6 +55,7 @@ pub const HttpResponseBodyTag = response.HttpResponseBodyTag;
 pub const HttpResponseHeaderList = response.HttpResponseHeaderList;
 pub const GeneratedRocStr = response.RocStr;
 pub const RocByteList = response.RocByteList;
+pub const OwnedHttp2Response = @import("bridge/http2_response.zig").OwnedResponse;
 pub const OwnedResponseEncoder = response.OwnedResponseEncoder;
 pub const WrittenHead = response.WrittenHead;
 pub const writeBodyPart = response.writeBodyPart;

@@ -8,7 +8,7 @@ and the event loops.
 
 - The Roc nightly that roxum is pinned to (see [`docs/toolchain.md`](../toolchain.md)); roxum follows Roc's
   nightly builds closely
-- Zig 0.16.0, to build the platform's host from source
+- Zig 0.17.1, to build the platform's host from source
 - macOS on Apple silicon (`arm64mac`), or Linux on arm64 / x86_64 (`arm64musl` / `x64musl`, statically linked)
 
 ## A first app
@@ -22,6 +22,7 @@ import pf.Handler
 import pf.MethodRouter
 import pf.Reply
 import pf.Router
+import pf.IpAddr
 import pf.Server
 
 Model := {}
@@ -35,8 +36,7 @@ init! : {} => Try({ model : Model, listen : Server.ListenOptions }, [StartupErr(
 init! = |{}| Ok({
 	model: {},
 	listen: {
-		address: Server.Ipv4Address.(127, 0, 0, 1),
-		port: 0,
+		endpoint: Server.Endpoint.Tcp({ address: IpAddr.V4((127, 0, 0, 1)), port: 0 }),
 		timeouts: Server.Timeouts.defaults,
 		limits: Server.Limits.defaults,
 	},

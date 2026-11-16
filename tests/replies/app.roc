@@ -7,8 +7,11 @@ import pf.MethodRouter
 import pf.Path
 import pf.Redirect
 import pf.Reply
+import pf.ResponseHeader
+import pf.HeaderName
 import pf.ResponseWriter
 import pf.Router
+import pf.IpAddr
 import pf.Server
 
 ## M24 phase 5: helpers for replies, and links built from a route's pattern.
@@ -20,7 +23,7 @@ Item := { name : Str, count : U64 }.{
 
 program = { init!, routes: Router.build(routes, {}) }
 
-init! = |{}| Ok({ model: {}, listen: { address: Server.Ipv4Address.(127, 0, 0, 1), port: 0, timeouts: Server.Timeouts.defaults, limits: Server.Limits.defaults } })
+init! = |{}| Ok({ model: {}, listen: { endpoint: Server.Endpoint.Tcp({ address: IpAddr.V4((127, 0, 0, 1)), port: 0 }), timeouts: Server.Timeouts.defaults, limits: Server.Limits.defaults } })
 
 article = Path.new("/articles/{id}")
 
@@ -35,6 +38,8 @@ or_500 = |result|
 routes : Router(Model, [], {})
 routes =
 	Router.new
+		.route("/trailers", route({}, |_| Reply.text("must not succeed").with_trailers([ResponseHeader.{ name: HeaderName.("x-final"), value: "done" }])))
+		.route("/stream-trailers", route({}, |_| Reply.stream(|_writer| crash "writer must not run").with_trailers([ResponseHeader.{ name: HeaderName.("x-final"), value: "done" }])))
 		.route("/pdf", route({}, |_| Reply.bytes("%PDF".to_utf8(), "application/pdf")))
 		.route("/typed", route({}, |_| Reply.bytes([1], "text/csv; charset=utf-8")))
 		.route("/computed", route("image/png", |text| or_500(typed(text))))

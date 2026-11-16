@@ -1,0 +1,25 @@
+{
+  "name": "develop up to date",
+  "target": "branch",
+  "enforcement": "active",
+  "bypass_actors": [],
+  "conditions": {
+    "ref_name": {
+      "include": ["refs/heads/develop"],
+      "exclude": []
+    }
+  },
+  "rules": [
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": true,
+        "do_not_enforce_on_create": false,
+        "required_status_checks": [
+          { "context": "fast checks", "integration_id": 15368 },
+          { "context": "dependency checks", "integration_id": 15368 }
+        ]
+      }
+    }
+  ]
+}

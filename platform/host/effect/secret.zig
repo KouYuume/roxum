@@ -158,7 +158,7 @@ pub fn hostedSecretDerive(handle: u64, program: abi.RocListWith(u8, false)) call
     }
     encodeDerive(&table, handle, code, &reply) catch {
         reply.clearRetainingCapacity();
-        reply.append(std.heap.smp_allocator, @intFromEnum(Status.invalid)) catch @panic("out of memory");
+        reply.append(std.heap.smp_allocator, @backingInt(Status.invalid)) catch @panic("out of memory");
     };
     return request_bridge.rocByteListFromSliceChecked(
         reply.items,
@@ -170,7 +170,7 @@ fn encodeDerive(secrets: *Table, handle: u64, code: []const u8, reply: *std.Arra
     var outputs: Outputs = .{};
     defer outputs.deinit();
     const status = evaluate(secrets, handle, code, &outputs, false);
-    try reply.append(std.heap.smp_allocator, @intFromEnum(status));
+    try reply.append(std.heap.smp_allocator, @backingInt(status));
     if (status != Status.ok) return;
     for (outputs.items.items) |value| {
         var length: [4]u8 = undefined;
@@ -417,9 +417,9 @@ test "malformed expressions and unknown handles are refused" {
 test "the table holds 64 secrets of up to 4 KiB" {
     var secrets = Table{};
     defer secrets.deinit();
-    const at_limit = [_]u8{'a'} ** maximum_secret_bytes;
+    const at_limit = @as([maximum_secret_bytes]u8, @splat('a'));
     try std.testing.expectEqual(@as(u64, 1), try secrets.store(&at_limit));
-    try std.testing.expectError(error.TooLarge, secrets.store(&([_]u8{'a'} ** (maximum_secret_bytes + 1))));
+    try std.testing.expectError(error.TooLarge, secrets.store(&(@as([(maximum_secret_bytes + 1)]u8, @splat('a')))));
     for (2..maximum_secrets + 1) |expected| try std.testing.expectEqual(@as(u64, expected), try secrets.store("s"));
     try std.testing.expectError(error.TableFull, secrets.store("s"));
 }

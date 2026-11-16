@@ -2,6 +2,8 @@ const std = @import("std");
 const allocator_context = @import("allocator/context.zig");
 const host_allocator_module = @import("allocator/host_allocator.zig");
 const bridge = @import("bridge.zig");
+const abi = @import("roc_platform_abi.zig");
+const body_effect = @import("effect/body.zig");
 const MemoryLimit = @import("bridge/model.zig").MemoryLimit;
 const connection = @import("connection.zig");
 const diagnostics = @import("diagnostics.zig");
@@ -132,6 +134,7 @@ pub fn run(
     };
     handoff.* = try event_loop.Handoff.init(application_limits.maximum_connections);
     handoff.limits = application_limits;
+    handoff.http2 = listen_options.http2;
     // One poller for the process: every connection's socket and
     // every waiting fiber's. The Roc threads wait on it; a new job wakes one
     // that is idle.
@@ -145,11 +148,15 @@ pub fn run(
     handoff.waits = waits;
     handoff.work = try work_queue.Jobs.init(ready.settings.threads, poller);
     startup.publishHandoff(waits);
-    const listener = supervisor.inherited_listener orelse try net.listenIpv4(
-        listen_options.address,
-        listen_port_override orelse listen_options.port,
-    );
+    var endpoint = listen_options.endpoint;
+    if (listen_port_override) |port| switch (endpoint) {
+        net.Endpoint.tcp => |*address| address.port = port,
+        net.Endpoint.unix => {},
+    };
+    const listener = supervisor.inherited_listener orelse try net.listenEndpoint(endpoint);
     defer net.closeSocket(listener.socket);
+    var transferred = supervisor.inherited_listener != null;
+    defer if (!transferred) listener.cleanup();
 
     const workers = listen_options.processes;
     request_memory.setLimit(if (application_limits.request_memory_bytes) |bytes|
@@ -158,8 +165,8 @@ pub fn run(
         memory_budget.automatic(workers, ready.settings.threads));
     access_log.start(listen_options.access_log) catch diagnostics.fatal("failed to start the access log");
     if (listen_options.metrics != null) metrics.startWorker(listen_options.routes) catch diagnostics.fatal("failed to start the metrics");
-    const admin_port: ?supervisor.Admin = if (listen_options.metrics) |given| .{ .address = given.address, .port = given.port } else null;
-    if (!try supervisor.notifyReady(listener, workers, application_limits.drain_timeout_milliseconds, admin_port)) try writePort(listener.port);
+    transferred = try supervisor.notifyReady(listener, workers, application_limits.drain_timeout_milliseconds, listen_options.metrics);
+    if (!transferred) try stdio.writeStdoutListener(listener);
     try event_loop.run(listener.socket, handoff);
 }
 
@@ -294,24 +301,24 @@ fn serveJobs(comptime Request: type, thread: *Request.Thread, shared: *Request.S
 /// a fiber of its own.
 fn runJob(comptime Request: type, thread: *Request.Thread, shared: *Request.Shared, job: work_queue.Job) !void {
     switch (job) {
-        work_queue.Job.request => |slot| try runNewRequest(Request, thread, shared, slot),
+        work_queue.Job.request => |request| try runNewRequest(Request, thread, shared, request),
         work_queue.Job.resumed => |target| try runRequest(Request, thread, target),
     }
 }
 
-fn runNewRequest(comptime Request: type, thread: *Request.Thread, shared: *Request.Shared, slot: u32) !void {
+fn runNewRequest(comptime Request: type, thread: *Request.Thread, shared: *Request.Shared, dispatch: work_queue.Request) !void {
     const handoff = shared.handoff;
+    if (!handoff.claimRequest(dispatch)) return;
     const application_limits = shared.limits;
-    const item = &handoff.connections[slot];
     // Admission: a request that waited too long in the queue, or that
     // would start past the limit of requests in progress, is answered 503
     // without running.
-    if (admit(handoff, item, application_limits)) |outcome| {
+    if (admit(handoff, dispatch.queued_at, application_limits)) |outcome| {
         const deadline = net.Deadline.afterMilliseconds(application_limits.response_write_timeout_milliseconds) catch net.Deadline{ .expires_at_nanoseconds = 0 };
-        thread.io.rejectTaken(slot, deadline, outcome, application_limits.request_id_source);
+        thread.io.rejectTaken(dispatch, deadline, outcome, application_limits.request_id_source);
         return;
     }
-    const request = try thread.pool.acquire(shared, thread, slot);
+    const request = try thread.pool.acquire(shared, thread, dispatch);
     const target = try thread.fibers.acquire(Request.start, request);
     try runRequest(Request, thread, target);
 }
@@ -319,13 +326,13 @@ fn runNewRequest(comptime Request: type, thread: *Request.Thread, shared: *Reque
 /// Counts the request in progress, or says why it is answered 503 without
 /// running. The place is taken before the check, so threads that admit at
 /// once stay within the limit.
-fn admit(handoff: *event_loop.Handoff, item: *const event_loop.Connection, limits: connection.Limits) ?access_log.Outcome {
+fn admit(handoff: *event_loop.Handoff, queued_at: u64, limits: connection.Limits) ?access_log.Outcome {
     if (handoff.in_progress.fetchAdd(1, std.builtin.AtomicOrder.acq_rel) >= limits.maximum_requests_in_progress) {
         _ = handoff.in_progress.fetchSub(1, std.builtin.AtomicOrder.release);
         return access_log.Outcome.in_progress_full;
     }
     const now = net.monotonicNanoseconds() catch return null;
-    if (now -| item.dispatched_at >= limits.queue_timeout_milliseconds * std.time.ns_per_ms) {
+    if (now -| queued_at >= limits.queue_timeout_milliseconds * std.time.ns_per_ms) {
         _ = handoff.in_progress.fetchSub(1, std.builtin.AtomicOrder.release);
         return access_log.Outcome.queue_timeout;
     }
@@ -347,6 +354,7 @@ fn runRequest(comptime Request: type, thread: *Request.Thread, target: *fiber.Fi
         std.debug.assert(request.thread == thread);
     }
     request.thread = thread;
+    if (request.dispatch.http2 != null) request.setHttp2Wait(target, false);
     fiber.resumeFiber(target);
     if (target.crashed or target.cancelled) {
         // Its Roc code crashed, or it stopped at a wait while it wrote its
@@ -370,6 +378,7 @@ fn runRequest(comptime Request: type, thread: *Request.Thread, target: *fiber.Fi
         return;
     }
     if (request.heap == null) try request.detach();
+    if (request.dispatch.http2 != null) request.setHttp2Wait(target, true);
     // Registered only now that the fiber has suspended: whichever thread
     // the wait ends on may resume it at once.
     try thread.waits.addWaiting(target);
@@ -466,13 +475,18 @@ fn RequestFiber(comptime Environment: type) type {
 
             const maximum_idle = 64;
 
-            pub fn acquire(self: *Pool, shared: *Shared, thread: *Thread, slot: u32) !*Self {
+            pub fn acquire(self: *Pool, shared: *Shared, thread: *Thread, dispatch: work_queue.Request) !*Self {
                 const request = self.idle.pop() orelse try Self.create(shared.limits);
                 request.shared = shared;
                 request.thread = thread;
-                request.slot = slot;
+                request.dispatch = dispatch;
                 request.heap = null;
                 request.failure = null;
+                request.http2_stream_attempted = false;
+                request.http2_body = .{
+                    .whole_limit = shared.limits.maximum_body_bytes,
+                    .streamed_limit = shared.limits.maximum_streamed_body_bytes,
+                };
                 request.generation = thread.environment.generation;
                 request.host_allocator = thread.environment.hostAllocator();
                 request.roc_host = runtime.makeRocHost(@ptrCast(&request.host_allocator));
@@ -491,7 +505,7 @@ fn RequestFiber(comptime Environment: type) type {
         /// The Roc thread running the request now. It changes only when the
         /// request resumes after a wait, once its values are in `heap`.
         thread: *Thread = undefined,
-        slot: u32 = 0,
+        dispatch: work_queue.Request = undefined,
         session: *connection.Session,
         generation: usize = 0,
         host_allocator: HostAllocator = undefined,
@@ -504,6 +518,14 @@ fn RequestFiber(comptime Environment: type) type {
         failure: ?anyerror = null,
         /// When the Roc thread took the request from the queue.
         started_at: u64 = 0,
+        http2_stream_attempted: bool = false,
+        http2_semantics: bridge.ResponseRequestSemantics = bridge.ResponseRequestSemantics.regular,
+        http2_body: struct {
+            offset: usize = 0,
+            whole_limit: u64 = 0,
+            streamed_limit: u64 = 0,
+            waiting_limit: ?u64 = null,
+        } = .{},
 
         fn create(limits: connection.Limits) !*Self {
             const self = try std.heap.smp_allocator.create(Self);
@@ -539,6 +561,16 @@ fn RequestFiber(comptime Environment: type) type {
         fn abandon(self: *Self, stop: fiber.Stop) !void {
             const shared = self.shared;
             const environment = self.thread.environment;
+            if (self.dispatch.http2 != null) {
+                if (self.heap) |*heap| environment.abandonStream(heap) else try environment.abandonRequest();
+                self.heap = null;
+                self.thread.io.finishHttp2(self.dispatch, switch (stop) {
+                    fiber.Stop.none => access_log.Outcome.crashed,
+                    fiber.Stop.client_gone => access_log.Outcome.client_closed,
+                    fiber.Stop.drained => access_log.Outcome.drained,
+                });
+                return;
+            }
             self.session.discardPendingOutput();
             const head_sent = self.session.abandonWritten();
             if (self.heap) |*heap| environment.abandonStream(heap) else try environment.abandonRequest();
@@ -550,18 +582,18 @@ fn RequestFiber(comptime Environment: type) type {
                     fiber.Stop.client_gone => access_log.Outcome.client_closed,
                     fiber.Stop.drained => access_log.Outcome.drained,
                 };
-                return self.thread.io.failWritten(self.slot, &written_entry, outcome);
+                return self.thread.io.failWritten(self.dispatch, &written_entry, outcome);
             }
             const deadline = net.Deadline.afterMilliseconds(shared.limits.response_write_timeout_milliseconds) catch net.Deadline{ .expires_at_nanoseconds = 0 };
             const entry = self.accessEntry();
-            self.thread.io.fail(self.slot, deadline, &entry);
+            self.thread.io.fail(self.dispatch, deadline, &entry);
         }
 
         /// The request's access log entry, as its session filled it in, with
         /// when it started and how long it waited in the queue.
         fn accessEntry(self: *const Self) access_log.Entry {
             var entry = self.session.access;
-            const dispatched_at = self.shared.handoff.connections[self.slot].dispatched_at;
+            const dispatched_at = self.dispatch.queued_at;
             entry.started_at = dispatched_at;
             entry.queue_nanoseconds = self.started_at -| dispatched_at;
             return entry;
@@ -574,10 +606,235 @@ fn RequestFiber(comptime Environment: type) type {
             };
         }
 
+        fn setHttp2Wait(self: *Self, target: *fiber.Fiber, parked: bool) void {
+            const item = &self.shared.handoff.connections[self.dispatch.slot];
+            item.lock.lock();
+            defer item.lock.unlock();
+            const protocol = item.http2 orelse unreachable;
+            const ticket = self.dispatch.http2.?;
+            const execution = protocol.execution(ticket) orelse unreachable;
+            execution.waiter = if (parked) .{ .target = target, .serial = target.wait_serial, .body_limit = self.http2_body.waiting_limit } else null;
+            if (protocol.streams.leases.runningStream(ticket) == null) {
+                if (parked) {
+                    fiber_wait.wakeStopped(target, target.wait_serial, fiber.Stop.client_gone);
+                } else {
+                    target.stop.store(fiber.Stop.client_gone, std.builtin.AtomicOrder.release);
+                }
+            } else if (parked) {
+                if (self.http2_body.waiting_limit) |limit| {
+                    if (protocol.bodyReady(ticket, limit)) fiber_wait.wake(target, target.wait_serial);
+                }
+            }
+        }
+
+        fn refuseHttp2Stream(ptr: *anyopaque, _: *const bridge.HttpResponse, _: u64, _: []const u8, _: bool, _: ?u64, _: bool) bool {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            self.http2_stream_attempted = true;
+            return false;
+        }
+        fn refuseHttp2Write(_: *anyopaque, _: []const u8) bool {
+            return false;
+        }
+        fn refuseHttp2Abort(_: *anyopaque) void {}
+
+        fn serveHttp2(self: *Self) !void {
+            allocator_context.setCurrent(.{ .host_allocator = &self.host_allocator, .domain = Domain.request, .generation = self.generation });
+            const failed = self.invokeHttp2() catch true;
+            request_debug.endRequest();
+            allocator_context.clearCurrent();
+            const environment = self.thread.environment;
+            if (self.heap) |*heap| try environment.releaseStream(heap) else try environment.resetRequest();
+            self.heap = null;
+            self.thread.io.finishHttp2(self.dispatch, if (failed) access_log.Outcome.encode_failed else null);
+        }
+
+        fn requestExecutionResponse(ptr: *anyopaque, duration: u64, response: bridge.HttpResponse, roc_host: *bridge.RocHost) @import("effect/request_execution.zig").Result {
+            const Result = @import("effect/request_execution.zig").Result;
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            const item = &self.shared.handoff.connections[self.dispatch.slot];
+            item.lock.lock();
+            defer item.lock.unlock();
+            const protocol = item.http2 orelse {
+                response.decref(roc_host);
+                return Result.closed;
+            };
+            const ticket = self.dispatch.http2.?;
+            const now = net.monotonicNanoseconds() catch diagnostics.fatal("monotonic clock read failed");
+            protocol.expire(now);
+            const id = protocol.streams.leases.runningStream(ticket);
+            if (protocol.failed or protocol.closed or id == null) {
+                response.decref(roc_host);
+                return Result.closed;
+            }
+            var owned = @import("bridge/http2_response.zig").OwnedResponse.init(response, roc_host, protocol.budget.allocator(), self.http2_semantics, .{
+                .header_bytes = protocol.owner.engine.limits.header_bytes,
+                .body_bytes = protocol.owner.engine.limits.response_bytes,
+            }) catch return Result.invalid;
+            defer owned.deinit();
+            var copied = @import("http2/deferred_response.zig").Response.init(protocol.budget.allocator(), protocol.owner.engine, id.?, owned.response.status, owned.headers, owned.body, owned.trailers) catch return Result.invalid;
+            if (!protocol.streams.leases.limitExecution(ticket, duration, std.math.maxInt(u64))) {
+                copied.deinit();
+                return Result.closed;
+            }
+            protocol.streams.clearExpiryResponse(ticket);
+            protocol.streams.entries[ticket.slot].expiry_response = copied;
+            protocol.expire(net.monotonicNanoseconds() catch diagnostics.fatal("monotonic clock read failed"));
+            return if (protocol.streams.leases.runningStream(ticket) == null) Result.closed else Result.installed;
+        }
+
+        fn requestExecution(ptr: *anyopaque, duration: ?u64) ?u64 {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            const item = &self.shared.handoff.connections[self.dispatch.slot];
+            item.lock.lock();
+            defer item.lock.unlock();
+            const protocol = item.http2 orelse return null;
+            const ticket = self.dispatch.http2 orelse return null;
+            const now = net.monotonicNanoseconds() catch diagnostics.fatal("monotonic clock read failed");
+            protocol.expire(now);
+            if (protocol.failed or protocol.closed) return null;
+            _ = protocol.streams.leases.runningStream(ticket) orelse return null;
+            if (duration) |nanoseconds| {
+                // The cap is already installed at HEADERS completion. Tightening
+                // this lease cannot extend it, even when the requested sum saturates.
+                if (!protocol.streams.leases.limitExecution(ticket, nanoseconds, std.math.maxInt(u64))) return null;
+                protocol.expire(now);
+                _ = protocol.streams.leases.runningStream(ticket) orelse return null;
+            }
+            return protocol.streams.leases.headersElapsed(ticket, now);
+        }
+
+        fn http2BodyLimit(ptr: *anyopaque, bytes: u64, whole: bool) void {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            if (whole) self.http2_body.whole_limit = bytes else self.http2_body.streamed_limit = bytes;
+        }
+
+        fn bodyResult(tag: abi.HostBodyRequestReadTag) abi.HostBodyRequestRead {
+            return .{ .tag = tag, .payload = std.mem.zeroes(abi.HostBodyRequestReadPayload) };
+        }
+
+        fn http2BodyRead(ptr: *anyopaque, maximum: u64, whole: bool) abi.HostBodyRequestRead {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            while (true) {
+                const result = blk: {
+                    const item = &self.shared.handoff.connections[self.dispatch.slot];
+                    item.lock.lock();
+                    defer item.lock.unlock();
+                    break :blk self.readHttp2BodyLocked(maximum, whole);
+                };
+                if (result) |value| {
+                    self.http2_body.waiting_limit = null;
+                    if (value.tag == abi.HostBodyRequestReadTag.Closed) {
+                        fiber.current().?.stop.store(fiber.Stop.client_gone, std.builtin.AtomicOrder.release);
+                        fiber_wait.cancelCurrent();
+                    }
+                    return value;
+                }
+                // No borrowed input or connection lock crosses this suspension.
+                // setHttp2Wait rechecks readiness after the fiber has parked.
+                _ = fiber_wait.waitSocket(-1, 0, std.math.maxInt(u64)) orelse unreachable;
+            }
+        }
+
+        fn readHttp2BodyLocked(self: *Self, maximum: u64, whole: bool) ?abi.HostBodyRequestRead {
+            const item = &self.shared.handoff.connections[self.dispatch.slot];
+            const protocol = item.http2 orelse return bodyResult(abi.HostBodyRequestReadTag.Closed);
+            const ticket = self.dispatch.http2.?;
+            protocol.expire(net.monotonicNanoseconds() catch diagnostics.fatal("monotonic clock read failed"));
+            if (protocol.failed or protocol.closed) return bodyResult(abi.HostBodyRequestReadTag.Closed);
+            const id = protocol.streams.leases.runningStream(ticket) orelse return bodyResult(abi.HostBodyRequestReadTag.Closed);
+            protocol.owner.engine.checkDispatchable(id) catch return bodyResult(abi.HostBodyRequestReadTag.Closed);
+            const input = protocol.streams.runningInput(ticket) orelse return bodyResult(abi.HostBodyRequestReadTag.Closed);
+            if (input.phase == @import("http2/input.zig").Phase.rejected) return bodyResult(abi.HostBodyRequestReadTag.Closed);
+            const limit = if (whole) self.http2_body.whole_limit else self.http2_body.streamed_limit;
+            if (input.bytes.items.len > limit) return bodyResult(abi.HostBodyRequestReadTag.TooLarge);
+            const bytes = input.body() orelse {
+                self.http2_body.waiting_limit = limit;
+                return null;
+            };
+            const offset = self.http2_body.offset;
+            if (offset == bytes.len) return bodyResult(abi.HostBodyRequestReadTag.End);
+            const requested = std.math.cast(usize, maximum) orelse std.math.maxInt(usize);
+            const count = @min(bytes.len - offset, if (whole) requested else @min(requested, body_effect.maximum_read_bytes));
+            const owned = @import("bridge/request.zig").rocByteListFromSliceChecked(bytes[offset..][0..count], .{
+                .roc_host = &self.roc_host,
+                .try_alloc = runtime.tryAllocWithHost,
+            }) catch return bodyResult(abi.HostBodyRequestReadTag.Failed);
+            self.http2_body.offset += count;
+            var result = bodyResult(abi.HostBodyRequestReadTag.Chunk);
+            const payload: *abi.RocListWith(u8, false) = @ptrCast(@alignCast(&result.payload));
+            payload.* = owned;
+            return result;
+        }
+
+        fn invokeHttp2(self: *Self) !bool {
+            const item = &self.shared.handoff.connections[self.dispatch.slot];
+            const ticket = self.dispatch.http2.?;
+            const body_token = body_effect.activateReader(.{ .context = self, .read = http2BodyRead, .limit = http2BodyLimit });
+            defer body_effect.deactivate();
+            const request = blk: {
+                item.lock.lock();
+                defer item.lock.unlock();
+                const protocol = item.http2 orelse return true;
+                const remote: bridge.RemoteAddress = switch (item.accepted.remote_address) {
+                    net.PeerAddress.unix => bridge.RemoteAddress.unix,
+                    net.PeerAddress.v4 => |ip| .{ .v4 = .{ .octets = ip, .port = item.accepted.remote_port } },
+                    net.PeerAddress.v6 => |ip| .{ .v6 = .{ .segments = ip, .port = item.accepted.remote_port } },
+                };
+                const input = protocol.streams.runningInput(ticket) orelse return true;
+                const id = if (protocol.access[ticket.slot]) |entry| entry.request_id else @import("request_id.zig").decideFields(self.shared.limits.request_id_source, input.fields.items);
+                var method: []const u8 = "";
+                var path: []const u8 = "";
+                var trace: ?[]const u8 = null;
+                for (input.fields.items) |field| {
+                    if (std.mem.eql(u8, field.name, ":method")) method = field.value;
+                    if (std.mem.eql(u8, field.name, ":path")) path = field.value;
+                    if (std.mem.eql(u8, field.name, "traceparent")) trace = field.value;
+                }
+                request_debug.beginRequest(method, path, id.slice(), trace);
+                if (protocol.access[ticket.slot]) |*entry| entry.queue_nanoseconds = self.started_at -| self.dispatch.queued_at;
+                break :blk try protocol.owner.requestMetadataOwned(&protocol.streams, ticket, body_token, remote, id.slice(), .{ .roc_host = &self.roc_host, .try_alloc = runtime.tryAllocWithHost });
+            };
+            const semantics = if (request.method == bridge.HttpMethod.head) bridge.ResponseRequestSemantics.head else bridge.ResponseRequestSemantics.regular;
+            self.http2_semantics = semantics;
+            const writer = @import("effect/response_writer.zig");
+            const locals = fiber.currentLocals() orelse unreachable;
+            locals.request_execution = .{ .context = self, .apply = requestExecution, .limit_response = requestExecutionResponse };
+            defer locals.request_execution = null;
+            writer.activate(.{ .context = self, .start = refuseHttp2Stream, .write = refuseHttp2Write, .abort = refuseHttp2Abort });
+            const answered = bridge.rocHandle(self.shared.model_root.retainForHandle(), request);
+            writer.deactivate();
+            if (self.http2_stream_attempted) {
+                answered.route.decref(&self.roc_host);
+                answered.response.decref(&self.roc_host);
+                return true;
+            }
+            defer answered.route.decref(&self.roc_host);
+            item.lock.lock();
+            defer item.lock.unlock();
+            const protocol = item.http2 orelse unreachable;
+            // Expiry may already have submitted its response while pure Roc
+            // computation continued. Its access fields belong to that response.
+            if (protocol.streams.leases.runningStream(ticket) != null) {
+                if (protocol.access[ticket.slot]) |*entry| {
+                    entry.route.set(answered.route.asSlice());
+                    entry.status = answered.response.status;
+                    entry.body_bytes = if (semantics == bridge.ResponseRequestSemantics.head) 0 else switch (answered.response.body.tag) {
+                        bridge.HttpResponseBodyTag.Bytes => answered.response.body.payload_bytes().items().len,
+                        else => 0,
+                    };
+                }
+            }
+            try protocol.owner.respondOwnedWithDebug(&protocol.streams, ticket, answered.response, &self.roc_host, semantics, true);
+            protocol.deadlines[ticket.slot] = (net.monotonicNanoseconds() catch 0) +| protocol.write_timeout;
+            protocol.writing[ticket.slot] = true;
+            return false;
+        }
+
         fn serve(self: *Self) !void {
+            if (self.dispatch.http2 != null) return self.serveHttp2();
             const shared = self.shared;
             const handoff = shared.handoff;
-            const slot = self.slot;
+            const slot = self.dispatch.slot;
             const item = &handoff.connections[slot];
             const session = self.session;
             const locals = fiber.currentLocals() orelse unreachable;
@@ -648,7 +905,7 @@ fn RequestFiber(comptime Environment: type) type {
                 event_loop.Completion.Action.reuse
             else
                 event_loop.Completion.Action.close;
-            self.thread.io.complete(.{ .slot = slot, .action = action });
+            self.thread.io.complete(.{ .request = self.dispatch, .action = action });
         }
     };
 }
@@ -746,6 +1003,7 @@ fn applyLimits(base: connection.Limits, limits: bridge.ListenLimits, threads: us
         },
     }
     var applied = base;
+    applied.http2_execution_nanoseconds = try executionNanoseconds(limits.http2_execution_milliseconds);
     applied.maximum_streams = std.math.cast(usize, streams) orelse std.math.maxInt(usize);
     applied.maximum_queued_requests = std.math.cast(usize, queued) orelse std.math.maxInt(usize);
     applied.queue_timeout_milliseconds = limits.queue_timeout_milliseconds;
@@ -758,6 +1016,26 @@ fn applyLimits(base: connection.Limits, limits: bridge.ListenLimits, threads: us
     applied.maximum_body_bytes = limits.maximum_body_bytes;
     applied.maximum_streamed_body_bytes = limits.maximum_streamed_body_bytes orelse std.math.maxInt(u64);
     return applied;
+}
+
+fn executionNanoseconds(milliseconds: ?u64) error{StartupFailed}!?u64 {
+    const value = milliseconds orelse return null;
+    if (value == 0 or value > std.math.maxInt(u64) / std.time.ns_per_ms) {
+        diagnostics.startupFailed("Server.ExecutionLimit.Milliseconds takes 1 to 18446744073709");
+        return error.StartupFailed;
+    }
+    return value * std.time.ns_per_ms;
+}
+
+test "HTTP/2 execution duration validates both millisecond boundaries" {
+    try std.testing.expectEqual(@as(?u64, null), try executionNanoseconds(null));
+    const maximum = std.math.maxInt(u64) / std.time.ns_per_ms;
+    for ([_]u64{ 1, 2, maximum - 1, maximum }) |value| {
+        try std.testing.expectEqual(@as(?u64, value * std.time.ns_per_ms), try executionNanoseconds(value));
+    }
+    for ([_]u64{ 0, maximum + 1, std.math.maxInt(u64) }) |value| {
+        try std.testing.expectError(error.StartupFailed, executionNanoseconds(value));
+    }
 }
 
 /// Replaces the connection timeouts with the application's choice. A zero
@@ -826,10 +1104,6 @@ fn deinitializeModel(
     });
     defer allocator_context.clearCurrent();
     model_root.deinit();
-}
-
-fn writePort(port: u16) stdio.Error!void {
-    try stdio.writeStdoutPort(port);
 }
 
 test "application timeouts replace only the timeout limits" {

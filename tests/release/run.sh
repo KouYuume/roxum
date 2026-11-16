@@ -55,6 +55,7 @@ fi
 echo "the bundle server started within $(( SECONDS - started )) s"
 
 zig build release -Drelease-url="http://127.0.0.1:$port"
+python3 tests/release/verify_metadata.py
 bundle=$(python3 -c 'import json; print(json.load(open("zig-out/release/release.json"))["platform"]["file"])')
 set_header_url=$(python3 -c 'import json; print(next(item["url"] for item in json.load(open("zig-out/release/release.json"))["integrations"] if item["name"] == "roxum-set-header"))')
 
@@ -74,3 +75,6 @@ if [[ "$downloads" -ne 3 ]]; then
 	echo "expected 3 bundle downloads, the server saw $downloads" >&2
 	exit 1
 fi
+
+# Exercise the distributed generator and the gRPC/wire/platform bundles together.
+python3 tests/release/verify_grpc.py "http://127.0.0.1:$port" "$task_tmp/http.log"

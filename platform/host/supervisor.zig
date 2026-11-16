@@ -80,8 +80,8 @@ pub fn run(worker_main: WorkerMain, options: Options) Error!noreturn {
     if (std.c.pipe(&lifeline) != 0 or !net.setCloseOnExec(lifeline[0]) or !net.setCloseOnExec(lifeline[1])) return error.ReadinessChannelFailed;
     // Before any fork, so every worker shares it.
     metrics.createRegion();
-    var process_id_storage = [_]c_int{0} ** maximum_workers;
-    var slot_storage = [_]Slot{Slot{}} ** maximum_workers;
+    var process_id_storage = @as([maximum_workers]c_int, @splat(0));
+    var slot_storage = @as([maximum_workers]Slot, @splat(Slot{}));
     const all_process_ids: []c_int = &process_id_storage;
     const slots_storage: []Slot = &slot_storage;
     var worker_count: usize = 1;
@@ -99,7 +99,11 @@ pub fn run(worker_main: WorkerMain, options: Options) Error!noreturn {
             }
         }
     }
-    defer if (inherited_listener) |listener| net.closeSocket(listener.socket);
+    defer if (inherited_listener) |listener| {
+        net.closeSocket(listener.socket);
+        listener.cleanup();
+    };
+    errdefer admin.shutdown();
     var published = false;
     while (true) {
         if (shutdown_signals.load(std.builtin.AtomicOrder.monotonic) > 0) shutdown(all_process_ids);
@@ -158,7 +162,7 @@ pub fn run(worker_main: WorkerMain, options: Options) Error!noreturn {
                         inherited_listener = ready.listener;
                         worker_count = @min(ready.workers, maximum_workers);
                         worker_drain_timeout_milliseconds = ready.drain_timeout_milliseconds;
-                        if (ready.admin) |admin_port| admin.open(admin_port.address, admin_port.port) catch {
+                        if (ready.admin) |admin_port| admin.open(admin_port) catch {
                             diagnostics.startupFailed("the admin port (Server.Metrics.Listen) could not listen");
                             return error.AdminPortFailed;
                         };
@@ -180,7 +184,7 @@ pub fn run(worker_main: WorkerMain, options: Options) Error!noreturn {
                 all_ready = all_ready and slot.ready;
             }
             if (all_ready) {
-                stdio.writeStdoutPort(inherited_listener.?.port) catch return error.ReadinessFailed;
+                stdio.writeStdoutListener(inherited_listener.?) catch return error.ReadinessFailed;
                 published = true;
             }
         }
@@ -303,11 +307,12 @@ fn requestShutdown(_: std.posix.SIG) callconv(std.builtin.CallingConvention.c) v
 /// finished its drain and exited 0, otherwise 1; a worker still running
 /// past the drain timeout and a margin is killed.
 fn shutdown(process_ids: []c_int) noreturn {
+    const owned_listener = inherited_listener;
     if (inherited_listener) |listener| {
         net.closeSocket(listener.socket);
         inherited_listener = null;
     }
-    signalAll(process_ids, @intFromEnum(drain_signal.drain_signal));
+    signalAll(process_ids, @backingInt(drain_signal.drain_signal));
     var forwarded: u32 = 1;
     var code: c_int = 0;
     const started = monotonicMilliseconds() catch 0;
@@ -326,7 +331,7 @@ fn shutdown(process_ids: []c_int) noreturn {
         const signals = shutdown_signals.load(std.builtin.AtomicOrder.monotonic);
         if (signals > forwarded) {
             forwarded = signals;
-            signalAll(process_ids, @intFromEnum(drain_signal.stop_signal));
+            signalAll(process_ids, @backingInt(drain_signal.stop_signal));
         }
         const now = monotonicMilliseconds() catch break;
         if (now -| started >= limit) break;
@@ -346,6 +351,8 @@ fn shutdown(process_ids: []c_int) noreturn {
             if (clearProcess(process_ids, ended)) remaining -= 1;
         }
     }
+    if (owned_listener) |listener| listener.cleanup();
+    admin.shutdown();
     _exit(code);
 }
 

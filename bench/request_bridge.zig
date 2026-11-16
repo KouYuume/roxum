@@ -51,14 +51,14 @@ fn now() u64 {
 
 const Case = struct { name: []const u8, input: []const u8 };
 const cases = [_]Case{
-    .{ .name = "long_path_short_query", .input = "GET /" ++ ("a" ** 4094) ++ "?x HTTP/1.1\r\nHost: x\r\n\r\n" },
+    .{ .name = "long_path_short_query", .input = "GET /" ++ (&@as([4094]u8, @splat('a'))) ++ "?x HTTP/1.1\r\nHost: x\r\n\r\n" },
     .{ .name = "one_header", .input = "GET / HTTP/1.1\r\nHost: x\r\n\r\n" },
-    .{ .name = "eight_headers", .input = "GET / HTTP/1.1\r\nHost: x\r\n" ++ ("X-Value: abc\r\n" ** 7) ++ "\r\n" },
-    .{ .name = "sixty_four_headers", .input = "GET / HTTP/1.1\r\nHost: x\r\n" ++ ("X-Value: abc\r\n" ** 63) ++ "\r\n" },
+    .{ .name = "eight_headers", .input = "GET / HTTP/1.1\r\nHost: x\r\n" ++ (@as(*const [7 * "X-Value: abc\r\n".len]u8, @ptrCast(&@as([7]["X-Value: abc\r\n".len]u8, @splat("X-Value: abc\r\n".*))))) ++ "\r\n" },
+    .{ .name = "sixty_four_headers", .input = "GET / HTTP/1.1\r\nHost: x\r\n" ++ (@as(*const [63 * "X-Value: abc\r\n".len]u8, @ptrCast(&@as([63]["X-Value: abc\r\n".len]u8, @splat("X-Value: abc\r\n".*))))) ++ "\r\n" },
     // On 64-bit targets, 23 bytes is the last inline Roc string length.
-    .{ .name = "path_23", .input = "GET /" ++ ("a" ** 22) ++ " HTTP/1.1\r\nHost: x\r\n\r\n" },
-    .{ .name = "path_24", .input = "GET /" ++ ("a" ** 23) ++ " HTTP/1.1\r\nHost: x\r\n\r\n" },
-    .{ .name = "path_25", .input = "GET /" ++ ("a" ** 24) ++ " HTTP/1.1\r\nHost: x\r\n\r\n" },
+    .{ .name = "path_23", .input = "GET /" ++ (&@as([22]u8, @splat('a'))) ++ " HTTP/1.1\r\nHost: x\r\n\r\n" },
+    .{ .name = "path_24", .input = "GET /" ++ (&@as([23]u8, @splat('a'))) ++ " HTTP/1.1\r\nHost: x\r\n\r\n" },
+    .{ .name = "path_25", .input = "GET /" ++ (&@as([24]u8, @splat('a'))) ++ " HTTP/1.1\r\nHost: x\r\n\r\n" },
     .{ .name = "query", .input = "GET /?name=roc HTTP/1.1\r\nHost: x\r\n\r\n" },
 };
 

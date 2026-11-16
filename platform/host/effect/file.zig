@@ -79,7 +79,7 @@ fn withTag(tag: abi.HostFileReadTag) abi.HostFileRead {
 /// A path for a test file in `$TMPDIR`, or `/tmp` without it.
 pub fn testPath(buffer: []u8, label: []const u8) ![:0]u8 {
     const directory = if (std.c.getenv("TMPDIR")) |value| std.mem.trimEnd(u8, std.mem.span(value), "/") else "/tmp";
-    return std.fmt.bufPrintZ(buffer, "{s}/roxum-{s}-{d}", .{ directory, label, std.c.getpid() });
+    return std.fmt.bufPrintSentinel(buffer, "{s}/roxum-{s}-{d}", .{ directory, label, std.c.getpid() }, 0);
 }
 
 const TestFile = struct {

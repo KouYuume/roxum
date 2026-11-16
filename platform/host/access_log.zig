@@ -414,9 +414,9 @@ test "quotes, backslashes, control bytes, and DEL are escaped; UTF-8 is kept, ot
 test "the longest line fits its buffer" {
     var buffer: [line_capacity]u8 = undefined;
     var line = Line{ .entry = .{}, .time_unix_milliseconds = std.math.maxInt(i64), .duration_nanoseconds = std.math.maxInt(u64) };
-    line.entry.method.set("\x01" ** maximum_method_bytes);
-    line.entry.path.set("\x01" ** maximum_path_bytes);
-    line.entry.route.set("\x01" ** maximum_route_bytes);
+    line.entry.method.set(&@as([maximum_method_bytes]u8, @splat('\x01')));
+    line.entry.path.set(&@as([maximum_path_bytes]u8, @splat('\x01')));
+    line.entry.route.set(&@as([maximum_route_bytes]u8, @splat('\x01')));
     @memset(&line.entry.request_id.bytes, 0x01);
     line.entry.request_id.len = request_id.maximum_bytes;
     line.entry.status = std.math.maxInt(u16);
@@ -474,3 +474,32 @@ test "a reused entry exposes none of the previous request's fields" {
     const fresh = Line{ .entry = .{}, .time_unix_milliseconds = 0, .duration_nanoseconds = 0 };
     try testing.expectEqualStrings(format(&expected, &fresh, true, 1), format(&actual, &reused, true, 1));
 }
+
+/// Synchronous capture for host contract tests, without a stderr writer thread.
+pub const TestCapture = if (builtin.is_test) struct {
+    lines: [16]Line = undefined,
+    target: Queue = undefined,
+
+    pub fn start(self: *@This()) void {
+        self.target = .{ .lines = &self.lines };
+        queue = &self.target;
+        mode = Mode.json_lines_with_path;
+    }
+
+    pub fn stop(_: *@This()) void {
+        queue = null;
+        mode = Mode.off;
+    }
+
+    pub fn count(self: *const @This()) usize {
+        return self.target.count;
+    }
+
+    pub fn entry(self: *const @This(), index: usize) Entry {
+        return self.lines[index].entry;
+    }
+
+    pub fn json(self: *const @This(), index: usize, buffer: []u8) []const u8 {
+        return format(buffer, &self.lines[index], true, 1);
+    }
+} else void;

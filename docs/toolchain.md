@@ -1,10 +1,10 @@
 # Toolchain
 
-The source of truth for the Roc compiler revision is [`.roc-revision`](../.roc-revision). Use the Roc nightly built from that revision, named with its SHA-256 values in `tools/linux/Dockerfile`; `tools/install-roc-nightly.sh` installs it, as CI does. Building that revision from source needs a newer Zig than roxum's host uses (0.17.0 for the current pin). The checks of the ABI glue and the compiler revision also need the source checked out at that revision. Use the same compiler revision locally; a different nightly may change syntax, layout, or the hosted ABI.
+The source of truth for the Roc compiler revision is [`.roc-revision`](../.roc-revision). Use the Roc nightly built from that revision, named with its SHA-256 values in `tools/linux/Dockerfile`; `tools/install-roc-nightly.sh` installs it, as CI does. The pinned Roc source and roxum host both use Zig 0.17.1. The checks of the ABI glue and the compiler revision also need the source checked out at that revision. Use the same compiler revision locally; a different nightly may change syntax, layout, or the hosted ABI.
 
 ## Setup
 
-Install Zig 0.16.0. From the roxum repository, install the pinned Roc nightly, and clone the Roc source at the recorded revision beside it:
+Install Zig 0.17.1. From the roxum repository, install the pinned Roc nightly, and clone the Roc source at the recorded revision beside it:
 
 ```sh
 tools/install-roc-nightly.sh ../roc-nightly

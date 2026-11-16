@@ -550,7 +550,7 @@ test "a seeded head parsed elsewhere is taken over and its limits still checked"
     _ = reader.finish(next);
 
     // A target past the limit is answered 414 though the loop parsed it.
-    const target = "/" ++ "a" ** (16 * 1024);
+    const target = "/" ++ &@as([(16 * 1024)]u8, @splat('a'));
     const long = "GET " ++ target ++ " HTTP/1.1\r\nHost: x\r\n\r\n";
     parsed.reset();
     _ = parsed.feed(long);

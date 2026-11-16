@@ -15,6 +15,7 @@ __pycache__/
 
 # Zig build cache / output
 .zig-cache/
+zig-pkg/
 zig-out/
 .roc-src/
 .roc-bin/

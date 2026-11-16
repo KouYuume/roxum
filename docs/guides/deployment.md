@@ -1,7 +1,8 @@
 # Deployment
 
-roxum serves plain HTTP/1.1 over IPv4 TCP; it does not listen on a Unix domain socket. Run it behind a reverse proxy or
-load balancer that terminates TLS (and HTTP/2 or HTTP/3 for clients), such as nginx, Caddy, or AWS Application Load
+roxum serves plain HTTP/1.1 by default over IPv4 or IPv6 TCP, or a filesystem Unix domain socket.
+Opt-in cleartext HTTP/2 supports buffered requests and finite responses. Run it behind a reverse proxy or
+load balancer that terminates TLS (and optionally HTTP/2 or HTTP/3 for clients), such as nginx, Caddy, or AWS Application Load
 Balancer.
 
 ```text
@@ -12,12 +13,91 @@ client ──HTTPS / HTTP/2──> proxy / load balancer ──HTTP/1.1──> r
 
 | | in front of roxum | in roxum |
 |---|---|---|
-| TLS, HTTP/2 and HTTP/3 to clients | the proxy (roxum has neither) | — |
+| TLS and HTTP/3 to clients | the proxy | — |
+| HTTP/2 | the proxy can terminate it or use an HTTP/2 upstream | explicit cleartext prior-knowledge listener for finite responses |
 | Static files | the proxy or a CDN, for a site mostly made of them | `Files.serve` and `Reply.file`, for files the app's routes own or check access to ([Files](files.md)) |
 | Compression | the proxy's `gzip` / `brotli`, for everything at once | `Compression.layer`, for the routes you choose, and precompressed `.br` / `.gz` files ([Files](files.md#compressing-responses)) |
 
 Compress in one place: with both on, the proxy finds `content-encoding` already set and passes the body on, but
 that is wasted work in roxum.
+
+## Opt-in HTTP/2
+
+Set `protocol: Server.Protocol.Http2` in `Server.ListenOptions`; omitting it selects
+`Server.Protocol.Http1`. Protocol selection is independent of `Server.Endpoint`,
+so both TCP and Unix listeners support it. Configure the proxy's upstream for
+cleartext HTTP/2 prior knowledge. HTTP/1 Upgrade and automatic protocol detection
+are not supported on this listener.
+
+HTTP/2 routing and `BeforeBody` middleware run after initial headers; ordinary
+handlers receive complete finite bodies. Request IDs and effects use the worker's
+existing request fibers. A reset cancels the affected suspended request without
+closing its peers. Responses are finite, optionally with trailers. Response
+streaming, SSE, file responses, and incremental request-body processing remain
+unsupported; attempting a streamed response resets that stream. For uncompressed
+Unary gRPC, use the [integration](../../integrations/roxum-grpc/README.md).
+
+To bound HTTP/2 execution, set a listener-wide cap:
+
+```roc
+limits: { http2_execution: Server.ExecutionLimit.Milliseconds(5_000) },
+```
+
+The default is `Server.ExecutionLimit.Unlimited`. Finite values take 1 to
+18,446,744,073,709 milliseconds; zero or larger values stop startup. The duration
+starts when initial headers complete and includes body waits, queueing and
+handler execution. Expiry cancels suspended effects and resets only that stream
+unless an expiry response is registered; it cannot preempt arbitrary Roc computation. Detection follows scheduler ticks
+and checks at request conversion and response admission, not a real-time guarantee.
+Once a finite response has been admitted, its existing response-write timeout
+governs delivery even if the execution duration later elapses. A valid setting
+has no effect on HTTP/1.
+
+Inside an HTTP/2 handler, `RequestExecution.elapsed_nanoseconds!({})` returns
+elapsed time from initial header completion, and
+`RequestExecution.limit_nanoseconds!(duration)` bounds execution from that same
+origin. These return `Err(Unavailable)` in `init!` and on HTTP/1. For example,
+`RequestExecution.limit_nanoseconds!(500_000_000)` sets a total 500 ms budget;
+time spent receiving the body or queueing is already charged. Repeated calls
+can only shorten the current deadline, including the listener's cap. Zero or an
+already-elapsed duration terminates the request without returning to Roc code;
+expiry resets the stream unless an expiry response has been registered.
+
+The elapsed-time operation also checks expiry before returning. Duration addition
+saturates at `U64.highest`; a large value cannot remove an existing limit. These
+effects apply to the current request and expose no reusable resource handle.
+Install integration deadlines in `BeforeBody`, before body waits. Ordinary handlers
+and `AfterBody` run after EOF. The listener cap also bounds work before Roc begins.
+
+The configured finite body limit applies. Each connection admits at most 16
+streams, with 16 KiB field sections and at most 2 MiB per finite response. Input
+and conversion storage have a 16 MiB connection budget; the protocol session and
+pending output have another 16 MiB budget. A shared 128 MiB worker ceiling covers
+HTTP/2 transport allocations, separately from Roc request-memory accounting.
+
+`RequestExecution.limit_with_response!(duration, response)` additionally registers
+an `Http.Response` to send if execution expires. Build a finite response directly,
+or convert a finite reply with `Respond.to_response`. The host validates and copies
+it before changing the deadline; `InvalidResponse` leaves the prior configuration
+unchanged. Successful repeated calls replace the response while only tightening
+the deadline. Normal response commitment discards it. Expiry bypasses response
+middleware and cancels the request, so it cannot execute an application callback.
+Client reset and I/O timeout do not use this response. Delivery still depends on
+connection memory, peer availability, and write timeout. Register it before body
+waits; expiry before registration still resets the stream.
+
+Exhausted stream/input limits reset streams; connection or worker allocation
+failure can close a connection. Header/body timeouts and pending-response write
+timeouts bound incomplete work. An unfinished header block closes the connection;
+body or response timeouts reset the affected stream. The keep-alive idle timeout applies when there are
+no protocol streams or executing handlers. A blocked socket that cannot send a
+reset before its write timeout closes the connection.
+
+Shutdown sends GOAWAY, allows admitted streams to finish, and retains connection
+storage until queued/running handlers finish cleanup. The configured drain timeout
+still bounds the process shutdown. [Finite response trailers](responses.md#finite-http2-trailers)
+are supported; incremental streaming remains outside the current scope. See the
+[gRPC roadmap](../plans/grpc.md) for future capability gates.
 
 ## Building for Linux
 
@@ -117,8 +197,7 @@ others, at the cost of what they cannot share: each holds its own database conne
 
 ```roc
 listen: {
-	address: Server.Ipv4Address.(0, 0, 0, 0),
-	port: 8080,
+	endpoint: Server.Endpoint.Tcp({ address: IpAddr.V4((0, 0, 0, 0)), port: 8080 }),
 	timeouts: Server.Timeouts.defaults,
 	limits: Server.Limits.defaults,
 	threads: Server.Threads.Fixed(4),
@@ -137,7 +216,7 @@ On SIGTERM or SIGINT the server drains:
 
 1. It stops accepting at once; connections no process has accepted yet are refused
 2. It closes keep-alive connections waiting for their next request
-3. Requests and streams in progress finish; each response says `Connection: close`
+3. Requests and streams in progress finish; HTTP/1 responses say `Connection: close`, while HTTP/2 sends GOAWAY and lets admitted streams finish
 4. Once nothing is left it exits 0
 
 `drain_timeout_milliseconds` in `Server.ListenOptions` (20 s by default, 1 ms to one hour) bounds the drain. Past it,
@@ -188,8 +267,7 @@ proxy's idle timeout.**
 init! = |{}| Ok({
 	model: {},
 	listen: {
-		address: Server.Ipv4Address.(0, 0, 0, 0),
-		port: 8080,
+		endpoint: Server.Endpoint.Tcp({ address: IpAddr.V4((0, 0, 0, 0)), port: 8080 }),
 		timeouts: {
 			..Server.Timeouts.defaults,
 			keep_alive_idle_milliseconds: 75_000,
@@ -238,6 +316,7 @@ each thread the number in the table; `Server.Count.Fixed(n)` sets the process's 
 | `request_memory` | `Server.MemoryLimit.Auto` | the memory the process's requests may hold; `Server.MemoryLimit.Bytes(n)` sets it |
 | `maximum_body_bytes` | 2 MiB (a plain number, not per thread) | a body received whole before the handler |
 | `maximum_streamed_body_bytes` | `Server.BodyLimit.Unlimited` | a body read by a `Handler.streaming` handler; `Server.BodyLimit.Bytes(n)` sets it |
+| `http2_execution` | `Server.ExecutionLimit.Unlimited` | per-request HTTP/2 duration from headers; `Server.ExecutionLimit.Milliseconds(n)` sets it, independent of thread count |
 
 ```roc
 limits: Server.Limits.{ maximum_requests_in_progress: Server.Count.Fixed(16_384), request_memory: Server.MemoryLimit.Bytes(4 * 1024 * 1024 * 1024) },
@@ -286,45 +365,9 @@ List the addresses your proxies connect from. For AWS ALB, whose addresses chang
 
 ## Proxy examples
 
-nginx:
-
-```nginx
-upstream roxum {
-    server 127.0.0.1:8080;
-    keepalive 32;
-    keepalive_timeout 60s;
-}
-
-server {
-    listen 443 ssl;
-    http2 on;
-    client_max_body_size 2m;   # raise it where a route takes more
-
-    location / {
-        proxy_pass http://roxum;
-        proxy_http_version 1.1;
-        proxy_set_header Connection "";
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-```
-
-Caddy:
-
-```caddyfile
-example.com {
-    reverse_proxy 127.0.0.1:8080 {
-        transport http {
-            keepalive 2m
-        }
-    }
-}
-```
-
-AWS ALB: an HTTPS listener with an ACM certificate forwards to an HTTP target group on roxum's port. Give the health
-check a route that answers `200` without touching dependencies.
+See [reverse proxy deployment](reverse-proxy.md) for nginx and Caddy HTTP/1
+configurations, and [native gRPC over TLS](reverse-proxy.md#native-grpc-over-tls)
+for nginx TLS termination with an HTTP/2 upstream.
 
 ## Logs
 
@@ -373,3 +416,33 @@ The values a handler passes to `dbg` are then attached to the response as `X-Rox
 most 16, and only as many as fit in the response head; `X-Roxum-Dbg-Truncated` counts the rest). A streaming response carries only the values from before
 its head was sent. **Never use `--debug` in production**: it shows internal values to clients. roxum prints a warning
 at start when it is on. Any other argument makes the executable exit with status 2.
+
+## Listener endpoints
+
+`Server.ListenOptions.endpoint` selects the transport. Import `pf.Server` and `pf.IpAddr` for TCP:
+
+```roc
+endpoint: Server.Endpoint.Tcp({ address: IpAddr.V4((127, 0, 0, 1)), port: 8080 })
+```
+
+IPv6 loopback is `IpAddr.V6((0, 0, 0, 0, 0, 0, 0, 1))`. Groups are host-order `U16` values; eight zero groups select all IPv6 interfaces. IPv6 listeners explicitly enable `IPV6_V6ONLY`, so exposing both IP families requires a proxy or separate server instances. Scoped IPv6 addresses requiring an interface identifier are unsupported. Outbound TCP resolves both families and tries addresses in resolver order under the connection deadline.
+
+For a proxy on the same machine, use a Unix socket:
+
+```roc
+endpoint: Server.Endpoint.Unix({ path: "/run/my-app/http.sock" })
+```
+
+Paths must be absolute, at most 103 UTF-8 bytes, and contain no NUL, CR, or LF. The parent directory must already exist. Only filesystem stream sockets are supported; Linux abstract sockets and outbound Unix connections are not part of this API. Peer paths and process credentials are not exposed.
+
+The operator controls the socket directory and its access permissions. Socket creation follows the process umask; roxum does not change the directory, owner, group, or permissions. Use a directory writable only by the service owner, with access granted to the intended proxy. Socket-file permissions alone are not a portable access-control mechanism across operating systems; see [unix(7)](https://man7.org/linux/man-pages/man7/unix.7.html).
+
+roxum refuses an existing path, including a regular file, symlink, active socket, or stale socket. It never removes an existing path to make binding succeed. On normal shutdown or an owned startup failure it removes its socket if the filesystem identity still matches; a replacement is left alone. A killed supervisor, machine crash, or failure before ownership transfer can leave a stale socket. Confirm that the old service is stopped before removing it. Workers share the listener, so a worker restart neither rebinds nor unlinks it.
+
+Once all workers are ready, TCP startup writes the bound port and a newline to stdout. Unix startup writes `unix:/absolute/path` and a newline. With TCP, port `0` still requests an available port.
+
+`Server.Metrics.Listen` accepts the same endpoint type. Use a different path for Unix metrics, for example `Server.Metrics.Listen(Server.Endpoint.Unix({ path: "/run/my-app/metrics.sock" }))`. Keep metrics accessible only to trusted monitoring clients.
+
+Request metadata uses `RemoteAddr.Tcp({ ip, port })` or `RemoteAddr.Unix`; Unix connections are not represented by a fabricated loopback address. Match on the transport before using an IP-based policy. All Unix peers share the same transport marker, so it is not an individual client identity.
+
+To migrate, replace separate `address` and `port` fields with `endpoint: Server.Endpoint.Tcp({ address, port })`, wrap the metrics address record in `Server.Endpoint.Tcp`, and match on `RemoteAddr.Tcp` before accessing `ip` or `port`. From the older IPv4-only API, also replace `Server.Ipv4Address.(a, b, c, d)` with `IpAddr.V4((a, b, c, d))` and import `pf.IpAddr`.

@@ -6,6 +6,7 @@ import pf.Handler
 import pf.MethodRouter
 import pf.Reply
 import pf.Router
+import pf.IpAddr
 import pf.Server
 
 ## `config/local.toml` in the working directory chooses the thread and
@@ -33,11 +34,10 @@ init! = |{}| {
 		Ok(count) => count
 		Err(Missing) => 1
 	}
-	address = Server.Ipv4Address.(127, 0, 0, 1)
+	address = IpAddr.V4((127, 0, 0, 1))
 	listen = match settings.drain_timeout_milliseconds {
 		Ok(milliseconds) => Server.ListenOptions.{
-			address,
-			port: 0,
+			endpoint: Server.Endpoint.Tcp({ address, port: 0 }),
 			timeouts: Server.Timeouts.defaults,
 			limits: Server.Limits.defaults,
 			threads,
@@ -45,7 +45,7 @@ init! = |{}| {
 			drain_timeout_milliseconds: milliseconds,
 		}
 		# Leaves the defaulted field out.
-		Err(Missing) => Server.ListenOptions.{ address, port: 0, timeouts: Server.Timeouts.defaults, limits: Server.Limits.defaults, threads, processes }
+		Err(Missing) => Server.ListenOptions.{ endpoint: Server.Endpoint.Tcp({ address, port: 0 }), timeouts: Server.Timeouts.defaults, limits: Server.Limits.defaults, threads, processes }
 	}
 	Ok({ model: {}, listen })
 }

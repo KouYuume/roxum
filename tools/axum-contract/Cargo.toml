@@ -9,4 +9,4 @@ axum = { version = "=0.8.9", features = ["multipart"] }
 bytes = "1"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
-tower-http = { version = "0.6", features = ["compression-gzip"] }
+tower-http = { version = "0.7", features = ["compression-gzip"] }

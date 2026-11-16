@@ -8,6 +8,7 @@ import pf.RemoteAddr
 import pf.RequestHeader
 
 ProxyHeaders := [].{
+
 	## Uses `X-Forwarded-For` to recover the client address when the direct peer
 	## is a trusted proxy. `trusted` holds addresses or CIDR ranges such as
 	## "10.0.0.0/16" or "::1"; a `/0` range, which would trust every peer, is
@@ -31,6 +32,23 @@ ProxyHeaders := [].{
 			Err(InvalidProxy(entry)) => crash "roxum-proxy-headers: not an address or CIDR range: ${entry}"
 		}
 
+	## Explicitly trusts Unix peers. Restrict access to the socket directory;
+	## this grants every process that can connect permission to supply forwarding
+	## headers. `trusted` describes any earlier TCP proxies in the chain.
+	try_trust_unix : List(Str) -> Try((model, RequestHead(tag, provided) => Try(RequestHead(tag, provided), Reply)), [InvalidProxy(Str)])
+	try_trust_unix = |trusted|
+		match parse_all(trusted) {
+			Ok(ranges) => Ok(|_model, head| Ok(resolve_peer(ranges, Bool.True, head)))
+			Err(error) => Err(error)
+		}
+
+	trust_unix : List(Str) -> (model, RequestHead(tag, provided) => Try(RequestHead(tag, provided), Reply))
+	trust_unix = |trusted|
+		match ProxyHeaders.try_trust_unix(trusted) {
+			Ok(check!) => check!
+			Err(InvalidProxy(entry)) => crash "roxum-proxy-headers: not an address or CIDR range: ${entry}"
+		}
+
 	## The scheme the client used, from the nearest proxy's `X-Forwarded-Proto`.
 	## Only meaningful after `trust` ran: from an untrusted peer the field has
 	## been removed and the result is `Http`.
@@ -45,27 +63,35 @@ ProxyHeaders := [].{
 
 	## Applies the trust decision to one request's metadata.
 	resolve : List({ network : IpAddr, prefix : U8 }), RequestHead(tag, provided) -> RequestHead
-	resolve = |ranges, request|
-		if !trusted_ip(ranges, request.remote_addr.ip) {
-			without_forwarded(request)
+	resolve = |ranges, request| resolve_peer(ranges, Bool.False, request)
+}
+
+resolve_peer : List({ network : IpAddr, prefix : U8 }), Bool, RequestHead(tag, provided) -> RequestHead
+resolve_peer = |ranges, trust_unix, request|
+	if !(
+		match request.remote_addr {
+			Tcp({ ip, .. }) => trusted_ip(ranges, ip)
+			Unix => trust_unix
+		}
+	) {
+		without_forwarded(request)
+	} else {
+		entries = List.join(List.map(field_values(request.headers, for_name), split_list))
+		if List.is_empty(entries) {
+			request
 		} else {
-			entries = List.join(List.map(field_values(request.headers, for_name), split_list))
-			if List.is_empty(entries) {
-				request
-			} else {
-				match client_address(ranges, entries) {
-					Ok(ip) => {
-						..request,
-						remote_addr: RemoteAddr.{ ip, port: 0 },
-						# The chain may start with values the client wrote; the
-						# resolved address is the only part to trust.
-						headers: List.drop_if(request.headers, |header| header.name == for_name),
-					}
-					Err(InvalidEntry) => without_forwarded(request)
+			match client_address(ranges, entries) {
+				Ok(ip) => {
+					..request,
+					remote_addr: RemoteAddr.Tcp({ ip, port: 0 }),
+					# The chain may start with values the client wrote; the
+					# resolved address is the only part to trust.
+					headers: List.drop_if(request.headers, |header| header.name == for_name),
 				}
+				Err(InvalidEntry) => without_forwarded(request)
 			}
 		}
-}
+	}
 
 for_name : HeaderName
 for_name = HeaderName.("x-forwarded-for")
@@ -111,7 +137,14 @@ is_space : U8 -> Bool
 is_space = |byte| byte == ' ' or byte == '\t'
 
 ascii_lower : List(U8) -> List(U8)
-ascii_lower = |bytes| List.map(bytes, |byte| if byte >= 'A' and byte <= 'Z' { byte + 32 } else { byte })
+ascii_lower = |bytes| List.map(
+	bytes,
+	|byte| if byte >= 'A' and byte <= 'Z' {
+		byte + 32
+	} else {
+		byte
+	},
+)
 
 # Walks the chain from the nearest hop. Trusted proxies are skipped; the first
 # untrusted address is the client. When every hop is trusted, the farthest one
@@ -348,7 +381,11 @@ contains : { network : IpAddr, prefix : U8 }, IpAddr -> Bool
 contains = |range, ip|
 	match (range.network, ip) {
 		(V4(network), V4(address)) => {
-			mask = if range.prefix == 0 { 0 } else { U32.shl_wrap(0xFFFF_FFFF, 32 - range.prefix) }
+			mask = if range.prefix == 0 {
+				0
+			} else {
+				U32.shl_wrap(0xFFFF_FFFF, 32 - range.prefix)
+			}
 			U32.bitwise_and(ipv4_value(network), mask) == U32.bitwise_and(ipv4_value(address), mask)
 		}
 		(V6(network), V6(address)) => {
@@ -358,7 +395,11 @@ contains = |range, ip|
 				[0, 1, 2, 3, 4, 5, 6, 7],
 				|index| {
 					covered = U8.min(16, U8.minus_saturated(range.prefix, U64.to_u8_wrap(index) * 16))
-					mask = if covered == 0 { 0 } else { U16.shl_wrap(0xFFFF, 16 - covered) }
+					mask = if covered == 0 {
+						0
+					} else {
+						U16.shl_wrap(0xFFFF, 16 - covered)
+					}
 					U16.bitwise_and(List.get(network_groups, index) ?? 0, mask) == U16.bitwise_and(List.get(address_groups, index) ?? 0, mask)
 				},
 			)
@@ -397,7 +438,7 @@ request_with = |remote, headers|
 		query: [],
 		headers,
 		body: Empty,
-		remote_addr: RemoteAddr.{ ip: remote, port: 5000 },
+		remote_addr: RemoteAddr.Tcp({ ip: remote, port: 5000 }),
 		request_id: "test",
 	}
 
@@ -477,7 +518,7 @@ expect {
 		header("forwarded", "for=203.0.113.9"),
 	]
 	request = ProxyHeaders.resolve(trusted_ranges({}), request_from(ip4(192, 0, 2, 7), List.append(forwarding, header("host", "x"))))
-	request.remote_addr.ip == ip4(192, 0, 2, 7) and request.headers == [header("host", "x")]
+	request.remote_addr == RemoteAddr.Tcp({ ip: ip4(192, 0, 2, 7), port: 5000 }) and request.headers == [header("host", "x")]
 }
 
 # Names that only resemble forwarding fields are kept.
@@ -489,19 +530,19 @@ expect is_forwarding_name(HeaderName.("x-forwarded-"))
 # the raw chain is removed; the proxy's protocol field stays for `scheme`.
 expect {
 	request = ProxyHeaders.resolve(trusted_ranges({}), request_from(ip4(10, 0, 0, 5), [header("x-forwarded-for", "198.51.100.1"), header("x-forwarded-for", "10.0.0.9"), header("x-forwarded-proto", "https")]))
-	request.remote_addr == RemoteAddr.{ ip: ip4(198, 51, 100, 1), port: 0 } and request.headers == [header("x-forwarded-proto", "https")]
+	request.remote_addr == RemoteAddr.Tcp({ ip: ip4(198, 51, 100, 1), port: 0 }) and request.headers == [header("x-forwarded-proto", "https")]
 }
 
 # Trusted peer without forwarded fields: unchanged.
 expect {
 	request = ProxyHeaders.resolve(trusted_ranges({}), request_from(ip4(10, 0, 0, 5), [header("host", "x")]))
-	request.remote_addr == RemoteAddr.{ ip: ip4(10, 0, 0, 5), port: 5000 } and request.headers == [header("host", "x")]
+	request.remote_addr == RemoteAddr.Tcp({ ip: ip4(10, 0, 0, 5), port: 5000 }) and request.headers == [header("host", "x")]
 }
 
 # Trusted peer with an unparsable chain: the peer address stays and the fields go.
 expect {
 	request = ProxyHeaders.resolve(trusted_ranges({}), request_from(ip4(10, 0, 0, 5), [header("x-forwarded-for", "unknown")]))
-	request.remote_addr.ip == ip4(10, 0, 0, 5) and List.is_empty(request.headers)
+	request.remote_addr == RemoteAddr.Tcp({ ip: ip4(10, 0, 0, 5), port: 5000 }) and List.is_empty(request.headers)
 }
 
 expect ProxyHeaders.scheme(request_with(ip4(10, 0, 0, 5), [header("x-forwarded-proto", "https")])) == Https
@@ -516,3 +557,16 @@ expect
 		Err(InvalidProxy("10.0.0.0/33")) => Bool.True
 		_ => Bool.False
 	}
+
+# Unix connections carry no IP and are not trusted by CIDR policy.
+expect {
+	request = { ..request_from(ip4(127, 0, 0, 1), [header("x-forwarded-for", "192.0.2.1")]), remote_addr: RemoteAddr.Unix }
+	resolved = ProxyHeaders.resolve(trusted_ranges({}), request)
+	resolved.remote_addr == RemoteAddr.Unix and resolved.headers.is_empty()
+}
+
+expect {
+	request = { ..request_from(ip4(127, 0, 0, 1), [header("x-forwarded-for", "192.0.2.1")]), remote_addr: RemoteAddr.Unix }
+	resolved = resolve_peer([], Bool.True, request)
+	resolved.remote_addr == RemoteAddr.Tcp({ ip: ip4(192, 0, 2, 1), port: 0 }) and resolved.headers.is_empty()
+}

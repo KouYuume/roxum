@@ -16,7 +16,7 @@ import pf.ResponseHeader
 ##         match tag {
 ##             Limit(limit) => Ok(RateLimit.Check.{
 ##                 counter: model.per_minute,
-##                 key: "search:${RateLimit.client_ip(head.remote_addr.ip)}",
+##                 key: match head.remote_addr { Tcp({ ip, .. }) => "search:${RateLimit.client_ip(ip)}", Unix => "search:unix" },
 ##                 limit,
 ##                 on_full: RateLimit.OnFull.Allow,
 ##             })

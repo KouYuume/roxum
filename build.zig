@@ -1,6 +1,27 @@
 const std = @import("std");
+const nghttp2_build = @import("tools/nghttp2-build.zig");
 
 pub fn build(b: *std.Build) void {
+    const http2_module = b.createModule(.{
+        .root_source_file = b.path("platform/host/http2.zig"),
+        .target = b.graph.host,
+        .optimize = std.builtin.OptimizeMode.ReleaseSafe,
+    });
+    nghttp2_build.attach(b, http2_module, b.graph.host, std.builtin.OptimizeMode.ReleaseSafe);
+    const http2_tests = b.addTest(.{ .root_module = http2_module, .use_llvm = true });
+    const http2_test_step = b.step("test-http2-engine", "Test the internal HTTP/2 engine and its allocation bounds");
+    http2_test_step.dependOn(&b.addRunArtifact(http2_tests).step);
+
+    const http2_ownership_module = b.createModule(.{
+        .root_source_file = b.path("tests/http2-engine/ownership_test.zig"),
+        .target = b.graph.host,
+        .optimize = std.builtin.OptimizeMode.ReleaseSafe,
+        .link_libc = true,
+    });
+    http2_ownership_module.addImport("http2_engine", http2_module);
+    const http2_ownership_tests = b.addTest(.{ .root_module = http2_ownership_module, .use_llvm = true });
+    http2_test_step.dependOn(&b.addRunArtifact(http2_ownership_tests).step);
+
     const contract_alloc = b.option(
         bool,
         "contract-alloc",
@@ -27,6 +48,23 @@ pub fn build(b: *std.Build) void {
     if (zigTargetOf(roc_target) == null) {
         @panic("-Droc-target must be one of: arm64mac, arm64musl, x64musl");
     }
+    const http2_target = b.resolveTargetQuery(std.Target.Query.parse(.{ .arch_os_abi = zigTargetOf(roc_target).? }) catch @panic("invalid target"));
+    const http2_fixture_engine = b.createModule(.{ .root_source_file = b.path("platform/host/http2.zig"), .target = http2_target, .optimize = std.builtin.OptimizeMode.ReleaseSafe });
+    nghttp2_build.attach(b, http2_fixture_engine, http2_target, std.builtin.OptimizeMode.ReleaseSafe);
+    const http2_fixture_module = b.createModule(.{ .root_source_file = b.path("tests/http2-engine/server.zig"), .target = http2_target, .optimize = std.builtin.OptimizeMode.ReleaseSafe, .link_libc = true });
+    http2_fixture_module.addImport("http2_engine", http2_fixture_engine);
+    const http2_fixture = b.addExecutable(.{ .name = "http2-engine-server", .root_module = http2_fixture_module });
+    const install_http2_fixture = b.addInstallArtifact(http2_fixture, .{});
+    const http2_fixture_step = b.step("http2-engine-fixture", "Build the independent-client HTTP/2 fixture for roc-target");
+    http2_fixture_step.dependOn(&install_http2_fixture.step);
+    const http2_wire = b.addSystemCommand(&.{ "bash", "tests/http2-engine/run.sh" });
+    http2_wire.addArtifactArg(http2_fixture);
+    const http2_wire_step = b.step("test-http2-wire", "Verify finite HTTP/2 exchanges with the pinned independent client");
+    http2_wire_step.dependOn(&http2_wire.step);
+
+    const http2_roc = b.step("test-http2-roc", "Exercise real Roc HTTP/2 handlers in every backend and allocator mode");
+    http2_roc.dependOn(addHttp2RocFixture(b, roc_target, http2_target));
+
     const host_archive = b.fmt("platform/targets/{s}/libhost.a", .{roc_target});
     // Diagnostic only: measures what the safety checks cost. Release bundles
     // always use ReleaseSafe.
@@ -118,6 +156,7 @@ pub fn build(b: *std.Build) void {
     examples.dependOn(&build_middleware_example.step);
 
     const test_step = b.step("test", "Run Zig unit tests, Roc module tests and negative fixtures, and the parser fuzz tests");
+    test_step.dependOn(http2_test_step);
     const run_platform_tests = b.addSystemCommand(&.{
         "bash",
         "tests/roc/run-platform-tests.sh",
@@ -148,6 +187,8 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&run_effect_tests.step);
     test_step.dependOn(&run_http_client_tests.step);
+    const run_protobuf_tests = b.addSystemCommand(&.{ "bash", "tests/protobuf/unit.sh" });
+    test_step.dependOn(&run_protobuf_tests.step);
     addZigTests(b, test_step, &unit_tests, .{});
     addZigTests(b, test_step, &http1_tests, .{});
 
@@ -656,6 +697,40 @@ pub fn build(b: *std.Build) void {
     });
     test_postgres.dependOn(&run_postgres.step);
 
+    const test_http2_listener = b.step("test-http2-listener", "Exercise production HTTP/2 TCP and Unix listeners in all backend/allocator modes");
+    const run_http2_listener = b.addSystemCommand(&.{ "python3", "tools/check.py", "--only", "test-http2-listener" });
+    test_http2_listener.dependOn(&run_http2_listener.step);
+
+    const test_grpc_unary = b.step("test-grpc-unary", "Verify generated typed Unary service bindings");
+    const run_grpc_unary = b.addSystemCommand(&.{ "python3", "tools/check.py", "--only", "test-grpc-unary" });
+    test_grpc_unary.dependOn(&run_grpc_unary.step);
+
+    const test_grpc_probe = b.step("test-grpc-probe", "Verify fixed-byte gRPC interoperability on TCP and Unix listeners");
+    const run_grpc_probe = b.addSystemCommand(&.{ "python3", "tools/check.py", "--only", "test-grpc-probe" });
+    test_grpc_probe.dependOn(&run_grpc_probe.step);
+
+    const test_grpc_example = b.step("test-grpc-example", "Verify the runnable typed Unary service example");
+    const run_grpc_example = b.addSystemCommand(&.{ "python3", "tools/check.py", "--only", "test-grpc-example" });
+    test_grpc_example.dependOn(&run_grpc_example.step);
+    const test_grpc_wire = b.step("test-grpc-wire", "Verify finite gRPC framing, metadata and status integration");
+    const run_grpc_wire = b.addSystemCommand(&.{ "python3", "tools/check.py", "--only", "test-grpc-wire" });
+    test_grpc_wire.dependOn(&run_grpc_wire.step);
+    const test_protobuf_layouts = b.step("test-protobuf-layouts", "Check candidate Protobuf layouts in all backend/allocator modes");
+    const run_protobuf_layouts = b.addSystemCommand(&.{ "python3", "tools/check.py", "--only", "test-protobuf-layouts" });
+    test_protobuf_layouts.dependOn(&run_protobuf_layouts.step);
+    const test_protobuf_codegen = b.step("test-protobuf-codegen", "Check generated Protobuf scalar codecs in all backend/allocator modes");
+    const run_protobuf_codegen = b.addSystemCommand(&.{ "python3", "tools/check.py", "--only", "test-protobuf-codegen" });
+    test_protobuf_codegen.dependOn(&run_protobuf_codegen.step);
+    const test_protobuf_package = b.step("test-protobuf-package", "Verify standalone Protobuf distribution and URL imports");
+    const run_protobuf_package = b.addSystemCommand(&.{ "python3", "tools/check.py", "--only", "test-protobuf-package" });
+    test_protobuf_package.dependOn(&run_protobuf_package.step);
+    const test_protobuf = b.step("test-protobuf", "Check pure Protobuf wire operations in all backend/allocator modes");
+    const run_protobuf = b.addSystemCommand(&.{ "python3", "tools/check.py", "--only", "test-protobuf" });
+    test_protobuf.dependOn(&run_protobuf.step);
+    const fuzz_protobuf = b.step("fuzz-protobuf", "Fuzz pure Protobuf wire parsing with the pinned Roc fuzz runner");
+    const run_protobuf_fuzz = b.addSystemCommand(&.{ "bash", "tools/fuzz-roc-protobuf.sh" });
+    fuzz_protobuf.dependOn(&run_protobuf_fuzz.step);
+
     const test_layered_app = b.step(
         "test-layered-app",
         "Build the layered sample application and check its HTTP responses in every backend",
@@ -760,6 +835,7 @@ const ZigTest = struct {
     imports: []const []const u8 = &.{},
     modules: []const Module = &.{},
     link_libc: bool = false,
+    link_http2: bool = false,
     /// Runs only when the build machine runs this OS.
     os: ?std.Target.Os.Tag = null,
 };
@@ -804,10 +880,11 @@ const unit_tests = [_]ZigTest{
     .{ .root = "platform/host/net/kqueue.zig", .link_libc = true, .os = std.Target.Os.Tag.macos },
     .{ .root = "platform/host/net/epoll.zig", .link_libc = true, .os = std.Target.Os.Tag.linux },
     .{ .root = "platform/host/net/listener_transfer.zig", .link_libc = true },
+    .{ .root = "platform/host/bridge.zig", .link_libc = true },
     .{ .root = "platform/host/sync.zig", .link_libc = true },
-    .{ .root = "platform/host/event_loop.zig", .link_libc = true },
+    .{ .root = "platform/host/event_loop.zig", .link_libc = true, .link_http2 = true },
     .{ .root = "platform/host/http1/date.zig" },
-    .{ .root = "platform/host/server.zig", .link_libc = true },
+    .{ .root = "platform/host/server.zig", .link_libc = true, .link_http2 = true },
     .{ .root = "platform/host/connection.zig", .link_libc = true },
     .{ .root = "platform/host/supervisor.zig", .link_libc = true },
     .{ .root = "tests/zig/request_reader_timeout_test.zig", .imports = &.{"host"}, .modules = &.{host_test_module}, .link_libc = true },
@@ -861,8 +938,8 @@ const unit_tests = [_]ZigTest{
 const tsan_tests = [_]ZigTest{
     .{ .root = "platform/host/fiber.zig", .link_libc = true },
     .{ .root = "platform/host/scheduler.zig", .link_libc = true },
-    .{ .root = "platform/host/work_queue.zig", .link_libc = true },
-    .{ .root = "platform/host/event_loop.zig", .link_libc = true },
+    .{ .root = "platform/host/work_queue.zig", .link_libc = true, .link_http2 = true },
+    .{ .root = "platform/host/event_loop.zig", .link_libc = true, .link_http2 = true },
     .{ .root = "platform/host/host.zig", .link_libc = true },
     .{
         .root = "tests/support/allocator/tracking_environment.zig",
@@ -897,6 +974,24 @@ const TestBuild = struct {
 fn addZigTests(b: *std.Build, step: *std.Build.Step, tests: []const ZigTest, options: TestBuild) void {
     for (tests) |spec| {
         if (spec.os) |os| if (os != b.graph.host.result.os.tag) continue;
+        if (spec.link_http2) {
+            std.debug.assert(spec.imports.len == 0 and spec.modules.len == 0);
+            const optimize = if (options.optimize) |mode|
+                std.meta.stringToEnum(std.builtin.OptimizeMode, mode).?
+            else
+                std.builtin.OptimizeMode.Debug;
+            const module = b.createModule(.{
+                .root_source_file = b.path(spec.root),
+                .target = b.graph.host,
+                .optimize = optimize,
+                .sanitize_thread = options.sanitize_thread,
+                .link_libc = spec.link_libc,
+            });
+            nghttp2_build.attach(b, module, b.graph.host, optimize);
+            const executable = b.addTest(.{ .root_module = module, .use_llvm = true });
+            step.dependOn(&b.addRunArtifact(executable).step);
+            continue;
+        }
         const run = b.addSystemCommand(&.{ b.graph.zig_exe, "test" });
         // The fiber's file-scope assembly requires LLVM on x86_64; the
         // default Debug backend leaves its entry/switch symbols undefined.
@@ -992,6 +1087,20 @@ fn addHostBuild(b: *std.Build, roc_target: []const u8, contract_alloc: bool, opt
         module.addImport("tracking_allocator", host_module(b, "tests/support/allocator/tracking_allocator.zig", resolved_target, options, roc_target, musl));
         break :blk module;
     } else host_module(b, "platform/host/main.zig", resolved_target, options, roc_target, musl);
+    // Preserve the Zig object's exported Roc ABI symbols: compile the C engine
+    // separately and archive both objects, rather than partial-linking them.
+    const engine_module = b.createModule(.{
+        .root_source_file = b.addWriteFiles().add("nghttp2-root.zig", ""),
+        .target = resolved_target,
+        .optimize = options.optimize,
+        .strip = options.strip,
+        .pic = if (musl) true else null,
+    });
+    nghttp2_build.attach(b, engine_module, resolved_target, options.optimize);
+    const engine_object = b.addObject(.{ .name = "nghttp2", .root_module = engine_module });
+    const engine_bindings = engine_module.import_table.get("nghttp2_c").?;
+    root_module.addImport("nghttp2_c", engine_bindings);
+    if (root_module.import_table.get("host")) |host_namespace| host_namespace.addImport("nghttp2_c", engine_bindings);
     const compile_host = b.addObject(.{ .name = "host", .root_module = root_module });
     // musl's libc.a carries no compiler-rt, so the host brings its own.
     if (musl) compile_host.bundle_compiler_rt = true;
@@ -1005,6 +1114,7 @@ fn addHostBuild(b: *std.Build, roc_target: []const u8, contract_alloc: bool, opt
         b.fmt("{s}/libhost.a", .{target_dir}),
         host_object,
     });
+    archive_host.addFileArg(engine_object.getEmittedBin());
     archive_host.step.dependOn(&place_host_object.step);
     const write_musl_runtime = b.addSystemCommand(&.{
         "bash",
@@ -1014,4 +1124,53 @@ fn addHostBuild(b: *std.Build, roc_target: []const u8, contract_alloc: bool, opt
     write_musl_runtime.addArgs(&.{ roc_target, target_dir });
     write_musl_runtime.step.dependOn(&archive_host.step);
     return &write_musl_runtime.step;
+}
+
+fn addHttp2RocFixture(b: *std.Build, roc_target: []const u8, target: std.Build.ResolvedTarget) *std.Build.Step {
+    const compile_step = b.step("http2-roc-hosts", "Compile the real Roc HTTP/2 fixture hosts for roc-target");
+    const musl = std.mem.endsWith(u8, roc_target, "musl");
+    const c_module = b.createModule(.{
+        .root_source_file = b.addWriteFiles().add("http2-roc-engine.zig", ""),
+        .target = target,
+        .optimize = std.builtin.OptimizeMode.ReleaseSafe,
+        .pic = if (musl) true else null,
+    });
+    nghttp2_build.attach(b, c_module, target, std.builtin.OptimizeMode.ReleaseSafe);
+    const engine_object = b.addObject(.{ .name = "http2-roc-engine", .root_module = c_module });
+    compile_step.dependOn(&engine_object.step);
+    const run = b.addSystemCommand(&.{ "bash", "tests/http2-roc/run.sh", roc_target });
+    for ([_]bool{ false, true }) |tracking| {
+        const host_module = b.createModule(.{
+            .root_source_file = b.path("platform/host/host.zig"),
+            .target = target,
+            .optimize = std.builtin.OptimizeMode.ReleaseSafe,
+            .link_libc = true,
+            .pic = if (musl) true else null,
+            .stack_protector = if (std.mem.eql(u8, roc_target, "x64musl")) false else null,
+        });
+        host_module.addImport("nghttp2_c", c_module.import_table.get("nghttp2_c").?);
+        const tracker = b.createModule(.{ .root_source_file = b.path("tests/support/allocator/tracking_allocator.zig"), .target = target, .optimize = std.builtin.OptimizeMode.ReleaseSafe });
+        const environment = b.createModule(.{ .root_source_file = b.path("tests/support/allocator/tracking_environment.zig"), .target = target, .optimize = std.builtin.OptimizeMode.ReleaseSafe });
+        environment.addImport("host", host_module);
+        environment.addImport("tracking_allocator", tracker);
+        const root = b.createModule(.{
+            .root_source_file = b.path("tests/http2-roc/host.zig"),
+            .target = target,
+            .optimize = std.builtin.OptimizeMode.ReleaseSafe,
+            .link_libc = true,
+            .pic = if (musl) true else null,
+            .stack_protector = if (std.mem.eql(u8, roc_target, "x64musl")) false else null,
+        });
+        root.addImport("host", host_module);
+        root.addImport("tracking_environment", environment);
+        const options = b.addOptions();
+        options.addOption(bool, "tracking", tracking);
+        root.addOptions("options", options);
+        const object = b.addObject(.{ .name = if (tracking) "http2-roc-tracking" else "http2-roc-arena", .root_module = root });
+        if (musl) object.bundle_compiler_rt = true;
+        compile_step.dependOn(&object.step);
+        run.addFileArg(object.getEmittedBin());
+    }
+    run.addFileArg(engine_object.getEmittedBin());
+    return &run.step;
 }

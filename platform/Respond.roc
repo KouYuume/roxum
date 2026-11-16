@@ -33,6 +33,10 @@ Respond :: [].{
 				response = Respond.to_response(inner)
 				{ ..response, headers: List.concat(response.headers, headers) }
 			}
+			WithTrailers(trailers, inner) => {
+				response = Respond.to_response(inner)
+				{ ..response, trailers: List.concat(response.trailers, trailers) }
+			}
 			ReplaceHeaders(headers, inner) => {
 				response = Respond.to_response(inner)
 				kept = List.drop_if(response.headers, |existing| List.any(headers, |header| same_name(header, existing)))
@@ -177,4 +181,12 @@ expect {
 			Http.ResponseHeader.{ name: Http.HeaderName.("x-kept"), value: kept },
 			Http.ResponseHeader.{ name: Http.HeaderName.("x-request-id"), value: second },
 		]
+}
+
+# Final metadata appends inside-out and survives unrelated reply wrappers.
+expect {
+	first = Http.ResponseHeader.{ name: Http.HeaderName.("x-first"), value: "one" }
+	last = Http.ResponseHeader.{ name: Http.HeaderName.("x-last"), value: "two" }
+	response = Respond.to_response(Reply.text("body").with_trailers([first]).with_status(201).replace_headers([first]).with_trailers([last]))
+	response.status == 201 and List.contains(response.headers, first) and response.trailers == [first, last]
 }

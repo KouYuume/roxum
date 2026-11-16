@@ -9,6 +9,15 @@ a large request body, such as an upload, in parts as it arrives.
 `zig build test-m9p4` runs the server-sent events example in
 [`integrations/roxum-sse/example`](../../integrations/roxum-sse/example/app.roc).
 
+HTTP/2 currently supports finite bodies. Routing and `BeforeBody` stages run
+before input EOF; a body read suspends until the complete bounded input arrives.
+`Handler.streaming` can then consume that collected body in parts, but does not
+receive incremental network data. The streamed-read default comes from
+`maximum_streamed_body_bytes`; route layers can replace that default, but
+`maximum_body_bytes` remains a hard HTTP/2 cap.
+`Unlimited` cannot remove that finite-input cap. Response writers and file streams
+remain unsupported on HTTP/2. The incremental streaming examples below use HTTP/1.
+
 ## Writing a body
 
 `Reply.stream` takes the function that writes the body. The handler returns the reply; middleware still sees and

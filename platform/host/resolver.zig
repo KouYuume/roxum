@@ -185,13 +185,13 @@ fn lookup(name: []const u8, port: u16, numeric_only: bool, into: *Addresses) boo
     @memcpy(name_buffer[0..name.len], name);
     name_buffer[name.len] = 0;
     var port_buffer: [6:0]u8 = undefined;
-    const port_text = std.fmt.bufPrintZ(&port_buffer, "{d}", .{port}) catch return false;
+    const port_text = std.fmt.bufPrintSentinel(&port_buffer, "{d}", .{port}, 0) catch return false;
     var hints = std.mem.zeroes(std.c.addrinfo);
     hints.family = std.c.AF.UNSPEC;
     hints.socktype = std.c.SOCK.STREAM;
     hints.flags = .{ .NUMERICHOST = numeric_only, .NUMERICSERV = true };
     var result: ?*std.c.addrinfo = null;
-    if (@intFromEnum(std.c.getaddrinfo(&name_buffer, port_text, &hints, &result)) != 0) return false;
+    if (@backingInt(std.c.getaddrinfo(&name_buffer, port_text, &hints, &result)) != 0) return false;
     defer if (result) |first| std.c.freeaddrinfo(first);
     into.count = 0;
     var item = result;

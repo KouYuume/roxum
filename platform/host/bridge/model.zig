@@ -1,3 +1,4 @@
+const net = @import("../net.zig");
 const std = @import("std");
 const abi = @import("../roc_platform_abi.zig");
 const request_id = @import("../request_id.zig");
@@ -18,8 +19,8 @@ pub const rocInit = abi.roc_init;
 pub const rocHandle = abi.roc_handle;
 
 pub const ListenOptions = struct {
-    address: [4]u8,
-    port: u16,
+    endpoint: net.Endpoint,
+    http2: bool = false,
     timeouts: Timeouts,
     limits: Limits,
     threads: Threads,
@@ -33,10 +34,7 @@ pub const ListenOptions = struct {
     routes: []const []const u8,
 };
 
-pub const MetricsListen = struct {
-    address: [4]u8,
-    port: u16,
-};
+pub const MetricsListen = net.Endpoint;
 
 /// How many threads one process runs requests on.
 pub const Threads = union(enum) {
@@ -60,6 +58,7 @@ pub const Count = union(enum) {
 
 /// What one process holds at once, chosen by the application.
 pub const Limits = struct {
+    http2_execution_milliseconds: ?u64 = null,
     maximum_streams: Count,
     maximum_queued_requests: Count,
     queue_timeout_milliseconds: u64,
@@ -93,12 +92,19 @@ pub const Application = struct {
 
     /// Takes ownership of the model reference contained in a successful
     /// `roc_init` result, and copies the route patterns, releasing Roc's.
-    /// The listen fields contain no Roc-owned allocations.
+    /// Endpoint paths are copied before releasing the Roc strings.
     pub fn initOwned(
         value: abi.Init_for_hostOk,
         roc_host: *abi.RocHost,
-    ) error{OutOfMemory}!Application {
+    ) (error{OutOfMemory} || net.Error)!Application {
         defer abi.decrefListOfStr(value.routes, roc_host);
+        defer value.listen.endpoint.decref(roc_host);
+        defer value.listen.metrics.decref(roc_host);
+        const endpoint = try endpointFromRoc(value.listen.endpoint);
+        const metrics: ?MetricsListen = switch (value.listen.metrics.tag) {
+            abi.ServerMetricsTag.Off => null,
+            abi.ServerMetricsTag.Listen => try endpointFromRoc(value.listen.metrics.payload_listen()),
+        };
         const routes = try copyRoutes(value.routes);
         return .{
             .model_root = ModelRoot.initOwned(
@@ -106,13 +112,8 @@ pub const Application = struct {
                 roc_host,
             ),
             .listen_options = .{
-                .address = .{
-                    value.listen.address._0,
-                    value.listen.address._1,
-                    value.listen.address._2,
-                    value.listen.address._3,
-                },
-                .port = value.listen.port,
+                .endpoint = endpoint,
+                .http2 = value.listen.protocol == abi.ServerProtocol.http2,
                 .timeouts = .{
                     .initial_request_milliseconds = value.listen.timeouts.initial_request_milliseconds,
                     .keep_alive_idle_milliseconds = value.listen.timeouts.keep_alive_idle_milliseconds,
@@ -121,6 +122,10 @@ pub const Application = struct {
                     .response_write_milliseconds = value.listen.timeouts.response_write_milliseconds,
                 },
                 .limits = .{
+                    .http2_execution_milliseconds = switch (value.listen.limits.http2_execution.tag) {
+                        abi.ServerExecutionLimitTag.Unlimited => null,
+                        abi.ServerExecutionLimitTag.Milliseconds => value.listen.limits.http2_execution.payload_milliseconds(),
+                    },
                     .maximum_streams = Count.of(value.listen.limits.maximum_streams),
                     .maximum_queued_requests = Count.of(value.listen.limits.maximum_queued_requests),
                     .queue_timeout_milliseconds = value.listen.limits.queue_timeout_milliseconds,
@@ -151,16 +156,7 @@ pub const Application = struct {
                     abi.ServerAccessLog.json_lines => access_log.Mode.json_lines,
                     abi.ServerAccessLog.json_lines_with_path => access_log.Mode.json_lines_with_path,
                 },
-                .metrics = switch (value.listen.metrics.tag) {
-                    abi.ServerMetricsTag.Off => null,
-                    abi.ServerMetricsTag.Listen => blk: {
-                        const listen = value.listen.metrics.payload_listen();
-                        break :blk MetricsListen{
-                            .address = .{ listen.address._0, listen.address._1, listen.address._2, listen.address._3 },
-                            .port = listen.port,
-                        };
-                    },
-                },
+                .metrics = metrics,
                 .routes = routes,
             },
         };
@@ -210,3 +206,40 @@ pub const ModelRoot = struct {
         self.released = true;
     }
 };
+
+fn ipFromRoc(ip: abi.HttpIpAddr) net.IpAddress {
+    return switch (ip.tag) {
+        abi.HttpIpAddrTag.V4 => blk: {
+            const v = ip.payload_v4();
+            break :blk .{ .v4 = .{ v._0, v._1, v._2, v._3 } };
+        },
+        abi.HttpIpAddrTag.V6 => blk: {
+            const v = ip.payload_v6();
+            break :blk .{ .v6 = .{ v._0, v._1, v._2, v._3, v._4, v._5, v._6, v._7 } };
+        },
+    };
+}
+
+test "listener addresses preserve the Roc family and every group" {
+    var ip = std.mem.zeroes(abi.HttpIpAddr);
+    ip.tag = abi.HttpIpAddrTag.V4;
+    const v4: *abi.HttpIpAddrV4 = @ptrCast(@alignCast(&ip.payload));
+    v4.* = .{ ._0 = 0, ._1 = 1, ._2 = 254, ._3 = 255 };
+    try std.testing.expectEqual([4]u8{ 0, 1, 254, 255 }, ipFromRoc(ip).v4);
+
+    // Distinct groups expose reordering; byte and U16 boundaries expose truncation.
+    ip.tag = abi.HttpIpAddrTag.V6;
+    const v6: *abi.HttpIpAddrV6 = @ptrCast(@alignCast(&ip.payload));
+    v6.* = .{ ._0 = 0, ._1 = 1, ._2 = 255, ._3 = 256, ._4 = 257, ._5 = 0x1234, ._6 = 65534, ._7 = 65535 };
+    try std.testing.expectEqual([8]u16{ 0, 1, 255, 256, 257, 0x1234, 65534, 65535 }, ipFromRoc(ip).v6);
+}
+
+fn endpointFromRoc(endpoint: abi.ServerEndpoint) net.Error!net.Endpoint {
+    return switch (endpoint.tag) {
+        abi.ServerEndpointTag.Tcp => blk: {
+            const tcp = endpoint.payload_tcp();
+            break :blk .{ .tcp = .{ .address = ipFromRoc(tcp.address), .port = tcp.port } };
+        },
+        abi.ServerEndpointTag.Unix => .{ .unix = try net.UnixPath.init(endpoint.payload_unix().path.asSlice()) },
+    };
+}

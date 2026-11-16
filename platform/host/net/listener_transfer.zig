@@ -18,7 +18,7 @@ const control_length = header_space + @sizeOf(c_int);
 const control_space = header_space + alignControl(@sizeOf(c_int));
 
 const ControlBuffer = struct {
-    bytes: [control_space]u8 align(@alignOf(usize)) = [_]u8{0} ** control_space,
+    bytes: [control_space]u8 align(@alignOf(usize)) = @as([control_space]u8, @splat(0)),
 
     fn header(self: *ControlBuffer) *std.c.cmsghdr {
         return @ptrCast(&self.bytes);
@@ -40,14 +40,44 @@ const Report = extern struct {
     port: u16,
     workers: u16,
     drain_timeout_milliseconds: u64,
-    admin_address: [4]u8,
-    admin_port: u16,
+    is_unix: u8,
+    unix_path: net.OwnedUnixPath,
+    admin: EndpointReport,
 };
 
 /// The admin port's address and port.
-pub const Admin = struct {
-    address: [4]u8,
-    port: u16,
+pub const Admin = net.Endpoint;
+
+const EndpointReport = extern struct {
+    kind: u8 = 0,
+    address: [8]u16 = @splat(0),
+    path: net.UnixPath = .{},
+    port: u16 = 0,
+
+    fn encode(endpoint: ?Admin) EndpointReport {
+        const given = endpoint orelse return .{};
+        return switch (given) {
+            net.Endpoint.unix => |path| .{ .kind = 3, .path = path },
+            net.Endpoint.tcp => |tcp| switch (tcp.address) {
+                net.IpAddress.v4 => |v| .{ .kind = 1, .address = .{ v[0], v[1], v[2], v[3], 0, 0, 0, 0 }, .port = tcp.port },
+                net.IpAddress.v6 => |v| .{ .kind = 2, .address = v, .port = tcp.port },
+            },
+        };
+    }
+
+    fn decode(self: EndpointReport) !?Admin {
+        return switch (self.kind) {
+            0 => null,
+            1 => blk: {
+                var octets: [4]u8 = undefined;
+                for (&octets, self.address[0..4]) |*octet, group| octet.* = std.math.cast(u8, group) orelse return error.ReadinessFailed;
+                break :blk Admin{ .tcp = .{ .address = .{ .v4 = octets }, .port = self.port } };
+            },
+            2 => Admin{ .tcp = .{ .address = .{ .v6 = self.address }, .port = self.port } },
+            3 => Admin{ .unix = try net.UnixPath.init(self.path.slice()) },
+            else => error.ReadinessFailed,
+        };
+    }
 };
 
 pub const Ready = struct {
@@ -62,8 +92,9 @@ pub fn send(channel: c_int, listener: net.Listener, workers: u16, drain_timeout_
         .port = listener.port,
         .workers = workers,
         .drain_timeout_milliseconds = drain_timeout_milliseconds,
-        .admin_address = if (admin) |given| given.address else .{ 0, 0, 0, 0 },
-        .admin_port = if (admin) |given| given.port else 0,
+        .is_unix = @intFromBool(listener.unix_path != null),
+        .unix_path = listener.unix_path orelse std.mem.zeroes(net.OwnedUnixPath),
+        .admin = EndpointReport.encode(admin),
     };
     const iov = std.posix.iovec_const{ .base = std.mem.asBytes(&report).ptr, .len = @sizeOf(Report) };
     var control = ControlBuffer{};
@@ -116,17 +147,19 @@ pub fn receive(channel: c_int) !?Ready {
     // From here the kernel has installed a descriptor in this process, so
     // every rejection must close it.
     const descriptor = control.descriptor().*;
-    if (count != @sizeOf(Report) or (message.flags & std.c.MSG.CTRUNC) != 0 or report.port == 0 or
+    if (count != @sizeOf(Report) or (message.flags & std.c.MSG.CTRUNC) != 0 or report.is_unix > 1 or (report.is_unix == 0 and report.port == 0) or
         report.workers == 0 or !net.setCloseOnExec(descriptor))
     {
         net.closeSocket(descriptor);
         return error.ReadinessFailed;
     }
+    errdefer net.closeSocket(descriptor);
+    if (report.is_unix == 1) _ = try net.UnixPath.init(report.unix_path.path.slice());
     return .{
-        .listener = .{ .socket = descriptor, .port = report.port },
+        .listener = .{ .socket = descriptor, .port = report.port, .unix_path = if (report.is_unix == 1) report.unix_path else null },
         .workers = report.workers,
         .drain_timeout_milliseconds = report.drain_timeout_milliseconds,
-        .admin = if (report.admin_port == 0) null else .{ .address = report.admin_address, .port = report.admin_port },
+        .admin = try report.admin.decode(),
     };
 }
 
@@ -140,15 +173,23 @@ test "a listener descriptor crosses a socket pair" {
 
     const listener = try net.listenIpv4(.{ 127, 0, 0, 1 }, 0);
     defer net.closeSocket(listener.socket);
-    try send(channels[1], listener, 3, 20_000, .{ .address = .{ 127, 0, 0, 1 }, .port = 9090 });
+    try send(channels[1], listener, 3, 20_000, .{ .tcp = .{ .address = .{ .v4 = .{ 127, 0, 0, 1 } }, .port = 9090 } });
 
     const received = (try receive(channels[0])).?;
     defer net.closeSocket(received.listener.socket);
     try std.testing.expectEqual(listener.port, received.listener.port);
     try std.testing.expectEqual(@as(u16, 3), received.workers);
     try std.testing.expectEqual(@as(u64, 20_000), received.drain_timeout_milliseconds);
-    try std.testing.expectEqual([4]u8{ 127, 0, 0, 1 }, received.admin.?.address);
-    try std.testing.expectEqual(@as(u16, 9090), received.admin.?.port);
+    try std.testing.expectEqual([4]u8{ 127, 0, 0, 1 }, received.admin.?.tcp.address.v4);
+    try std.testing.expectEqual(@as(u16, 9090), received.admin.?.tcp.port);
+
+    // Distinct groups expose reordering; byte and U16 boundaries expose truncation.
+    const segments = [8]u16{ 0, 1, 255, 256, 257, 0x1234, 65534, 65535 };
+    try send(channels[1], listener, 1, 20_000, .{ .tcp = .{ .address = .{ .v6 = segments }, .port = 9090 } });
+    const ipv6_admin = (try receive(channels[0])).?;
+    defer net.closeSocket(ipv6_admin.listener.socket);
+    try std.testing.expectEqual(segments, ipv6_admin.admin.?.tcp.address.v6);
+    try std.testing.expectEqual(@as(u16, 9090), ipv6_admin.admin.?.tcp.port);
 
     try send(channels[1], listener, 1, 20_000, null);
     const without_admin = (try receive(channels[0])).?;

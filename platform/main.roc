@@ -45,6 +45,7 @@ platform "roxum"
 		RateCounter,
 		Redirect,
 		Reply,
+		RequestExecution,
 		RequestHead,
 		Respond,
 		ResponseWriter,
@@ -82,6 +83,9 @@ platform "roxum"
 		"roxum_instant_now_nanoseconds": HostInstant.now_nanoseconds!,
 		"roxum_log_write": HostLog.write!,
 		"roxum_random_u64": HostRandom.u64!,
+		"roxum_request_execution_elapsed": HostRequestExecution.elapsed_nanoseconds!,
+		"roxum_request_execution_limit": HostRequestExecution.limit_nanoseconds!,
+		"roxum_request_execution_limit_with_response": HostRequestExecution.limit_with_response!,
 		"roxum_rate_counter_add": HostRateCounter.add!,
 		"roxum_rate_counter_new": HostRateCounter.new!,
 		"roxum_secret_derive": HostSecret.derive!,
@@ -132,6 +136,7 @@ import HostFile
 import HostInstant
 import HostLog
 import HostRandom
+import HostRequestExecution
 import HostResponse
 import HostRateCounter
 import HostConcurrency
@@ -148,6 +153,7 @@ import Handler
 import Middleware
 import Pipeline
 import RequestHead
+import RequestExecution
 import BodyLimit
 import Files
 import FileRoot
@@ -212,6 +218,12 @@ handle_for_host! = |model, request| {
 	route = match answered.route {
 		Ok(pattern) => pattern
 		Err(Unrouted) => ""
+	}
+	if !List.is_empty(answered.response.trailers) {
+		match (Reply.writer(answered.reply), Reply.file_target(answered.reply)) {
+			(Err(NotStreamed), Err(NotFile)) => {}
+			_ => crash "Response trailers require a finite response"
+		}
 	}
 	# A streamed body: send the head, then let the reply's function
 	# write the body here, on the request's fiber. The host ends the body

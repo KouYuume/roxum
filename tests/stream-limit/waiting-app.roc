@@ -9,6 +9,7 @@ import pf.ResponseBody
 import pf.ResponseWriter
 import pf.RouteContext
 import pf.Router
+import pf.IpAddr
 import pf.Server
 import pf.Tcp
 
@@ -23,8 +24,7 @@ init! = |{}| {
 	Ok({
 		model: { gate },
 		listen: {
-			address: Server.Ipv4Address.(127, 0, 0, 1),
-			port: 0,
+			endpoint: Server.Endpoint.Tcp({ address: IpAddr.V4((127, 0, 0, 1)), port: 0 }),
 			timeouts: Server.Timeouts.defaults,
 			limits: { maximum_streams: Server.Count.Fixed(1) },
 			threads: Server.Threads.Fixed(1),

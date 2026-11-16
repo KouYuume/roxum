@@ -11,6 +11,7 @@ import pf.ResponseBody
 import pf.ResponseWriter
 import pf.RouteContext
 import pf.Router
+import pf.IpAddr
 import pf.Server
 import pf.Tcp
 
@@ -48,14 +49,13 @@ init! = |{}| {
 		if settings.metrics_port == 0 {
 			Server.Metrics.Off
 		} else {
-			Server.Metrics.Listen({ address: Server.Ipv4Address.(127, 0, 0, 1), port: U64.to_u16_wrap(settings.metrics_port) })
+			Server.Metrics.Listen(Server.Endpoint.Tcp({ address: IpAddr.V4((127, 0, 0, 1)), port: U64.to_u16_wrap(settings.metrics_port) }))
 		}
 	delay = Tcp.pool!(Tcp.PoolOptions.{ host: "127.0.0.1", port: settings.delay_port, maximum_connections: 4 }).map_err(|_| StartupErr("pool"))?
 	Ok({
 		model: { delay },
 		listen: Server.ListenOptions.{
-			address: Server.Ipv4Address.(127, 0, 0, 1),
-			port: 0,
+			endpoint: Server.Endpoint.Tcp({ address: IpAddr.V4((127, 0, 0, 1)), port: 0 }),
 			timeouts: Server.Timeouts.defaults,
 			limits: Server.Limits.{
 				queue_timeout_milliseconds: settings.queue_timeout_milliseconds,
