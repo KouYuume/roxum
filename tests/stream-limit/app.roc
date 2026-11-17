@@ -33,6 +33,19 @@ routes =
 		.route("/", MethodRouter.get(Handler.static(|{}| Reply.bytes("ok".to_utf8(), "application/octet-stream"))))
 		.route("/long", MethodRouter.get(Handler.static(|{}| Reply.stream(|writer| write_chunks!(writer, 1024)))))
 		.route("/short", MethodRouter.get(Handler.static(|{}| Reply.stream(|writer| write_chunks!(writer, 2)))))
+		.route(
+			"/error",
+			MethodRouter.get(
+				Handler.static(
+					|{}| Reply.stream(
+						|writer| {
+							ResponseWriter.write!(writer, "partial".to_utf8())?
+							Err(StreamClosed)
+						},
+					),
+				),
+			),
+		)
 		.route("/sleepy", MethodRouter.get(Handler.static(|{}| sleepy)))
 
 ## Writes, then sleeps 10 s inside the body with keep-alive bytes every

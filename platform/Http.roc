@@ -120,6 +120,8 @@ Http :: [].{
 	## The HTTP/2 body deadline covers all input from metadata completion,
 	## including callback execution, rather than restarting after each chunk.
 	RequestStream :: U64.{
+		wait! = |RequestStream.(token), writer, interest| HostBody.wait!(writer, token, interest)
+
 
 		## Reads the next part of the request body, holding bounded parts rather
 		## than the whole body. It fails with

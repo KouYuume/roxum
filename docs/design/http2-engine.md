@@ -139,10 +139,11 @@ The small engine object and temporary callback-registration object are outside
 this limit; the engine's stream table has a fixed size. Observer/application
 allocations are outside this domain and require separate bounded admission.
 
-Request input currently uses automatic receive-window replenishment with bounded
-finite request sizes. A streaming request reader must replace that with explicit
-consumption accounting and aggregate backpressure before this adapter can serve
-unbounded or full-duplex requests. Finite response trailers and generic execution
+The finite `Engine.create` fixture uses automatic receive-window replenishment
+and bounded finite request sizes. Production uses `Engine.createIncremental`:
+consuming queued input returns credit explicitly, with connection and worker
+budgets bounding retained input. `Handler.duplex` coordinates production input
+and output independently; see [HTTP/2 streaming](http2-streaming.md). Finite response trailers and generic execution
 deadlines are supported. Production scheduling, GOAWAY drain, and observability
 are described below; streaming gates are tracked in the [gRPC plan](../plans/grpc.md).
 
@@ -538,4 +539,4 @@ other. Test READMEs describe reproduction commands and detailed case coverage.
 The internal engine also supports bounded incremental response chunks and an
 input mode with explicit receive credit, used by production request readers.
 See the [streaming contract](http2-streaming.md) for these APIs, the production
-callback writer, and the target request-scoped input and duplex lifecycle.
+callback writer, and the request-scoped input and duplex lifecycle.

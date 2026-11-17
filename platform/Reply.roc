@@ -31,7 +31,8 @@ Reply := [
 ].{
 	## A 200 response whose body `write!` writes as it goes: after the
 	## middleware, the platform sends the head and calls `write!`, and the
-	## body ends when it returns. `write!` may wait for anything, as a
+	## body ends when it returns Ok({}). Err(StreamClosed) aborts unfinished
+	## output without a successful terminator. `write!` may wait for anything, as a
 	## handler does, and other requests go on meanwhile. The body uses chunked
 	## transfer coding on HTTP/1.1; on HTTP/1.0 it ends by closing the
 	## connection. Add headers, such as `content-type`, with `with_headers`.

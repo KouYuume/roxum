@@ -2,8 +2,8 @@
 
 Status: production `Reply.stream` output, explicit terminal metadata and execution
 expiry trailers, production incremental input and streamed-response half-close
-cleanup are implemented. Duplex coordination below remains the implementation
-target for [0.3](../plans/grpc-streaming-0.3.md).
+cleanup and request-scoped duplex coordination are implemented. Generated client-
+and bidirectional streaming remain targets for [0.3](../plans/grpc-streaming-0.3.md).
 
 ## Production callback writer
 
@@ -21,9 +21,11 @@ check the same readiness predicate, with the connection generation, stream lease
 and wait serial protecting against stale wakes and slot reuse. Socket readiness
 and WINDOW_UPDATE can resume output independently of incoming request EOF.
 
-Callback return implicitly completes with empty trailers unless the writer already
-finished explicitly. Both paths drain accepted DATA and wait until the terminal
-HEADERS have been consumed by socket writes. Protocol closure alone is not
+Successful callback return (`Ok({})`) implicitly completes with empty trailers
+unless the writer already finished explicitly. Implicit and explicit completion
+drain accepted DATA and wait until the terminal HEADERS have been consumed by
+socket writes. Returning `Err(StreamClosed)` aborts unfinished output without a
+successful terminal section. Protocol closure alone is not
 completion: nghttp2 may close a stream before those bytes leave the output cursor.
 The event loop retains its terminal-output deadline and access-log consumption
 tracking. Route metadata is recorded before starting output. `maximum_streams`
@@ -36,7 +38,7 @@ output only. Keep-alive payloads, `ends_on_drain`, known-length file writes and
 trailers attached with `Reply.with_trailers` remain unsupported for callback
 writers. Use `ResponseWriter.finish!` for streamed trailers; unsupported writer
 options reset the attempted stream. Request reads use bounded incremental input;
-reading after response commit is unsupported.
+`Handler.duplex` continues reading after streaming headers, until completion is selected.
 
 `ResponseWriter.finish!(writer, trailers)` validates and copies bounded fields,
 selects normal completion once, and waits for socket consumption. Invalid fields
@@ -200,45 +202,50 @@ the open request side to discard mode with credit recovery. Whole/unread request
 retain the finite server cap; streamed requests discard without accumulating more
 payload. The input deadline and protocol lease remain until EOF or reset. This
 preserves finite early response delivery. Streamed responses use the completion
-reset described above. Simultaneous read/write waits remain the next duplex gate.
+reset described above. Duplex waits observe input and output independently.
 
-## Target request-scoped API and duplex coordination
+## Request-scoped duplex coordination
 
-The following signatures specify target incremental-input/duplex operations.
-Names and module placement must be checked with the [public API layout](public-api-layout.md)
-when exposing them. `Reader` and `Writer` are opaque request capabilities,
-never stream IDs or borrowed engine pointers. `Bytes` denotes `List(U8)`.
+`Handler.duplex({ begin!, ready! })` keeps application state in Roc and runs
+`ready!` when any selected direction can progress. `begin!` receives the model
+and request head before output; it returns initial state, status, headers and
+`Handler.Interest.Read`, `Write` or `Both`, or rejects with an ordinary reply.
+HTTP/1 returns 501 without invoking the callbacks.
 
-```roc
-read! : Reader => Result([Chunk(Bytes), End], StreamErr)
-write! : Writer, Bytes => Result({}, StreamErr)
-try_read! : Reader => Result([Chunk(Bytes), End, Pending], StreamErr)
-try_write! : Writer, Bytes => Result([Accepted, Pending], StreamErr)
-wait! : Reader, Writer, [Read, Write, Both] => Result([Readable, Writable, BothReady], StreamErr)
-```
+The pipeline owns the input capability and evolving `OnChunk` checks.
+`ready!` receives `Handler.DuplexEvent.{ input, writable }` and the scoped
+`ResponseWriter`. Input is `Idle`, `Chunk(bytes)`, `End` or
+`Failed(Handler.StreamEnd)`. Each chunk passes the middleware checks in order;
+EOF runs their finish checks once. A check rejecting after headers aborts output,
+since its replacement reply can no longer be sent. A body limit or recoverable
+read failure reaches `Failed` so the integration can select terminal metadata.
+Transport cancellation abandons the request instead of invoking another callback.
+`AfterBody` does not run; `AfterHandler` runs before initial output.
 
-The implemented completion and expiry operations above remain request-scoped.
-The target read/write capabilities distinguish closed/cancelled requests, invalid
-state, rejected input, limit exhaustion and transport failure; Unavailable covers unsupported transports.
+The callback returns `Handler.DuplexNext.Await({ state, interest })` or
+`Finish(trailers)`. Finish drains accepted DATA and waits for terminal socket
+consumption. Returning `Err(StreamClosed)` aborts output. After `End` or
+`Failed`, only write interest is valid; waiting on completed input aborts.
+Invalid terminal fields abort output. Return `Finish` to complete a duplex handler rather than finishing the writer
+inside `ready!`. Bodyless responses and exhausted writer quota skip `ready!`,
+just as for `Reply.stream`.
 
-Blocking read/write are conveniences over the nonblocking operations and a
-request-scoped wait. A successful write means bounded ownership transfer;
-explicit finish waits through transport consumption of terminal output. The gRPC
-integration must finish explicitly with its status; generic callback return only
-provides an empty terminal section, not a successful gRPC status.
+`ResponseWriter.try_write!(writer, bytes)` accepts at most 16 KiB, returning
+`Accepted` or `Pending`. Pending retains no bytes. Oversized writes return
+`TooLarge` even under backpressure; other errors are `Unavailable`,
+`InvalidState` and `StreamClosed`. HTTP/1 is unavailable. Accepted means
+bounded ownership transfer, not peer delivery. The blocking `write!` remains
+available, but using it in a duplex callback can deliberately stall input.
 
-Duplex handlers use a coordination loop: try both interested directions, then
-wait for either to progress. A pending write retains no caller bytes; the loop
-can continue processing input before retrying that write. Read and write
-readiness are independent and level-triggered; input EOF remains readable until
-observed. Output completion removes write interest. Waiting on an already
-completed direction is an error. No general task-spawning API or mandatory
-read/write alternation is introduced. A handler that elects to block on write
-alone still accepts that its own input processing can stall.
-
-Host waits carry a connection generation and stream lease; validate both before
-every operation and wake. Reset cancels all waits once. Capabilities become
-invalid after callback scope; retaining them must not extend resource lifetime.
+Read and write readiness are independent and level-triggered. Writable readiness
+is a hint: other stream progress can make a subsequent try-write pending again. Select only the
+directions the application can use: continually requesting write readiness
+without producing output can spin. Both the parking path and transport progress
+use the same combined predicate under the connection lock. Generation, stream
+lease and wait serial validation prevent stale wakes; no lock or borrowed input
+view survives suspension. EOF is reported once by the pipeline and does not
+complete output. Request handles cannot extend the callback/request lifetime.
+No general task spawning or mandatory read/write alternation is introduced.
 
 ## Target input and limits
 
@@ -285,8 +292,7 @@ its advertised decoded bound outside the aggregate ceiling.
 Request EOF and streamed response completion are independent. Request EOF allows
 output to continue. Streamed response completion closes unfinished input after
 terminal consumption, as specified above; both directions retain their input/write
-deadlines until completion or cancellation. The target duplex coordinator must
-preserve these rules when adding simultaneous read/write waits.
+deadlines until completion or cancellation, including simultaneous read/write waits.
 
 The implemented terminal-selection and failure rules above also apply to duplex
 execution. The integration chooses gRPC status fields; the host owns their

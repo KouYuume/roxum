@@ -1,4 +1,5 @@
 HostBody := [].{
+	wait! : U64, U64, U8 => U8
 	## The result of `Http.RequestStream.read!`.
 	##
 	## - `Chunk`: the next bytes of the body; never empty.

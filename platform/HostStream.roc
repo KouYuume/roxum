@@ -14,5 +14,7 @@ HostStream := [].{
 	start! : Http.Response, U64, List(U8), Bool, U64, Bool, Str => U64
 	## Writes the next part of the body; false when the stream is over.
 	write! : U64, List(U8) => Bool
+	abort! : U64 => {}
+	try_write! : U64, List(U8) => U8
 	finish! : U64, List(Http.ResponseHeader) => U8
 }

@@ -4,6 +4,7 @@ import Http
 import HttpError
 import Middleware
 import Reply
+import ResponseWriter
 import RequestHead
 import RouteContext
 
@@ -79,9 +80,13 @@ Pipeline :: [].{
 				# Without a `BeforeBody` stage, `ready` is `head`, whose metadata
 				# `request` already carries; copying it back would change nothing.
 				updated = if has_before_body(layers, start) { RequestHead.apply(ready, request) } else { request }
-				made = match Handler.streaming_start(handler) {
-					Ok(begin!) => stream!(layers, begin!, model, ready, updated)
-					Err(NotStreaming) => whole!(layers, handler, model, ready, updated)
+				made = match Handler.duplex_start(handler) {
+					Ok(begin!) => duplex!(layers, begin!, model, ready, updated)
+					Err(NotDuplex) =>
+						match Handler.streaming_start(handler) {
+							Ok(begin!) => stream!(layers, begin!, model, ready, updated)
+							Err(NotStreaming) => whole!(layers, handler, model, ready, updated)
+						}
 				}
 				marked = if made.at >= start { mark(made.reply) } else { made.reply }
 				Pipeline.after!(layers, made.at, model, ready, marked)
@@ -414,5 +419,68 @@ expect {
 	match pass_parts(layers, []) {
 		Err(stopped) => stopped.at == 0
 		Ok(_) => Bool.False
+	}
+}
+
+## Duplex retains middleware state in Roc while the host waits on both directions.
+duplex! = |layers, begin!, model, head, request| {
+	end = List.len(layers)
+	if head.version != Http.Version.Http20 { return { at: end, reply: Reply.status(501) } }
+	stream = match request.body {
+		Http.RequestBody.Stream(value) => value
+		Http.RequestBody.Bytes(_) | Http.RequestBody.Empty => return { at: end, reply: Reply.status(500) }
+	}
+	match head.streamed_body_limit {
+		Bytes(bytes) => stream.limit_streamed!(bytes)
+		Unlimited => stream.limit_streamed!(18_446_744_073_709_551_615)
+		ServerDefault => {}
+	}
+	match begin!(model, head) {
+		Err(reply) => { at: end, reply }
+		Ok(started) => {
+			checks = checks_of(layers)
+			sink = started.sink
+			interest = started.interest
+			reply = Reply.stream(|writer| duplex_loop!(stream, writer, checks, sink, interest, Bool.False))
+				.with_status(started.status).with_headers(started.headers)
+			{ at: end, reply }
+		}
+	}
+}
+
+duplex_loop! : Http.RequestStream, ResponseWriter, List({ at : U64, check : Middleware.ChunkCheck }), Handler.DuplexSink, Handler.Interest, Bool => Try({}, [StreamClosed])
+duplex_loop! = |stream, writer, checks, sink, interest, ended| {
+	mask : U8
+	mask = match interest {
+		Handler.Interest.Read => 1
+		Handler.Interest.Write => 2
+		Handler.Interest.Both => 3
+	}
+	if ended and mask != 2 { return Err(StreamClosed) }
+	ready = ResponseWriter.wait!(writer, stream, mask)
+	if ready == 0 or ready > 3 { return Err(StreamClosed) }
+	var $checks = checks
+	var $ended = ended
+	input = if ready == 1 or ready == 3 {
+		match stream.read!(part_bytes) {
+			HostBody.RequestRead.Chunk(bytes) => {
+				passed = match pass_checks(checks, bytes) { Ok(value) => value Err(_) => return Err(StreamClosed) }
+				$checks = passed.checks
+				Chunk(passed.bytes)
+			}
+			HostBody.RequestRead.End => {
+				match finish_checks(checks) { Ok({}) => {} Err(_) => return Err(StreamClosed) }
+				$ended = Bool.True
+				End
+			}
+			other => {
+				$ended = Bool.True
+				Failed((read_failure(other)).end)
+			}
+		}
+	} else { Idle }
+	match sink.ready!(Handler.DuplexEvent.{ input, writable: ready == 2 or ready == 3 }, writer)? {
+		Await(next) => duplex_loop!(stream, writer, $checks, next.sink, next.interest, $ended)
+		Finish(trailers) => ResponseWriter.finish!(writer, trailers).map_err(|_| StreamClosed)
 	}
 }

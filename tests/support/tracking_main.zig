@@ -4,6 +4,9 @@ const host = @import("host");
 const tracking_environment = @import("allocator/tracking_environment.zig");
 
 comptime {
+    @export(&host.response_writer.hostedStreamAbort, .{ .name = "roxum_stream_abort", .visibility = std.builtin.SymbolVisibility.hidden });
+    @export(&host.response_writer.hostedStreamTryWrite, .{ .name = "roxum_stream_try_write", .visibility = std.builtin.SymbolVisibility.hidden });
+    @export(&host.response_writer.hostedStreamWait, .{ .name = "roxum_stream_wait", .visibility = std.builtin.SymbolVisibility.hidden });
     @export(&host.response_writer.hostedStreamFinish, .{ .name = "roxum_stream_finish", .visibility = std.builtin.SymbolVisibility.hidden });
     @export(&host.request_execution_effect.hostedLimitWithTrailers, .{ .name = "roxum_request_execution_limit_with_trailers", .visibility = std.builtin.SymbolVisibility.hidden });
     @export(&host.request_execution_effect.hostedElapsed, .{ .name = "roxum_request_execution_elapsed", .visibility = std.builtin.SymbolVisibility.hidden });

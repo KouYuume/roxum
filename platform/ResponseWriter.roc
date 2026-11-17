@@ -41,6 +41,25 @@ ResponseWriter :: U64.{
 			Err(StreamClosed)
 		}
 
+	## Offers at most 16 KiB without waiting. Pending retains no bytes; retry
+	## after writable readiness, or process input meanwhile. Accepted transfers
+	## ownership into bounded output storage, not acknowledgement by the peer.
+	## Oversized writes fail even under backpressure. HTTP/1 is unavailable.
+	try_write! : ResponseWriter, List(U8) => Try([Accepted, Pending], [Unavailable, InvalidState, TooLarge, StreamClosed])
+	try_write! = |ResponseWriter.(token), bytes|
+		match HostStream.try_write!(token, bytes) {
+			0 => Ok(Accepted)
+			1 => Err(Unavailable)
+			2 => Ok(Pending)
+			3 => Err(StreamClosed)
+			5 => Err(TooLarge)
+			_ => Err(InvalidState)
+		}
+
+	## Platform coordination only: the body capability is never exposed to apps.
+	wait! : ResponseWriter, Http.RequestStream, U8 => U8
+	wait! = |ResponseWriter.(token), stream, interest| stream.wait!(token, interest)
+
 	## Completes HTTP/2 output with trailers, after accepted DATA. Waits until
 	## the terminal frame is written to the socket; this is not peer receipt.
 	## A successful finish closes this writer. Repeated finish or later writes
