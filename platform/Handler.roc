@@ -7,8 +7,8 @@ import RouteContext
 ## `effectful`, or `static` runs after the platform has received the whole
 ## body: its `RouteContext` holds the body as `Bytes`, and the
 ## extractors read that same body however many times they are run. A handler
-## made with `streaming` gets the body in parts instead. HTTP/1 can receive
-## bodies too large to hold; HTTP/2 collects bounded input before delivering parts.
+## made with `streaming` gets the body in parts as it arrives on both HTTP/1
+## and HTTP/2, without holding the complete body.
 Handler(model, tag, provided) := [
 	Pure((RouteContext(provided) -> Try(Reply, Reply))),
 	Stateful((model, RouteContext(provided) -> Try(Reply, Reply))),
@@ -58,7 +58,9 @@ Handler(model, tag, provided) := [
 	##   failure (`Failed`), or a stage or `chunk!` rejected it (`Rejected`).
 	##   The platform answers with the matching status (400, 413, 408, 500, or
 	##   the rejecting reply). Use it to clean up what `chunk!` started, such
-	##   as a temporary file. It does not run if the handler crashes.
+	##   as a temporary file. It does not run if the handler crashes. HTTP/2
+	##   transport reset, timeout and disconnect abandon the request instead
+	##   of running `abort!`; route-limit and callback rejection still run it.
 	##
 	## The streamed body limit applies (`Server.Limits` or `BodyLimit.streamed`).
 	## `AfterBody` stages do not run.

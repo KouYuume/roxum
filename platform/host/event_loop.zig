@@ -1227,6 +1227,7 @@ pub const Loop = struct {
             }
             if (protocol.streams.leases.runningStream(ticket)) |id| protocol.owner.cancel(id) catch {};
         }
+        protocol.discardInput(ticket);
         _ = protocol.streams.finish(ticket);
         execution.* = .{};
         self.readClock();

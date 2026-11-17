@@ -63,6 +63,17 @@ pub const Streams = struct {
         };
     }
 
+    pub fn observeData(self: *Streams, id: engine.StreamId, length: usize) Error!void {
+        const entry = try self.lookup(id);
+        if (entry.finished) return;
+        const buffer = if (entry.buffer) |*buffer| buffer else return error.InvalidState;
+        if (buffer.phase == input.Phase.rejected) return;
+        buffer.observeData(length) catch |err| switch (err) {
+            error.InvalidState => return error.InvalidState,
+            else => self.reject(entry),
+        };
+    }
+
     pub fn end(self: *Streams, id: engine.StreamId) Error!void {
         const entry = try self.lookup(id);
         if (entry.finished) return;

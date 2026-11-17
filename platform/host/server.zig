@@ -533,7 +533,7 @@ fn RequestFiber(comptime Environment: type) type {
         http2_stream_finished: bool = false,
         http2_semantics: bridge.ResponseRequestSemantics = bridge.ResponseRequestSemantics.regular,
         http2_body: struct {
-            offset: usize = 0,
+            failed: bool = false,
             whole_limit: u64 = 0,
             streamed_limit: u64 = 0,
             waiting_limit: ?u64 = null,
@@ -1017,24 +1017,42 @@ fn RequestFiber(comptime Environment: type) type {
             protocol.owner.engine.checkDispatchable(id) catch return bodyResult(abi.HostBodyRequestReadTag.Closed);
             const input = protocol.streams.runningInput(ticket) orelse return bodyResult(abi.HostBodyRequestReadTag.Closed);
             if (input.phase == @import("http2/input.zig").Phase.rejected) return bodyResult(abi.HostBodyRequestReadTag.Closed);
-            const limit = if (whole) self.http2_body.whole_limit else self.http2_body.streamed_limit;
-            if (input.bytes.items.len > limit) return bodyResult(abi.HostBodyRequestReadTag.TooLarge);
-            const bytes = input.body() orelse {
-                self.http2_body.waiting_limit = limit;
-                return null;
-            };
-            const offset = self.http2_body.offset;
-            if (offset == bytes.len) return bodyResult(abi.HostBodyRequestReadTag.End);
+            if (self.http2_body.failed) return bodyResult(abi.HostBodyRequestReadTag.Failed);
+            if (whole and input.received_bytes > self.shared.limits.maximum_body_bytes) {
+                protocol.owner.cancel(id) catch {
+                    protocol.failed = true;
+                };
+                return bodyResult(abi.HostBodyRequestReadTag.Closed);
+            }
+            const limit = if (whole) @min(self.http2_body.whole_limit, self.shared.limits.maximum_body_bytes) else self.http2_body.streamed_limit;
+            if (protocol.execution(ticket)) |execution| execution.input_discard_limit = if (whole) self.shared.limits.maximum_body_bytes else std.math.maxInt(u64);
+            if (input.received_bytes > limit) return bodyResult(abi.HostBodyRequestReadTag.TooLarge);
+            var chunk: [body_effect.maximum_read_bytes]u8 = undefined;
             const requested = std.math.cast(usize, maximum) orelse std.math.maxInt(usize);
-            const count = @min(bytes.len - offset, if (whole) requested else @min(requested, body_effect.maximum_read_bytes));
-            const owned = @import("bridge/request.zig").rocByteListFromSliceChecked(bytes[offset..][0..count], .{
+            const read = protocol.owner.engine.readRequest(id, chunk[0..@min(requested, chunk.len)]) catch {
+                protocol.failed = true;
+                return bodyResult(abi.HostBodyRequestReadTag.Closed);
+            };
+            const count = switch (read) {
+                @import("http2/engine.zig").ReadResult.pending => {
+                    self.http2_body.waiting_limit = limit;
+                    return null;
+                },
+                @import("http2/engine.zig").ReadResult.end => return bodyResult(abi.HostBodyRequestReadTag.End),
+                @import("http2/engine.zig").ReadResult.data => |count| count,
+            };
+            const owned = @import("bridge/request.zig").rocByteListFromSliceChecked(chunk[0..count], .{
                 .roc_host = &self.roc_host,
                 .try_alloc = runtime.tryAllocWithHost,
-            }) catch return bodyResult(abi.HostBodyRequestReadTag.Failed);
-            self.http2_body.offset += count;
+            }) catch {
+                self.http2_body.failed = true;
+                return bodyResult(abi.HostBodyRequestReadTag.Failed);
+            };
             var result = bodyResult(abi.HostBodyRequestReadTag.Chunk);
             const payload: *abi.RocListWith(u8, false) = @ptrCast(@alignCast(&result.payload));
             payload.* = owned;
+            protocol.owner.runnable = true;
+            self.thread.io.driveHttp2Output(self.dispatch);
             return result;
         }
 

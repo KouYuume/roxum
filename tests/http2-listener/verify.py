@@ -18,6 +18,7 @@ from h2.connection import H2Connection
 from h2.events import DataReceived, TrailersReceived, ResponseReceived, StreamEnded, StreamReset, ConnectionTerminated
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'support'))
 from roxum_process import stop, STOP_TIMEOUT_SECONDS
+from incremental import verify_incremental
 
 
 def verify(executable, unix, debug=False):
@@ -574,8 +575,9 @@ def verify_execution_limit(executable, unix, request_limits=False, metadata=Fals
                                 payload = b'a' * (size - 1) + b'z'
                                 for offset in range(0, size, 16384):
                                     part = payload[offset:offset + 16384]
+                                    receive(lambda: client.local_flow_control_window(sid) >= len(part))
                                     client.send_data(sid, part, end_stream=offset + len(part) == size)
-                                flush()
+                                    flush()
                                 receive(lambda: sid in ended)
                                 expected = (b'42|h2|' + payload.replace(b'a', b'A')) if route == '/metadata-chunks' else payload
                                 assert bodies[sid] == expected
@@ -1200,6 +1202,8 @@ def verify_stream_shutdown(executable, unix, forced):
 
 if __name__ == '__main__':
     executable = str(pathlib.Path(sys.argv[1]).resolve())
+    verify_incremental(executable, False)
+    verify_incremental(executable, True)
     verify_stream_output(executable, False)
     verify_stream_output(executable, True)
     verify_large_stream_output(executable, False)

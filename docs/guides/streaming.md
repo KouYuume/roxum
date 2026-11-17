@@ -9,13 +9,15 @@ a large request body, such as an upload, in parts as it arrives.
 `zig build test-m9p4` runs the server-sent events example in
 [`integrations/roxum-sse/example`](../../integrations/roxum-sse/example/app.roc).
 
-HTTP/2 currently collects finite request bodies. Routing and `BeforeBody` stages run
-before input EOF; a body read suspends until the complete bounded input arrives.
-`Handler.streaming` can then consume that collected body in parts, but does not
-receive incremental network data. The streamed-read default comes from
-`maximum_streamed_body_bytes`; route layers can replace that default, but
-`maximum_body_bytes` remains a hard HTTP/2 cap.
-`Unlimited` cannot remove that finite-input cap. HTTP/2 supports `Reply.stream`
+HTTP/2 runs routing and `BeforeBody` stages before input EOF. `Handler.streaming`
+receives parts as they arrive, suspending its request fiber when no input is ready.
+The host queues bounded input and replenishes receive credit as it is consumed.
+Streamed reads use `maximum_streamed_body_bytes`; `BodyLimit.streamed` can replace
+that default, including with `Unlimited`. Ordinary handlers still wait for the
+complete body and retain the hard HTTP/2 `maximum_body_bytes` cap. A tighter route
+limit returns 413. The HTTP/2 body timeout covers the entire input from metadata
+completion, including callback execution; reset and timeout cancel the request
+without invoking its Roc abort callback. HTTP/2 supports `Reply.stream`
 with default writer options and uncompressed output. Large writes are split into
 bounded chunks, and blocked writes yield the request fiber. Callback return ends
 the response after pending DATA with an empty terminal section. Use
@@ -31,7 +33,7 @@ The host copies the fields, stops the callback on expiry, and drains accepted DA
 before the terminal section, subject to the write timeout. Normal finish and
 expiry select their terminal once. The integration chooses status fields such as
 `grpc-status`; the host does not.
-The SSE and incremental input examples below require HTTP/1.
+The SSE example below requires HTTP/1; incremental request handlers also work on HTTP/2.
 
 ## Writing a body
 

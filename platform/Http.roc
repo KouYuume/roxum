@@ -111,18 +111,21 @@ Http :: [].{
 	## platform reads; while a read waits, the thread serves other requests. A client
 	## that sent `Expect: 100-continue` gets `100 Continue` at the first read that
 	## waits for it.
-	## On HTTP/2, metadata stages run before EOF, but reads wait for the complete
-	## finite body. The host retains it until execution cleanup. The configured
-	## `maximum_body_bytes` remains a hard cap, including for streamed reads.
+	## On HTTP/2, metadata stages and streamed reads run before EOF. The host
+	## queues bounded input, copies each read into request-owned memory and
+	## returns receive credit when bytes are consumed. Whole reads retain the
+	## `maximum_body_bytes` cap; streamed reads have an independent limit.
 	## Transport failures/timeouts cancel the request instead of returning a
-	## body error; route limits can return `TooLarge` before EOF.
+	## body error; cumulative route limits can return `TooLarge` before EOF.
+	## The HTTP/2 body deadline covers all input from metadata completion,
+	## including callback execution, rather than restarting after each chunk.
 	RequestStream :: U64.{
 
-		## Reads the next part of the request body. On HTTP/1 only this part is
-		## held, so a body of any size can be read in parts. On HTTP/1 it fails with
+		## Reads the next part of the request body, holding bounded parts rather
+		## than the whole body. It fails with
 		## `TooLarge` past `Server.Limits.maximum_streamed_body_bytes` (none
-		## by default) or a route's `BodyLimit.streamed`, and with `TimedOut`
-		## when no bytes arrived for `Server.Timeouts.request_body_milliseconds`.
+		## by default) or a route's `BodyLimit.streamed`. On HTTP/1 it returns
+		## `TimedOut` when no bytes arrived for `Server.Timeouts.request_body_milliseconds`.
 		##
 		## `maximum_bytes` must be at least 1, or the read returns
 		## `InvalidLimit`; larger values are capped at 16 KiB. A `Chunk` is never
@@ -133,7 +136,8 @@ Http :: [].{
 		read! = |RequestStream.(token), maximum_bytes| HostBody.read!(token, maximum_bytes, Bool.False)
 
 		## Like `read!`, for a body read whole into memory, as `Extract.bytes`
-		## does. On HTTP/2, each chunk is copied from completed finite input.
+		## does. On HTTP/2, parts arrive incrementally; the pipeline assembles
+		## them before invoking an ordinary handler.
 		## On HTTP/1, when the rest of a Content-Length body has already been
 		## received, a `maximum_bytes` above 16 KiB returns all of it in one
 		## `Chunk`. It fails with `TooLarge` past `Server.Limits.maximum_body_bytes`

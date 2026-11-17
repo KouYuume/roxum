@@ -79,6 +79,9 @@ routes = {
 		.route("/metadata-reject-body", MethodRouter.post(handler).layer([Middleware.Stage.BeforeBody(|_model, _head| Err(Reply.text("denied").with_status(403)))]))
 		.route("/metadata-reject-trailers", MethodRouter.post(handler).layer([Middleware.Stage.BeforeBody(|_model, _head| Err(Reply.text("denied").with_status(403).with_trailers([ResponseHeader.{ name: HeaderName.("x-result"), value: "done" }])))]))
 		.route("/metadata-limit", MethodRouter.post(handler).layer(BodyLimit.whole(4)))
+		.route("/input-limited", MethodRouter.post(incremental_input).layer(BodyLimit.streamed(Server.BodyLimit.Bytes(4))))
+		.route("/input-count", MethodRouter.post(incremental_input).layer(BodyLimit.streamed(Server.BodyLimit.Unlimited)))
+		.route("/input-wait", MethodRouter.post(incremental_input).layer(BodyLimit.streamed(Server.BodyLimit.Unlimited)))
 		.route("/metadata-stream", MethodRouter.post(collect).layer(BodyLimit.streamed(Server.BodyLimit.Bytes(4))))
 		.route("/metadata-stream-default", MethodRouter.post(collect))
 		.route("/metadata-stream-chunks", MethodRouter.post(collect).layer(BodyLimit.streamed(Server.BodyLimit.Unlimited)))
@@ -138,6 +141,35 @@ collect = Handler.streaming(
 		chunk!: |received, bytes| Ok(List.concat(received, bytes)),
 		done!: |_model, received| Ok(Reply.text(Str.from_utf8_lossy(received))),
 		abort!: |_received, _reason| {},
+	},
+)
+
+incremental_input : Handler(Model, [], {})
+incremental_input = Handler.streaming(
+	Handler.Streaming.{
+		begin!: |_model, head| {
+			port = U16.from_str(Str.from_utf8_lossy(head.query)).map_err(|_| Reply.status(400))?
+			Ok({ total: 0.U64, port, wait: head.path == "/input-wait" })
+		},
+		chunk!: |state, bytes| {
+			if state.total == 0 {
+				Tcp.with_origin!(
+					Tcp.Origin.{ host: "127.0.0.1", port: state.port, tls: Tcp.Tls.Off, reuse_idle: Bool.False },
+					1_000,
+					|connection| {
+						Tcp.write!(connection, "chunk".to_utf8(), 1_000)?
+						Tcp.discard!(connection)
+						Ok({})
+					},
+				).map_err(|_| Reply.status(500))?
+				if state.wait {
+					Sleep.millis!(60_000)
+					crash "cancelled incremental input resumed"
+				}
+			}
+			Ok({ ..state, total: state.total + List.len(bytes) })
+		},
+		done!: |_model, state| Ok(Reply.text(state.total.to_str())),
 	},
 )
 

@@ -1,6 +1,6 @@
 # Internal HTTP/2 engine
 
-This document defines the finite HTTP/2 host's ownership, resource bounds, and
+This document defines the HTTP/2 host's ownership, resource bounds, and
 execution contracts. HTTP/1 remains the default; TCP and Unix listeners opt into
 cleartext HTTP/2. For configuration, see [deployment](../guides/deployment.md#opt-in-http2);
 for supported RPC behavior, see the [Unary integration](../../integrations/roxum-grpc/README.md).
@@ -226,7 +226,9 @@ The independent-client fixture uses this collector for finite echo requests and
 checks copied metadata, fragmented body input, trailer exclusion, stream resets,
 and disconnect cleanup. A smaller fixture budget exercises input rejection,
 unrelated-stream progress, and capacity reuse after repeated cancellations. The
-production connection uses the same collector under its worker lock.
+production connection uses the same metadata snapshot under its worker lock,
+with `observeData` counting cumulative payload bytes instead of copying them.
+Its engine owns the incremental queue.
 
 ## Input handoff to Roc ownership
 
@@ -414,8 +416,8 @@ model and the existing worker threads serve both protocols. The HTTP/2 path
 executes routing and `BeforeBody` stages after initial headers. Ordinary handlers
 wait for finite input EOF. It accepts finite responses with trailers and
 [incremental callback responses](http2-streaming.md#production-callback-writer).
-File streams and non-default writer modes reset their stream. Incremental network
-body delivery remains unsupported.
+File streams and non-default writer modes reset their stream. `Handler.streaming`
+receives bounded input chunks before EOF.
 
 Each connection table slot optionally owns `http2/connection.zig`. Its connection
 lock serializes every engine call, input conversion and response submission.
@@ -427,7 +429,7 @@ until executor cleanup. Stale events and completions cannot address a reused slo
 Request fibers share the production wait registry and may resume on another Roc
 thread. Parking records the fiber and wait serial under the connection lock;
 closure signals that wait, including a wake before registry insertion. Body waits
-also record their active read limit: EOF, rejection, or exceeding that limit wakes
+also record their active read limit: queued bytes, EOF, rejection, or exceeding it wakes
 the reader. Parking rechecks that condition under the same lock to avoid losing
 completion between observing incomplete input and registering the wait. Other
 hosted I/O waits are not woken merely because body input arrives. Resumption
@@ -441,16 +443,18 @@ the acceptor tick also advances runnable owners so edge-triggered input left aft
 a turn is not stranded. Pending frame bytes remain owned by nghttp2 until written.
 The serialized owner protects response copying from concurrent peer reset.
 
-Each connection supports 16 streams, 16 KiB field sections, the configured finite
-body limit, and responses up to 2 MiB. Input/conversion storage and session/output
+Each connection supports 16 streams, 16 KiB field sections and input queues,
+and finite responses up to 2 MiB. The pre-SETTINGS input flight and input-credit
+rules are defined in the [streaming contract](http2-streaming.md#engine-input). Input/conversion storage and session/output
 storage each have 16 MiB ceilings. A thread-safe 128 MiB worker budget bounds all
 HTTP/2 connection, input and session allocations; this is separate from the Roc
 request heap accounting. Admission limits and queue expiry apply to stream jobs.
 Server input-limit failures reset streams; allocation/transport failure can close
 the connection. A route's tighter `BodyLimit` produces `TooLarge` and the normal
 413 reply, including before EOF. Route limits cannot increase the finite server
-cap. `Handler.streaming` consumes the collected body in bounded parts, not as
-network input arrives. Queued jobs still finish their leases after a disconnect.
+cap for whole reads. `Handler.streaming` uses the independent streamed-body
+limit and consumes network input incrementally. Queued jobs still finish their
+leases after a disconnect.
 
 Initial/idle connection timeouts cover empty connections. Header/body deadlines
 cover incomplete streams. Body and response-write deadlines are independent:
@@ -529,6 +533,6 @@ other. Test READMEs describe reproduction commands and detailed case coverage.
 ## Incremental I/O
 
 The internal engine also supports bounded incremental response chunks and an
-opt-in input mode with explicit receive credit. Production input remains finite.
+input mode with explicit receive credit, used by production request readers.
 See the [streaming contract](http2-streaming.md) for these APIs, the production
 callback writer, and the target request-scoped input and duplex lifecycle.

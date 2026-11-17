@@ -48,7 +48,7 @@ trailers, repeated finish and late writes, normal-versus-expiry terminal selecti
 accepted DATA draining after expiry, write timeout after normal selection,
 held-permit recovery, and graceful/forced
 shutdown while completion waits. Forced drain keeps the existing exit-status-1
-contract. They do not establish gRPC streaming or incremental input support. Internal
+contract. They do not establish generated gRPC streaming integration. Internal
 engine/wire fixtures retain framing, flow-control and allocator fault coverage.
 
 Execution-cap checks run additional TCP and Unix listeners with a 250 ms cap and
@@ -75,12 +75,11 @@ Metadata-phase checks use a TCP notification and a held permit to prove that Roc
 body resumption, reset and deadline cleanup, immediate expiry without returning
 to Roc, and exact timeout access outcomes. A 10-second server/input cap distinguishes
 the middleware's 500 ms deadline from host defaults. Repeated EOF/parking races
-and 16383/16384/16385-byte chunk boundaries cover whole-body `OnChunk` and collected
+and 16383/16384/16385-byte chunk boundaries cover whole-body `OnChunk` and incremental
 streamed reads. Early middleware/fallback replies accept late DATA/trailers, and
 an unfinished body still times out after response EOF. Whole/streamed route limits and the configured streamed-read default
 exercise 3/4/5 bytes and reject excess before EOF. The large streamed case explicitly
-replaces the default with `Unlimited` while retaining the finite server cap. This remains finite input
-collection, not incremental network streaming.
+replaces the default with `Unlimited`; only whole reads retain the finite server cap.
 
 Early-response deadline checks configure a 1-second write deadline and a
 3-second input deadline. Empty, finite-body, and trailer replies remain open
@@ -95,3 +94,11 @@ credit. Initialization and HTTP/1 reject registration without retaining Roc valu
 Internal tests additionally cover response-size boundaries, allocation failure,
 cleanup before queued submission, disconnect/reset, and an I/O reset winning over
 queued execution expiry.
+
+Incremental-input checks use a TCP notification from Roc `chunk!` before the client
+sends EOF, then count a 256 KiB body without accumulating it in the application.
+This exceeds the fixture's 1 KiB finite-body cap and crosses repeated receive
+windows. Eighteen resets reuse all stream slots while the callback is asleep with
+queued input; an unrelated stream completes each time. Another reset cancels a
+reader waiting for more input. TCP/Unix, all three backends and both allocator
+modes check worker identity, cleanup and continued peer progress.

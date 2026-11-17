@@ -17,6 +17,7 @@ pub const Execution = struct {
     claimed: bool = false,
     response_complete: bool = false,
     finishing: bool = false,
+    input_discard_limit: ?u64 = null,
     waiter: ?struct { target: *fiber.Fiber, serial: u64, body_limit: ?u64 = null, output: bool = false, completion: bool = false } = null,
 };
 
@@ -39,6 +40,7 @@ pub const Connection = struct {
     body_timeout: u64 = 0,
     write_timeout: u64 = 0,
     execution_limit: ?u64 = null,
+    finite_body_limit: u64 = 0,
     completed_access: [16]@import("../access_log.zig").Entry = undefined,
     completed_access_count: usize = 0,
     access: [16]?@import("../access_log.zig").Entry = @splat(null),
@@ -51,11 +53,12 @@ pub const Connection = struct {
             .body_timeout = limits.request_body_timeout_milliseconds * std.time.ns_per_ms,
             .write_timeout = limits.response_write_timeout_milliseconds * std.time.ns_per_ms,
             .execution_limit = limits.http2_execution_nanoseconds,
+            .finite_body_limit = limits.maximum_body_bytes,
         };
         self.budget.backing = worker_memory.allocator();
         const body_limit = std.math.cast(usize, limits.maximum_body_bytes) orelse std.math.maxInt(usize);
         self.streams = streams.Streams.init(token, &self.budget, .{ .header_bytes = 16 * 1024, .body_bytes = body_limit });
-        self.owner = try transport.Owner.init(worker_memory.allocator(), socket, readiness, token, .{
+        self.owner = try transport.Owner.initIncremental(worker_memory.allocator(), socket, readiness, token, .{
             .session_bytes = 16 * 1024 * 1024,
             .body_bytes = body_limit,
             .response_bytes = 2 * 1024 * 1024,
@@ -69,7 +72,7 @@ pub const Connection = struct {
             .end = end,
             .closed = streamClosed,
             .response_sent = responseSent,
-        });
+        }, &self.budget);
         return self;
     }
 
@@ -124,7 +127,9 @@ pub const Connection = struct {
     /// a reader. The second check closes the input-completion/parking race.
     pub fn bodyReady(self: *Connection, ticket: streams.Ticket, limit: u64) bool {
         const buffer = self.streams.runningInput(ticket) orelse return true;
-        return buffer.phase == input.Phase.rejected or buffer.body() != null or buffer.bytes.items.len > limit;
+        if (buffer.phase == input.Phase.rejected or buffer.received_bytes > limit) return true;
+        const id = self.streams.leases.runningStream(ticket) orelse return true;
+        return self.owner.engine.requestReady(id) catch true;
     }
 
     pub fn disconnect(self: *Connection) void {
@@ -261,6 +266,22 @@ pub const Connection = struct {
         }
     }
 
+    /// Release unread input when execution finishes or expires. Protocol input
+    /// stays open until EOF/reset under its existing absolute body deadline.
+    pub fn discardInput(self: *Connection, ticket: streams.Ticket) void {
+        if (self.closed or self.failed) return;
+        const id = self.streams.leases.stream(ticket) orelse return;
+        const maximum = if (self.execution(ticket)) |execution_value|
+            execution_value.input_discard_limit orelse self.finite_body_limit
+        else
+            self.finite_body_limit;
+        self.owner.engine.discardRequest(id, maximum) catch |err| switch (err) {
+            error.Closed => {},
+            else => self.failed = true,
+        };
+        self.owner.runnable = true;
+    }
+
     /// Called between engine operations, under the connection lock. Expiry has
     /// already invalidated execution; only its copied response remains usable.
     pub fn completeExpired(self: *Connection, id: engine.StreamId) !void {
@@ -274,6 +295,7 @@ pub const Connection = struct {
                     return self.owner.cancel(id);
                 };
                 selected.selection = terminal.Selection.expiry;
+                self.discardInput(ticket);
                 self.owner.runnable = true;
                 return;
             }
@@ -291,6 +313,7 @@ pub const Connection = struct {
                     else => return err,
                 };
                 try response.submit(self.owner.engine, id);
+                self.discardInput(ticket);
                 self.owner.runnable = true;
                 self.deadlines[ticket.slot] = self.now +| self.write_timeout;
                 self.writing[ticket.slot] = true;
@@ -352,7 +375,7 @@ pub const Connection = struct {
     }
     fn data(ptr: *anyopaque, id: engine.StreamId, bytes: []const u8) void {
         const self = from(ptr);
-        self.streams.data(id, bytes) catch {
+        self.streams.observeData(id, bytes.len) catch {
             self.failed = true;
         };
     }
@@ -484,33 +507,41 @@ test "configured execution cap starts before body completion and queue claim" {
     }
 }
 
-test "body wait readiness covers EOF rejection and route-limit boundaries" {
-    var connection = Connection{};
-    connection.budget.backing = std.testing.allocator;
-    connection.streams = streams.Streams.init(1, &connection.budget, .{ .header_bytes = 1024, .body_bytes = 8 });
-    defer connection.streams.disconnect();
-    const id: engine.StreamId = @fromBackingInt(1);
-    try connection.streams.header(id, .{ .name = ":method", .value = "POST" });
-    try connection.streams.headersComplete(id, 0);
+test "body wait readiness covers incremental bytes EOF and stale execution" {
+    var pair: [2]c_int = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), std.c.socketpair(std.c.AF.UNIX, std.c.SOCK.STREAM, 0, &pair));
+    defer net.closeSocket(pair[1]);
+    try net.setListenerNonBlocking(pair[0]);
+    var readiness = try poller.Poller.init();
+    defer readiness.deinit();
+    const connection = try Connection.create(pair[0], &readiness, 1, .{});
+    defer {
+        connection.disconnect();
+        connection.destroy();
+    }
+    try connection.owner.engine.receive("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" ++
+        "\x00\x00\x00\x04\x00\x00\x00\x00\x00" ++
+        "\x00\x00\x0e\x01\x04\x00\x00\x00\x01\x83\x86\x84\x01\x09localhost");
     const work = connection.streams.nextMetadata().?.execute;
     defer _ = connection.streams.finish(work.ticket);
     try std.testing.expect(!connection.bodyReady(work.ticket, 4));
-    try connection.streams.data(id, "123");
-    try std.testing.expect(!connection.bodyReady(work.ticket, 4));
-    try connection.streams.data(id, "4");
-    try std.testing.expect(!connection.bodyReady(work.ticket, 4));
-    try connection.streams.data(id, "5");
+    try connection.owner.engine.receive("\x00\x00\x03\x00\x00\x00\x00\x00\x01abc");
     try std.testing.expect(connection.bodyReady(work.ticket, 4));
-    try std.testing.expect(!connection.bodyReady(work.ticket, 8));
-    try connection.streams.end(id);
-    try std.testing.expect(connection.bodyReady(work.ticket, 8));
-    // A waiter installed after EOF observes the same ready state as a waiter
-    // already present when input completes. Expiry also cannot leave it asleep.
+    var bytes: [3]u8 = undefined;
+    try std.testing.expectEqual(@as(usize, 3), (try connection.owner.engine.readRequest(work.id, &bytes)).data);
+    try std.testing.expectEqualStrings("abc", &bytes);
+    try std.testing.expect(!connection.bodyReady(work.ticket, 4));
+    // Cumulative route limits still wake after queue storage has been released.
+    try std.testing.expect(connection.bodyReady(work.ticket, 2));
+    try connection.owner.engine.receive("\x00\x00\x00\x00\x01\x00\x00\x00\x01");
+    try std.testing.expect(connection.bodyReady(work.ticket, 4));
+    try std.testing.expectEqual(engine.ReadResult.end, try connection.owner.engine.readRequest(work.id, &bytes));
+    try std.testing.expect(connection.bodyReady(work.ticket, 4));
     try std.testing.expect(connection.streams.leases.limitExecution(work.ticket, 0, 0));
-    try std.testing.expect(connection.streams.expireExecutions(0));
-    try std.testing.expect(connection.bodyReady(work.ticket, 8));
-    connection.streams.close(id);
-    try std.testing.expect(connection.bodyReady(work.ticket, 8));
+    try std.testing.expect(connection.streams.expireExecutions(work.headers_at));
+    try std.testing.expect(connection.bodyReady(work.ticket, 4));
+    connection.streams.close(work.id);
+    try std.testing.expect(connection.bodyReady(work.ticket, 4));
 }
 
 test "input and response deadlines remain independent after metadata dispatch" {
@@ -932,4 +963,36 @@ test "terminal selection arbitrates expiry and waits for actual output consumpti
         try std.testing.expect(observed_terminal);
         try std.testing.expect(connection.terminals[work.ticket.slot].fields == null);
     }
+}
+
+test "expiry response discards unread engine input after execution becomes invalid" {
+    var pair: [2]c_int = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), std.c.socketpair(std.c.AF.UNIX, std.c.SOCK.STREAM, 0, &pair));
+    defer net.closeSocket(pair[1]);
+    try net.setListenerNonBlocking(pair[0]);
+    var readiness = try poller.Poller.init();
+    defer readiness.deinit();
+    const connection = try Connection.create(pair[0], &readiness, 1, .{});
+    defer {
+        connection.disconnect();
+        connection.destroy();
+    }
+    connection.now = try net.monotonicNanoseconds();
+    try connection.owner.engine.receive("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" ++
+        "\x00\x00\x00\x04\x00\x00\x00\x00\x00" ++
+        "\x00\x00\x0e\x01\x04\x00\x00\x00\x01\x83\x86\x84\x01\x09localhost");
+    const work = connection.streams.nextMetadata().?.execute;
+    defer _ = connection.streams.finish(work.ticket);
+    const before_data = connection.budget.used;
+    try connection.owner.engine.receive("\x00\x00\x06\x00\x00\x00\x00\x00\x01unread");
+    try std.testing.expect(connection.budget.used > before_data);
+    connection.streams.entries[work.ticket.slot].expiry_response = try @import("deferred_response.zig").Response.init(connection.budget.allocator(), connection.owner.engine, work.id, 504, &.{}, "expired", &.{});
+    try std.testing.expect(connection.streams.leases.limitExecution(work.ticket, 0, 0));
+    connection.expire(work.headers_at);
+    try std.testing.expect(connection.streams.leases.runningStream(work.ticket) == null);
+    try connection.completeExpired(work.id);
+    try std.testing.expect(!connection.failed);
+    try std.testing.expectError(error.InvalidState, connection.owner.engine.checkDispatchable(work.id));
+    try std.testing.expectEqual(@as(usize, 0), connection.budget.used);
+    try std.testing.expectError(error.Closed, connection.owner.engine.requestReady(work.id));
 }
