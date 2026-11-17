@@ -439,7 +439,9 @@ duplex! = |layers, begin!, model, head, request| {
 		Err(reply) => { at: end, reply }
 		Ok(started) => {
 			checks = checks_of(layers)
-			reply = Reply.stream(|writer| duplex_loop!(stream, writer, checks, started.sink, started.interest, Bool.False))
+			sink = started.sink
+			interest = started.interest
+			reply = Reply.stream(|writer| duplex_loop!(stream, writer, checks, sink, interest, Bool.False))
 				.with_status(started.status).with_headers(started.headers)
 			{ at: end, reply }
 		}
