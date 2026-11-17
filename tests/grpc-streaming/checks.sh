@@ -11,3 +11,5 @@ python3 tools/protoc-gen-roc/setup.py
 python3 tests/grpc-streaming/regenerate.py
 zig-out/protobuf-codegen/venv/bin/python tests/grpc-unary/test_generator.py
 "$venv/bin/python" -m grpc_tools.protoc -I tests/grpc-streaming --python_out=zig-out/grpc-streaming --grpc_python_out=zig-out/grpc-streaming tests/grpc-streaming/streaming.proto
+
+python3 tests/grpc-unary/setup_proxy.py

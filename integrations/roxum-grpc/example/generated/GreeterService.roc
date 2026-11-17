@@ -5,17 +5,20 @@ import grpc.GrpcUnary
 import grpc.GrpcTimeout
 import grpc.GrpcMetadata
 import wire.ProtobufWire
+import grpc.GrpcServerStream
 import Greeting
 import ReplyText
 
 GreeterService := [].{
 	Handlers(model) : {
 		call_greet! : model, Greeting, List(GrpcMetadata.Entry) => Try(GrpcUnary.Response(ReplyText), GrpcUnary.Failure),
+		call_watch! : model, Greeting, List(GrpcMetadata.Entry) => Try(GrpcServerStream.Response(ReplyText), GrpcUnary.Failure),
 	}
-	register : Router(model, tag, provided), GreeterService.Handlers(model), GrpcUnary.Limits, ProtobufWire.Limits -> Router(model, tag, provided)
+	register : Router(model, tag, provided), GreeterService.Handlers(model), { unary : GrpcUnary.Limits, streaming : GrpcServerStream.Limits }, ProtobufWire.Limits -> Router(model, tag, provided)
 	register = |router, handlers, limits, codec_limits| {
 		var $router = router
-		$router = $router.route("/unary.Greeter/Greet", MethodRouter.post(GrpcUnary.handler(|bytes| Greeting.decode(bytes, codec_limits), ReplyText.encode, handlers.call_greet!, limits)).layer(GrpcTimeout.layer(limits.metadata)))
+		$router = $router.route("/unary.Greeter/Greet", MethodRouter.post(GrpcUnary.handler(|bytes| Greeting.decode(bytes, codec_limits), ReplyText.encode, handlers.call_greet!, limits.unary)).layer(GrpcTimeout.layer(limits.unary.metadata)))
+		$router = $router.route("/unary.Greeter/Watch", MethodRouter.post(GrpcServerStream.handler(|bytes| Greeting.decode(bytes, codec_limits), ReplyText.encode, handlers.call_watch!, limits.streaming)).layer(GrpcTimeout.streaming_layer(limits.streaming)))
 		$router
 	}
 }
