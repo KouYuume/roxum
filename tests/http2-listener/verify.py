@@ -753,32 +753,67 @@ def verify_stream_output(executable, unix):
                     terminal_fields = {}
                     def flush():
                         sock.sendall(client.data_to_send())
+                    wire_ids, logical_ids, attempt_ids = {}, {}, {}
+                    def grant(sid, count):
+                        client.increment_flow_control_window(count, stream_id=wire_ids[sid])
+                    def reset_stream(sid):
+                        client.reset_stream(wire_ids[sid])
                     def request(sid, route, method='GET'):
-                        client.send_headers(sid, [(':method', method), (':scheme', 'http'),
-                                                 (':authority', 'localhost'), (':path', route),
-                                                 ('x-request-id', f'writer-{sid}')], end_stream=True)
-                        flush()
-                    def until(predicate):
+                        retry = method == 'GET' and sid != 5 and route in {
+                            '/stream-output', '/stream-empty', '/stream-cancel',
+                            '/stream-expiry', '/stream-crash', '/stream-finish',
+                            '/stream-finish-empty', '/stream-terminal-pending',
+                            '/stream-terminal-expiry', '/stream-terminal-wins',
+                        }
                         deadline = time.monotonic() + 5
+                        attempts = attempt_ids.setdefault(sid, [])
+                        while True:
+                            assert time.monotonic() < deadline, 'writer quota was not released'
+                            wire_id = client.get_next_available_stream_id()
+                            wire_ids[sid] = wire_id
+                            logical_ids[wire_id] = sid
+                            request_id = f'writer-{sid}-attempt-{len(attempts)}'
+                            attempts.append(request_id)
+                            client.send_headers(wire_id, [(':method', method), (':scheme', 'http'),
+                                                         (':authority', 'localhost'), (':path', route),
+                                                         ('x-request-id', request_id)], end_stream=True)
+                            flush()
+                            if not retry:
+                                return
+                            until(lambda: sid in headers or sid in reset, deadline)
+                            if headers.get(sid, {}).get(':status') != '503':
+                                return
+                            # END_STREAM is not a request-cleanup barrier. Drain
+                            # only the temporary quota response before retrying.
+                            until(lambda: sid in ended or sid in reset, deadline)
+                            assert sid in ended and sid not in reset
+                            assert not bodies[sid] and sid not in terminal_fields
+                            del headers[sid]
+                            ended.remove(sid)
+                            time.sleep(min(.005, max(0, deadline - time.monotonic())))
+                    def until(predicate, deadline=None):
+                        if deadline is None:
+                            deadline = time.monotonic() + 5
                         while not predicate():
                             sock.settimeout(max(.001, deadline - time.monotonic()))
                             wire = sock.recv(65536)
                             assert wire, 'unexpected EOF'
                             for event in client.receive_data(wire):
                                 assert not isinstance(event, ConnectionTerminated), event
+                                sid = logical_ids.get(getattr(event, "stream_id", 0))
                                 if isinstance(event, ResponseReceived):
-                                    headers[event.stream_id] = dict(event.headers)
+                                    headers[sid] = dict(event.headers)
                                 elif isinstance(event, DataReceived):
-                                    bodies[event.stream_id] += event.data
+                                    bodies[sid] += event.data
                                     if event.flow_controlled_length:
                                         client.increment_flow_control_window(event.flow_controlled_length)
                                 elif isinstance(event, TrailersReceived):
-                                    assert event.stream_id not in terminal_fields
-                                    terminal_fields[event.stream_id] = dict(event.headers)
+                                    assert sid not in terminal_fields
+                                    terminal_fields[sid] = dict(event.headers)
                                 elif isinstance(event, StreamEnded):
-                                    ended.add(event.stream_id)
+                                    ended.add(sid)
                                 elif isinstance(event, StreamReset):
-                                    reset.add(event.stream_id)
+                                    reset.add(sid)
                             flush()
                             assert time.monotonic() < deadline
                     request(1, '/stream-output')
@@ -791,23 +826,23 @@ def verify_stream_output(executable, unix):
                     until(lambda: 5 in ended)
                     assert headers[5][':status'] == '503' and bodies[5] == b''
                     request(7, '/echo')
-                    client.increment_flow_control_window(64, stream_id=7)
+                    grant(7, 64)
                     flush()
                     until(lambda: 7 in ended)
                     assert headers[1][':status'] == headers[3][':status'] == headers[7][':status'] == '200'
                     assert bodies[7] == b'42|h2|' and bodies[1] == bodies[3] == b'first'
-                    client.increment_flow_control_window(70004, stream_id=1)
+                    grant(1, 70004)
                     flush()
                     until(lambda: 1 in ended)
                     assert bodies[1] == b'first' + b'x' * 70000 + b'last'
                     assert 'content-length' not in headers[1] and not reset
                     # Reset sleeping writers and recycle more than all 16 lease slots.
-                    client.reset_stream(3)
+                    reset_stream(3)
                     flush()
                     for sid in range(9, 49, 2):
                         request(sid, '/stream-cancel')
                         until(lambda: bodies[sid] == b'first')
-                        client.reset_stream(sid)
+                        reset_stream(sid)
                         flush()
                     request(49, '/stream-empty')
                     until(lambda: 49 in ended)
@@ -849,7 +884,7 @@ def verify_stream_output(executable, unix):
                     until(lambda: 75 in ended)
                     assert terminal_fields[75] == {'x-result': 'expired'}
                     assert 73 not in ended and 73 not in reset
-                    client.increment_flow_control_window(3, stream_id=73)
+                    grant(73, 3)
                     flush()
                     until(lambda: 73 in ended)
                     assert bodies[73] == b'firstend'
@@ -861,7 +896,7 @@ def verify_stream_output(executable, unix):
                     request(81, '/permit')
                     until(lambda: 81 in ended)
                     assert headers[81][':status'] == '429'
-                    client.increment_flow_control_window(3, stream_id=77)
+                    grant(77, 3)
                     flush()
                     until(lambda: 77 in ended)
                     assert bodies[77] == b'firstend'
@@ -869,7 +904,7 @@ def verify_stream_output(executable, unix):
                     released = False
                     for sid in range(83, 123, 2):
                         request(sid, '/permit')
-                        client.increment_flow_control_window(64, stream_id=sid)
+                        grant(sid, 64)
                         flush()
                         until(lambda: sid in ended)
                         if headers[sid][':status'] == '200':
@@ -880,12 +915,12 @@ def verify_stream_output(executable, unix):
                     # release its held permit, without returning StreamClosed.
                     request(125, '/stream-terminal-wins')
                     until(lambda: bodies[125] == b'first')
-                    client.reset_stream(125)
+                    reset_stream(125)
                     flush()
                     released = False
                     for sid in range(127, 167, 2):
                         request(sid, '/permit')
-                        client.increment_flow_control_window(64, stream_id=sid)
+                        grant(sid, 64)
                         flush()
                         until(lambda: sid in ended)
                         if headers[sid][':status'] == '200':
@@ -893,8 +928,61 @@ def verify_stream_output(executable, unix):
                             break
                     assert released, 'cancelled completion retained its permit'
 
+                assert stop(process) == 0
+                errors.seek(0)
+                diagnostic = errors.read()
+                assert 'panic' not in diagnostic.lower(), diagnostic
+                assert 'cancelled writer resumed application code' not in diagnostic, diagnostic
+                assert 'expired streaming callback resumed' not in diagnostic, diagnostic
+                assert 'bodyless writer callback ran' not in diagnostic, diagnostic
+                assert 'expiry trailers resumed application code' not in diagnostic, diagnostic
+                assert 'cancelled finish returned to application code' not in diagnostic, diagnostic
+                for marker in ('invalid terminal fields accepted', 'repeated finish accepted', 'write after finish accepted', 'invalid expiry registration changed deadline', 'expiry trailers registered after headers'):
+                    assert marker not in diagnostic, diagnostic
+                entries = [json.loads(line) for line in diagnostic.splitlines() if line.startswith('{')]
+                for attempts in attempt_ids.values():
+                    for rejected in attempts[:-1]:
+                        matches = [entry for entry in entries if entry.get('request_id') == rejected]
+                        assert len(matches) == 1 and matches[0]['status'] == 503 and matches[0]['outcome'] == 'stream_limit', matches
+                for sid, outcome in ((73, 'timeout'), (75, 'timeout'), (77, 'handled')):
+                    matches = [entry for entry in entries if entry.get('request_id') == attempt_ids[sid][-1]]
+                    assert len(matches) == 1 and matches[0]['outcome'] == outcome, (sid, matches)
+                    assert matches[0].get('route') in ('/stream-terminal-pending', '/stream-terminal-expiry', '/stream-terminal-wins')
+
+                for sid, route, status, method in (
+                    (5, '/stream-empty', 503, 'GET'),
+                    (57, '/stream-no-content', 204, 'GET'),
+                    (59, '/stream-reset-content', 205, 'GET'),
+                    (61, '/stream-not-modified', 304, 'GET'),
+                    (63, '/stream-output', 200, 'HEAD'),
+                ):
+                    matches = [entry for entry in entries if entry.get('request_id') == attempt_ids[sid][-1]
+                               and entry.get('status') == status and entry.get('method') == method]
+                    assert len(matches) == 1 and matches[0].get('route') == route, (route, matches)
+            except BaseException:
+                stop(process)
+                errors.seek(0)
+                print(errors.read(), file=sys.stderr)
+                raise
+            finally:
+                stop(process)
+                process.stdout.close()
+    print('PASS production streaming writer: early DATA, credit waits, peer progress, reset and lease reuse')
 
 
+def verify_large_stream_output(executable, unix):
+    with tempfile.TemporaryDirectory(prefix='roxum-h2-large-', dir='/tmp') as directory:
+        path = str(pathlib.Path(directory) / 'http.sock') if unix else ''
+        config = pathlib.Path(directory) / 'config'
+        config.mkdir()
+        (config / 'local.toml').write_text('path = ' + json.dumps(path) + '\nwrite_milliseconds = 30000\nmaximum_streams = 2\n')
+        with tempfile.TemporaryFile(mode='w+') as errors:
+            process = subprocess.Popen([executable], cwd=directory, stdout=subprocess.PIPE,
+                                       stderr=errors, text=True, start_new_session=True)
+            try:
+                assert select.select([process.stdout], [], [], 30)[0], 'startup timed out'
+                endpoint = process.stdout.readline().strip()
+                # A fresh process gives both socket-pressure writers their full quota.
                 # Both writers have ample HTTP/2 credit; a small socket receive
                 # buffer makes their multi-megabyte output wait on transport writes.
                 with socket.socket(socket.AF_UNIX if unix else socket.AF_INET) as slow:
@@ -960,29 +1048,6 @@ def verify_stream_output(executable, unix):
                 errors.seek(0)
                 diagnostic = errors.read()
                 assert 'panic' not in diagnostic.lower(), diagnostic
-                assert 'cancelled writer resumed application code' not in diagnostic, diagnostic
-                assert 'expired streaming callback resumed' not in diagnostic, diagnostic
-                assert 'bodyless writer callback ran' not in diagnostic, diagnostic
-                assert 'expiry trailers resumed application code' not in diagnostic, diagnostic
-                assert 'cancelled finish returned to application code' not in diagnostic, diagnostic
-                for marker in ('invalid terminal fields accepted', 'repeated finish accepted', 'write after finish accepted', 'invalid expiry registration changed deadline', 'expiry trailers registered after headers'):
-                    assert marker not in diagnostic, diagnostic
-                entries = [json.loads(line) for line in diagnostic.splitlines() if line.startswith('{')]
-                for sid, outcome in ((73, 'timeout'), (75, 'timeout'), (77, 'handled')):
-                    matches = [entry for entry in entries if entry.get('request_id') == f'writer-{sid}']
-                    assert len(matches) == 1 and matches[0]['outcome'] == outcome, (sid, matches)
-                    assert matches[0].get('route') in ('/stream-terminal-pending', '/stream-terminal-expiry', '/stream-terminal-wins')
-
-                for sid, route, status, method in (
-                    (5, '/stream-empty', 503, 'GET'),
-                    (57, '/stream-no-content', 204, 'GET'),
-                    (59, '/stream-reset-content', 205, 'GET'),
-                    (61, '/stream-not-modified', 304, 'GET'),
-                    (63, '/stream-output', 200, 'HEAD'),
-                ):
-                    matches = [entry for entry in entries if entry.get('request_id') == f'writer-{sid}'
-                               and entry.get('status') == status and entry.get('method') == method]
-                    assert len(matches) == 1 and matches[0].get('route') == route, (route, matches)
             except BaseException:
                 stop(process)
                 errors.seek(0)
@@ -991,7 +1056,8 @@ def verify_stream_output(executable, unix):
             finally:
                 stop(process)
                 process.stdout.close()
-    print('PASS production streaming writer: early DATA, credit waits, peer progress, reset and lease reuse')
+    print('PASS production streaming writer: socket pressure and independent connection progress')
+
 
 
 def verify_completion_timeout(executable, unix):
@@ -1136,6 +1202,8 @@ if __name__ == '__main__':
     executable = str(pathlib.Path(sys.argv[1]).resolve())
     verify_stream_output(executable, False)
     verify_stream_output(executable, True)
+    verify_large_stream_output(executable, False)
+    verify_large_stream_output(executable, True)
     for unix in (False, True):
         verify_completion_timeout(executable, unix)
         for forced in (False, True):

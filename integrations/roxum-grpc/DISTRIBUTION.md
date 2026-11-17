@@ -1,4 +1,4 @@
-# Using the Unary gRPC distribution
+# Using the gRPC distribution
 
 A release containing typed Unary support supplies three Roc bundles: the roxum
 platform, `roxum-grpc`, and `roc-protobuf`. `release.json` names their URLs and
@@ -58,10 +58,12 @@ for production ingress.
 
 ## Supported scope and release evidence
 
-The first release target is finite, uncompressed Unary RPC. Server/client/bidirectional
-streaming, reflection, gRPC-Web and compressed messages are not provided. The
+Release 0.2 provides finite, uncompressed Unary RPC. The unreleased 0.3 source
+example additionally includes server-streaming; use it only with matching
+platform, integration and generator artifacts. Client/bidirectional streaming,
+reflection, gRPC-Web and compressed messages are not provided. The
 [schema contract](../../libraries/roc-protobuf/DISTRIBUTION.md#compatibility) applies
-to generated messages; supplying `grpc` and `pf` explicitly enables Unary service
+to generated messages; supplying `grpc` and `pf` explicitly enables typed service
 registration. Codec-only generation continues to ignore services.
 
 `zig build test-m13a` builds actual release artifacts, checks metadata and hashes,
@@ -69,6 +71,6 @@ installs the generator from its extracted source archive, generates this service
 outside the checkout, and runs its client against all three compiler backends.
 Each build uses fresh caches and must fetch platform, gRPC and wire bundles by
 URL. `test-grpc-example` verifies the source example across both allocators;
-`test-grpc-unary` covers direct and TLS-proxied protocol behavior. This evidence
-establishes the Unary acceptance gate; publishing and release version selection
+`test-grpc-unary` and `test-grpc-streaming` cover direct and TLS-proxied protocol
+behavior. The current source example verifies both Unary and server-streaming; publishing and release version selection
 remain maintainer operations.

@@ -1,7 +1,9 @@
-# Unary greeting service
+# Unary and server-streaming greeting service
 
-This example registers a typed `unary.Greeter/Greet` service from `service.proto`.
-It returns a greeting, initial `service` metadata, and the request's `request-bin`
+This example registers typed `unary.Greeter/Greet` and `Watch` methods from
+`service.proto`. `Watch` produces three ordered greetings incrementally and
+finishes with status OK. Server-streaming requires the unreleased 0.3 sources.
+`Greet` returns a greeting, initial `service` metadata, and the request's `request-bin`
 metadata as trailers. An empty name returns `INVALID_ARGUMENT`. The generated
 route installs `grpc-timeout` before body reception. Message and body limits are
 explicit in `app.roc`.
@@ -23,7 +25,8 @@ zig-out/grpc-example/venv/bin/python integrations/roxum-grpc/example/client.py 1
 ```
 
 The client checks a successful greeting, initial and binary trailing metadata,
-the empty-name error, and another successful call on the same channel. No
+the empty-name error, another successful call, and the three streamed greetings
+with final status on the same channel. No
 reflection service or handwritten Protobuf bytes are required. Stop the server
 with Ctrl-C.
 
@@ -38,7 +41,7 @@ zig-out/grpc-example/venv/bin/python integrations/roxum-grpc/example/generate.py
 
 Use `python3 tools/check.py --only test-grpc-example` to build and run all three
 backends with both allocators. The more exhaustive protocol, deadline and
-cancellation matrix remains in `tests/grpc-unary`.
+cancellation matrices remain in `tests/grpc-unary` and `tests/grpc-streaming`.
 
 For the released packages and generator, follow the
 [distribution guide](../DISTRIBUTION.md). The example uses cleartext HTTP/2 for

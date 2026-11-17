@@ -236,7 +236,8 @@
         "tests/grpc-wire/app.roc",
         "tests/grpc-unary/app.roc",
         "integrations/roxum-grpc/example/app.roc",
-        "tests/grpc-streaming/app.roc"
+        "tests/grpc-streaming/app.roc",
+        "tests/grpc-streaming/acceptance.roc"
       ],
       "platform_versions": "^0.2",
       "requires_platform_sha256": "497d608ef52208eb91ad19e980e94559fb07e50d57637821d49e6476099da8f7",
@@ -288,9 +289,10 @@
         "tests/grpc-streaming/generated/main.roc",
         "tests/grpc-streaming/generated/Request.roc",
         "tests/grpc-streaming/generated/Update.roc",
-        "tests/grpc-streaming/generated/UpdatesService.roc"
+        "tests/grpc-streaming/generated/UpdatesService.roc",
+        "tests/grpc-streaming/pressure.py"
       ],
-      "compatibility_sha256": "117e1ddb2faf15a27e76bfc8a384de35a44a0c37c575349f07f74f333723114d",
+      "compatibility_sha256": "fe3b52ce4a4706823a4eda387f306fd64e2555ebc9dc54ddae7f5de5ac407e98",
       "max_unpacked_bytes": 65536
     }
   ]

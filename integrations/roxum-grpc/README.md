@@ -7,7 +7,8 @@ unsupported. Generated routes
 install deadlines before waiting for request bodies and register a final gRPC
 status response on expiry. Independent generated clients and raw HTTP/2 checks
 cover direct TCP/Unix listeners and nginx TLS termination; see
-[Unary acceptance](../../tests/grpc-unary/README.md). A
+[Unary acceptance](../../tests/grpc-unary/README.md) and
+[server-streaming acceptance](../../tests/grpc-streaming/README.md). A
 [runnable greeting service](example/README.md) and
 [distribution guide](DISTRIBUTION.md) cover generated clients and verified
 release-artifact use outside the checkout. The byte-oriented wire helpers do
@@ -76,7 +77,10 @@ registration is unchanged. Generated codecs still use the supplied
 `GrpcServerStream.defaults` permits 2 MiB request and response payloads, 65,536
 output messages, 64 MiB cumulative output payload (excluding envelope prefixes),
 and five minutes from initial metadata. Override the duration per service;
-client deadlines and server execution caps can only shorten it. Custom metadata
+client deadlines and server execution caps can only shorten it. Also configure
+`Server.Timeouts.response_write_milliseconds` for the intended stream lifetime:
+it is an absolute output deadline, and the integration duration cannot extend it.
+Proxy I/O timeouts remain independent. Custom metadata
 and encoded status bounds use the same rules as Unary. Logical limits do not
 account for application-owned state: a producer that retains history retains it
 intentionally. Message-count exhaustion is detected when the producer supplies
@@ -98,8 +102,9 @@ The integration owns final completion; required I/O belongs in producer steps,
 not after the terminal status.
 
 [Production fixtures](../../tests/grpc-streaming/README.md) cover generated
-clients and raw framing. Proxy/slow-reader and sustained-memory acceptance are
-the next gate; the existing release example continues to demonstrate Unary.
+clients, raw framing, TLS proxies, stalled readers, repeated cancellation and
+bounded memory. The [example](example/README.md) exercises both Unary and
+server-streaming, including from extracted distribution artifacts.
 
 ## Timeout and cancellation
 `GrpcTimeout.parse` accepts one to eight ASCII digits and the case-sensitive

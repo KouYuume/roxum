@@ -8,6 +8,7 @@ import service.GreeterService
 import service.Greeting
 import service.ReplyText
 import wire.ProtobufWire
+import grpc.GrpcServerStream
 import grpc.GrpcUnary
 import grpc.GrpcMetadata
 import grpc.GrpcStatus
@@ -28,7 +29,7 @@ init! = |{}| Ok({
 	},
 })
 
-routes = GreeterService.register(Router.new, { call_greet!: greet! }, { request_bytes: 1024, response_bytes: 1024, status_bytes: 128, metadata: GrpcMetadata.defaults }, ProtobufWire.default_limits)
+routes = GreeterService.register(Router.new, { call_greet!: greet!, call_watch!: watch! }, { unary: { request_bytes: 1024, response_bytes: 1024, status_bytes: 128, metadata: GrpcMetadata.defaults }, streaming: GrpcServerStream.defaults }, ProtobufWire.default_limits)
 
 greet! = |_model, Greeting.(input), metadata| {
 	Log.info!("Greeting RPC received")
@@ -47,5 +48,23 @@ greet! = |_model, Greeting.(input), metadata| {
 				},
 			),
 		},
+	)
+}
+
+watch! = |_model, Greeting.(input), _metadata| {
+	if Str.is_empty(input.name) {
+		return Err(GrpcUnary.failure(GrpcStatus.Code.InvalidArgument, "name is required"))
+	}
+	Ok(
+		GrpcServerStream.response(
+			0.U32,
+			|index| {
+				if index == 3 {
+					Ok(Done([]))
+				} else {
+					Ok(Next(ReplyText.{ greeting: "Hello ${input.name} ${index.to_str()}" }, index + 1))
+				}
+			},
+		),
 	)
 }

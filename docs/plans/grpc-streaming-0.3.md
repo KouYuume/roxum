@@ -83,8 +83,11 @@ claim excludes data deliberately retained by application logic.
 The concrete contracts are recorded in [HTTP/2 streaming](../design/http2-streaming.md).
 Its status separates the implemented engine output and production callback writer
 and explicit completion/expiry trailers. Generated server-streaming integration
-is implemented; production proxy/resource acceptance and incremental input remain
-pending.
+and its production acceptance fixtures are implemented. Incremental input remains
+pending. [Server-streaming acceptance](../../tests/grpc-streaming/README.md) records
+the proxy, cancellation, fixed-budget and memory-sampling workloads; the generated
+example also runs from extracted artifacts. Platform-specific results still belong
+to the corresponding local/CI verification runs.
 
 ## Implementation sequence
 

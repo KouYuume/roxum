@@ -25,6 +25,9 @@ def verify(target, bindings):
         else:
             raise AssertionError('empty name accepted')
         assert call(service_pb2.Greeting(name='again'), timeout=5).greeting == 'Hello again'
+        stream = service_pb2_grpc.GreeterStub(channel).Watch(service_pb2.Greeting(name='Roc'), timeout=5)
+        assert [reply.greeting for reply in stream] == ['Hello Roc 0', 'Hello Roc 1', 'Hello Roc 2']
+        assert stream.code() == grpc.StatusCode.OK
     print('PASS Hello Roc, metadata, INVALID_ARGUMENT and subsequent call')
 
 

@@ -1,4 +1,5 @@
 """Generated server-streaming interoperability on production TCP and Unix listeners."""
+from contextlib import ExitStack
 import json
 import pathlib
 import select
@@ -18,15 +19,17 @@ import streaming_pb2 as messages
 import streaming_pb2_grpc as services
 sys.path.insert(0, str(ROOT / 'tests/support'))
 from roxum_process import stop
+sys.path.insert(0, str(ROOT / "tests/grpc-unary"))
+import proxy
 
 
-def verify(executable, unix):
+def verify(executable, unix, proxied=False):
     with tempfile.TemporaryDirectory(prefix='roxum-grpc-stream-', dir='/tmp') as directory:
         path = str(pathlib.Path(directory) / 'rpc.sock') if unix else ''
         config = pathlib.Path(directory) / 'config'
         config.mkdir()
         (config / 'local.toml').write_text('path = ' + json.dumps(path) + '\n')
-        with tempfile.TemporaryFile(mode='w+') as errors:
+        with tempfile.TemporaryFile(mode='w+') as errors, ExitStack() as stack:
             process = subprocess.Popen([executable], cwd=directory, stdout=subprocess.PIPE,
                                        stderr=errors, text=True, start_new_session=True)
             try:
@@ -34,7 +37,15 @@ def verify(executable, unix):
                 endpoint = process.stdout.readline().strip()
                 target = endpoint if unix else '127.0.0.1:' + endpoint
                 address = path if unix else ('127.0.0.1', int(endpoint))
-                with grpc.insecure_channel(target, options=(('grpc.enable_retries', 0), ('grpc.enable_http_proxy', 0))) as channel:
+                tls_context = None
+                if proxied:
+                    upstream = 'unix:' + path if unix else 'grpc://' + target
+                    target, address, tls_context, certificate = stack.enter_context(proxy.start(upstream, directory))
+                def channel_for_target():
+                    credentials = grpc.ssl_channel_credentials(certificate) if proxied else None
+                    options = (('grpc.enable_retries', 0), ('grpc.enable_http_proxy', 0))
+                    return grpc.secure_channel(target, credentials, options=options) if proxied else grpc.insecure_channel(target, options=options)
+                with channel_for_target() as channel:
                     grpc.channel_ready_future(channel).result(timeout=10)
                     stub = services.UpdatesStub(channel)
                     def stream(count, mode='', metadata=()):
@@ -86,13 +97,13 @@ def verify(executable, unix):
                 # The producer is held by an explicit peer-observation latch.
                 # It cannot finish until this client has received a full message.
                 for mode in ('gated', 'deadline'):
-                    with socket.socket(socket.AF_UNIX if unix else socket.AF_INET) as sock:
+                    with (tls_context.wrap_socket(socket.socket(), server_hostname='localhost') if proxied else socket.socket(socket.AF_UNIX if unix else socket.AF_INET)) as sock:
                         sock.settimeout(5)
                         sock.connect(address)
                         client = H2Connection(config=H2Configuration(client_side=True, header_encoding='utf-8'))
                         client.initiate_connection()
                         body = messages.Request(count=2, mode=mode).SerializeToString()
-                        headers = [(':method', 'POST'), (':scheme', 'http'), (':authority', 'localhost'),
+                        headers = [(':method', 'POST'), (':scheme', 'https' if proxied else 'http'), (':authority', 'localhost'),
                                    (':path', '/streaming.Updates/Watch'), ('content-type', 'application/grpc'), ('te', 'trailers')]
                         if mode == 'deadline':
                             headers.append(('grpc-timeout', '1S'))
@@ -117,7 +128,7 @@ def verify(executable, unix):
                                 first_seen = True
                                 if mode == 'gated':
                                     assert not ended, 'producer completed before peer observation'
-                                    with grpc.insecure_channel(target, options=(('grpc.enable_retries', 0), ('grpc.enable_http_proxy', 0))) as release_channel:
+                                    with channel_for_target() as release_channel:
                                         reply = services.UpdatesStub(release_channel).Echo(messages.Request(mode='release', count=42), timeout=5)
                                         assert reply.sequence == 42
                             sock.sendall(client.data_to_send())
@@ -147,10 +158,18 @@ def verify(executable, unix):
             finally:
                 stop(process)
                 process.stdout.close()
-    print('PASS generated server-streaming: messages, metadata, terminal errors, limits, expiry and Unary coexistence ' + ('Unix' if unix else 'TCP'))
+    print('PASS generated server-streaming: messages, metadata, terminal errors, limits, expiry and Unary coexistence ' + ('TLS proxy -> ' if proxied else '') + ('Unix' if unix else 'TCP'))
 
 
 if __name__ == '__main__':
     executable = str(pathlib.Path(sys.argv[1]).resolve())
     verify(executable, False)
     verify(executable, True)
+
+    verify(executable, False, True)
+    verify(executable, True, True)
+    import pressure
+    acceptance = str(pathlib.Path(sys.argv[2]).resolve())
+    for unix in (False, True):
+        for proxied in (False, True):
+            pressure.verify(acceptance, unix, proxied, sys.argv[3])
