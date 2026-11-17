@@ -33,6 +33,13 @@ The host copies the fields, stops the callback on expiry, and drains accepted DA
 before the terminal section, subject to the write timeout. Normal finish and
 expiry select their terminal once. The integration chooses status fields such as
 `grpc-status`; the host does not.
+If an HTTP/2 streamed response finishes before request EOF, the host sends its
+terminal output first, then closes the unfinished input with `RST_STREAM(NO_ERROR)`.
+This includes callback return and execution-expiry trailers. Input EOF first does
+not end output. Complete application I/O before finishing: further waits after
+completion may be cancelled. Early finite replies retain their bounded input-drain
+behavior.
+
 The SSE example below requires HTTP/1; incremental request handlers also work on HTTP/2.
 
 ## Writing a body

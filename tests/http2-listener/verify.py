@@ -19,6 +19,7 @@ from h2.events import DataReceived, TrailersReceived, ResponseReceived, StreamEn
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'support'))
 from roxum_process import stop, STOP_TIMEOUT_SECONDS
 from incremental import verify_incremental
+from half_close import verify_half_close
 
 
 def verify(executable, unix, debug=False):
@@ -1202,6 +1203,8 @@ def verify_stream_shutdown(executable, unix, forced):
 
 if __name__ == '__main__':
     executable = str(pathlib.Path(sys.argv[1]).resolve())
+    verify_half_close(executable, False)
+    verify_half_close(executable, True)
     verify_incremental(executable, False)
     verify_incremental(executable, True)
     verify_stream_output(executable, False)

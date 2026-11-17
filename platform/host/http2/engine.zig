@@ -248,6 +248,19 @@ pub const Engine = struct {
             if (self.pending_response_end) |id| {
                 self.pending_response_end = null;
                 if (self.observer.response_sent) |sent| sent(self.observer.context, id);
+                // A complete streamed response no longer needs request input.
+                // Queue NO_ERROR only after the socket consumed END_STREAM;
+                // an earlier reset could discard accepted DATA or trailers.
+                if (self.find(@backingInt(id))) |slot| {
+                    if (slot.streaming and !slot.input_ended and !slot.rejected) {
+                        check(c.nghttp2_submit_rst_stream(self.session, c.NGHTTP2_FLAG_NONE, slot.id, c.NGHTTP2_NO_ERROR)) catch |err| {
+                            self.failed = true;
+                            return err;
+                        };
+                        slot.rejected = true;
+                        if (self.discardInput(slot) != 0) return error.OutOfMemory;
+                    }
+                }
             }
         }
     }
@@ -1745,4 +1758,82 @@ test "early input disposal frees queues and enforces cumulative drain boundaries
     try std.testing.expectEqual(@as(usize, 65536), total.stream);
     try InputTest.frame(self, c.NGHTTP2_DATA, c.NGHTTP2_FLAG_END_STREAM, 1, "");
     try std.testing.expectEqual(@as(usize, 0), self.activeStreams());
+}
+
+test "streamed response closes unfinished input only after terminal consumption" {
+    const InputEnd = enum { before_output, during_terminal, absent };
+    for (std.enums.values(InputEnd)) |input_end| {
+        var context: u8 = 0;
+        var input_memory = Memory{ .backing = std.testing.allocator, .limit = 128 * 1024 };
+        const self = try Engine.createIncremental(std.testing.allocator, .{}, TestObserver.observer(&context), &input_memory);
+        defer self.destroy();
+        try InputTest.start(self, false);
+        // Half the initial connection window makes discarded credit observable.
+        const payload: [16384]u8 = @splat('q');
+        for (0..2) |_| try InputTest.frame(self, c.NGHTTP2_DATA, 0, 1, &payload);
+        if (input_end == InputEnd.before_output) try InputTest.frame(self, c.NGHTTP2_DATA, c.NGHTTP2_FLAG_END_STREAM, 1, "");
+        try self.beginStreamingResponse(InputTest.id, 200, &.{});
+        _ = try InputTest.flush(self);
+        try std.testing.expect(try self.writeStreamingResponse(InputTest.id, "response"));
+        _ = try InputTest.flush(self);
+        try self.finishResponse(InputTest.id, &.{.{ .name = "x-result", .value = "done" }});
+        const final = try self.output();
+        try std.testing.expect(self.pending_response_end != null);
+        try std.testing.expect(final.len > 1);
+        try self.consumeOutput(0);
+        try self.consumeOutput(final.len - 1);
+        if (input_end != InputEnd.before_output) {
+            try std.testing.expect(!self.find(1).?.rejected);
+            try std.testing.expect(input_memory.used > 0);
+        }
+        if (input_end == InputEnd.during_terminal) try InputTest.frame(self, c.NGHTTP2_DATA, c.NGHTTP2_FLAG_END_STREAM, 1, "");
+        try self.consumeOutput(1);
+        try std.testing.expectEqual(@as(usize, 0), input_memory.used);
+        var resets: usize = 0;
+        var credit: usize = 0;
+        while (true) {
+            const frame = try self.output();
+            if (frame.len == 0) break;
+            if (frame[3] == c.NGHTTP2_RST_STREAM) {
+                resets += 1;
+                try std.testing.expectEqual(@as(u8, 1), frame[8]);
+                try std.testing.expectEqual(@as(u32, c.NGHTTP2_NO_ERROR), std.mem.readInt(u32, frame[9..13], std.builtin.Endian.big));
+            }
+            if (frame[3] == c.NGHTTP2_WINDOW_UPDATE and frame[8] == 0) credit += std.mem.readInt(u32, frame[9..13], std.builtin.Endian.big);
+            try self.consumeOutput(frame.len);
+        }
+        try std.testing.expectEqual(@as(usize, if (input_end == InputEnd.absent) 1 else 0), resets);
+        try std.testing.expectEqual(@as(usize, 32768), credit);
+        try std.testing.expectEqual(@as(usize, 0), self.activeStreams());
+        // Late input for the closed stream cannot consume a peer's receive window.
+        try InputTest.frame(self, c.NGHTTP2_DATA, 0, 1, &payload);
+        try InputTest.open(self, 3);
+        try InputTest.frame(self, c.NGHTTP2_DATA, c.NGHTTP2_FLAG_END_STREAM, 3, "peer");
+        var bytes: [4]u8 = undefined;
+        try std.testing.expectEqual(@as(usize, 4), (try self.readRequest(@fromBackingInt(3), &bytes)).data);
+        try std.testing.expectEqualStrings("peer", &bytes);
+    }
+}
+
+test "failed response-first reset allocation fails the session and releases unread input" {
+    var context: u8 = 0;
+    var input_memory = Memory{ .backing = std.testing.allocator, .limit = 128 * 1024 };
+    {
+        const self = try Engine.createIncremental(std.testing.allocator, .{}, TestObserver.observer(&context), &input_memory);
+        defer self.destroy();
+        try InputTest.start(self, true);
+        try InputTest.frame(self, c.NGHTTP2_DATA, 0, 1, "unread");
+        try self.beginStreamingResponse(InputTest.id, 200, &.{});
+        _ = try InputTest.flush(self);
+        try self.finishResponse(InputTest.id, &.{});
+        const final = try self.output();
+        try std.testing.expect(self.pending_response_end != null);
+        // The response is already serialized; the next allocation belongs to
+        // its input-side reset. Failure cannot leave a usable half-open session.
+        self.memory.limit = self.memory.used;
+        try std.testing.expectError(error.OutOfMemory, self.consumeOutput(final.len));
+        try std.testing.expect(self.failed);
+        try std.testing.expectError(error.Closed, self.requestReady(InputTest.id));
+    }
+    try std.testing.expectEqual(@as(usize, 0), input_memory.used);
 }

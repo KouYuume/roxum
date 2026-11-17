@@ -458,8 +458,11 @@ leases after a disconnect.
 
 Initial/idle connection timeouts cover empty connections. Header/body deadlines
 cover incomplete streams. Body and response-write deadlines are independent:
-early replies retain the input deadline until EOF, and EOF does not clear a
-pending response-write deadline. The write deadline ends when the transport
+early finite replies retain the input deadline until EOF, and EOF does not clear a
+pending response-write deadline. A streamed response that completes first resets
+unfinished input with `NO_ERROR` after terminal consumption. That completion
+releases its queue and ends the input deadline before the queued reset closes
+the protocol stream. The write deadline ends when the transport
 consumes the final response byte, including terminal HEADERS/CONTINUATION or
 trailers; serialization alone does not complete a write. Submitted responses retain their write deadline
 through flow-control or socket stalls. An unfinished header block closes the connection because decoding spans the

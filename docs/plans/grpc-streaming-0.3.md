@@ -25,10 +25,10 @@ No generic application task-spawning API is assumed by this plan.
 ## Starting point and responsibilities
 
 The [gRPC roadmap](grpc.md) records completed finite HTTP/2 and Unary gates.
-The current host collects bounded input before delivering it to handlers,
-replenishes receive windows automatically, and copies finite output. Existing
-`Handler.streaming` and `Reply.stream` do not establish HTTP/2 duplex execution.
-The transport spike is feasibility evidence, not a production implementation.
+The host provides bounded incremental input and output with explicit receive
+credit and request-scoped cancellation. Existing `Handler.streaming` and
+`Reply.stream` do not yet expose coordinated HTTP/2 duplex execution. The
+remaining core work is the request-scoped coordination API and simultaneous waits.
 
 | Layer | Required work |
 |---|---|
@@ -83,8 +83,9 @@ claim excludes data deliberately retained by application logic.
 The concrete contracts are recorded in [HTTP/2 streaming](../design/http2-streaming.md).
 Its status separates the implemented engine output and production callback writer
 and explicit completion/expiry trailers. Generated server-streaming integration
-and its production acceptance fixtures are implemented. Incremental input remains
-pending. [Server-streaming acceptance](../../tests/grpc-streaming/README.md) records
+and its production acceptance fixtures are implemented. Incremental production
+input and streamed-response half-close cleanup are also implemented.
+[Server-streaming acceptance](../../tests/grpc-streaming/README.md) records
 the proxy, cancellation, fixed-budget and memory-sampling workloads; the generated
 example also runs from extracted artifacts. Platform-specific results still belong
 to the corresponding local/CI verification runs.
@@ -132,7 +133,9 @@ partial support as completion.
 Bounded incremental input and explicit receive credit (PR 7) are connected to
 production request-scoped reads (PR 8). `Handler.streaming` receives input before
 EOF on real Roc fibers; ordinary handlers still receive complete bodies.
-Half-close coordination and simultaneous read/write waits remain the next gate.
+Streamed-response half-close cleanup is implemented as the first part of PR 9.
+The remaining core gate is the request-scoped duplex API and simultaneous
+read/write waits; phase 9 is not yet complete.
 
 ## Shared acceptance matrix
 

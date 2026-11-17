@@ -102,3 +102,16 @@ windows. Eighteen resets reuse all stream slots while the callback is asleep wit
 queued input; an unrelated stream completes each time. Another reset cancels a
 reader waiting for more input. TCP/Unix, all three backends and both allocator
 modes check worker identity, cleanup and continued peer progress.
+
+Streamed half-close checks hold response credit at 1024 bytes while an unrelated
+stream completes, then release it and assert all DATA/trailers precede exactly one
+`NO_ERROR` reset for unfinished input. Request EOF first requires no reset. Explicit
+finish, implicit callback completion, empty output and expiry trailers preserve
+access outcomes, release held permits and reuse more than all 16 stream slots.
+Callbacks that wait after finish/expiry must not resume, and workers must not restart.
+An engine test splits the terminal write at its last byte and races request EOF
+against that suffix; it also checks connection credit and late DATA after closure.
+A connection test crosses the input deadline immediately before, at and after its
+boundary between terminal consumption and reset serialization: normal streaming
+completion stays handled, expiry stays timeout, and finite early replies retain
+their input deadline.
