@@ -1,0 +1,156 @@
+"""Generated server-streaming interoperability on production TCP and Unix listeners."""
+import json
+import pathlib
+import select
+import socket
+import subprocess
+import sys
+import tempfile
+
+import grpc
+from h2.config import H2Configuration
+from h2.connection import H2Connection
+from h2.events import DataReceived, StreamEnded, StreamReset, TrailersReceived
+
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / 'zig-out/grpc-streaming'))
+import streaming_pb2 as messages
+import streaming_pb2_grpc as services
+sys.path.insert(0, str(ROOT / 'tests/support'))
+from roxum_process import stop
+
+
+def verify(executable, unix):
+    with tempfile.TemporaryDirectory(prefix='roxum-grpc-stream-', dir='/tmp') as directory:
+        path = str(pathlib.Path(directory) / 'rpc.sock') if unix else ''
+        config = pathlib.Path(directory) / 'config'
+        config.mkdir()
+        (config / 'local.toml').write_text('path = ' + json.dumps(path) + '\n')
+        with tempfile.TemporaryFile(mode='w+') as errors:
+            process = subprocess.Popen([executable], cwd=directory, stdout=subprocess.PIPE,
+                                       stderr=errors, text=True, start_new_session=True)
+            try:
+                assert select.select([process.stdout], [], [], 30)[0], 'startup timeout'
+                endpoint = process.stdout.readline().strip()
+                target = endpoint if unix else '127.0.0.1:' + endpoint
+                address = path if unix else ('127.0.0.1', int(endpoint))
+                with grpc.insecure_channel(target, options=(('grpc.enable_retries', 0), ('grpc.enable_http_proxy', 0))) as channel:
+                    grpc.channel_ready_future(channel).result(timeout=10)
+                    stub = services.UpdatesStub(channel)
+                    def stream(count, mode='', metadata=()):
+                        call = stub.Watch(messages.Request(count=count, mode=mode), timeout=5, metadata=metadata)
+                        received = []
+                        try:
+                            received.extend(call)
+                        except grpc.RpcError:
+                            pass
+                        return received, call
+                    # Empty output is successful and still carries final metadata.
+                    for count in (0, 1, 3, 4, 5):
+                        received, call = stream(count)
+                        assert [m.sequence for m in received] == list(range(min(count, 4)))
+                        assert all(m.text == 'item' for m in received)
+                        assert ('source', 'stream') in call.initial_metadata()
+                        assert call.code() == (grpc.StatusCode.OK if count <= 4 else grpc.StatusCode.RESOURCE_EXHAUSTED), call.details()
+                        if count <= 4:
+                            assert ('done', 'yes') in call.trailing_metadata()
+                    for mode, code, count in (
+                        ('reject', grpc.StatusCode.PERMISSION_DENIED, 0),
+                        ('error', grpc.StatusCode.ABORTED, 1),
+                        ('invalid-status', grpc.StatusCode.INTERNAL, 1),
+                        ('oversized', grpc.StatusCode.INTERNAL, 0),
+                        ('payload', grpc.StatusCode.RESOURCE_EXHAUSTED, 1),
+                        ('bad-initial', grpc.StatusCode.INTERNAL, 0),
+                        ('bad-trailing', grpc.StatusCode.INTERNAL, 3),
+                    ):
+                        received, call = stream(3, mode)
+                        assert len(received) == count and call.code() == code, (mode, received, call.code(), call.details())
+                    # Nearest values around the 64-byte per-message and
+                    # cumulative payload caps (envelope bytes are excluded).
+                    for mode, count, accepted, code in (
+                        ('encoded-below', 1, 1, grpc.StatusCode.OK),
+                        ('encoded-exact', 1, 1, grpc.StatusCode.OK),
+                        ('encoded-above', 1, 0, grpc.StatusCode.INTERNAL),
+                        ('payload-below', 2, 2, grpc.StatusCode.OK),
+                        ('payload-exact', 2, 2, grpc.StatusCode.OK),
+                        ('payload-above', 2, 1, grpc.StatusCode.RESOURCE_EXHAUSTED),
+                    ):
+                        received, call = stream(count, mode)
+                        assert len(received) == accepted and call.code() == code, (mode, received, call.code(), call.details())
+                    # The client deadline is long; the server's metadata-anchored
+                    # duration triggers status 4 after the first message.
+                    received, call = stream(2, 'deadline')
+                    assert [m.sequence for m in received] == [0]
+                    assert call.code() == grpc.StatusCode.DEADLINE_EXCEEDED
+                    assert stub.Echo(messages.Request(count=42), timeout=5).sequence == 42
+                # The producer is held by an explicit peer-observation latch.
+                # It cannot finish until this client has received a full message.
+                for mode in ('gated', 'deadline'):
+                    with socket.socket(socket.AF_UNIX if unix else socket.AF_INET) as sock:
+                        sock.settimeout(5)
+                        sock.connect(address)
+                        client = H2Connection(config=H2Configuration(client_side=True, header_encoding='utf-8'))
+                        client.initiate_connection()
+                        body = messages.Request(count=2, mode=mode).SerializeToString()
+                        headers = [(':method', 'POST'), (':scheme', 'http'), (':authority', 'localhost'),
+                                   (':path', '/streaming.Updates/Watch'), ('content-type', 'application/grpc'), ('te', 'trailers')]
+                        if mode == 'deadline':
+                            headers.append(('grpc-timeout', '1S'))
+                        client.send_headers(1, headers)
+                        client.send_data(1, b'\0' + len(body).to_bytes(4, 'big') + body, end_stream=True)
+                        sock.sendall(client.data_to_send())
+                        output, terminal, ended = b'', [], False
+                        first_seen = False
+                        while not ended:
+                            wire = sock.recv(65536)
+                            assert wire
+                            for event in client.receive_data(wire):
+                                assert not isinstance(event, StreamReset), event
+                                if isinstance(event, DataReceived):
+                                    output += event.data
+                                    client.acknowledge_received_data(event.flow_controlled_length, event.stream_id)
+                                elif isinstance(event, TrailersReceived):
+                                    terminal.append(dict(event.headers))
+                                elif isinstance(event, StreamEnded):
+                                    ended = True
+                            if not first_seen and len(output) >= 5 and len(output) >= 5 + int.from_bytes(output[1:5], 'big'):
+                                first_seen = True
+                                if mode == 'gated':
+                                    assert not ended, 'producer completed before peer observation'
+                                    with grpc.insecure_channel(target, options=(('grpc.enable_retries', 0), ('grpc.enable_http_proxy', 0))) as release_channel:
+                                        reply = services.UpdatesStub(release_channel).Echo(messages.Request(mode='release', count=42), timeout=5)
+                                        assert reply.sequence == 42
+                            sock.sendall(client.data_to_send())
+                        # A raw peer cannot synthesize DEADLINE_EXCEEDED: status4
+                        # must arrive in the server's terminal HEADERS, once.
+                        assert len(terminal) == 1
+                        assert terminal[0]['grpc-status'] == ('4' if mode == 'deadline' else '0'), terminal
+                        if mode == 'deadline':
+                            assert terminal[0]['grpc-message'] == 'deadline%20exceeded'
+                        decoded = []
+                        while output:
+                            assert len(output) >= 5 and output[0] == 0
+                            length = int.from_bytes(output[1:5], 'big')
+                            assert len(output) >= length + 5
+                            decoded.append(messages.Update.FromString(output[5:5 + length]))
+                            output = output[5 + length:]
+                        assert [m.sequence for m in decoded] == ([0] if mode == 'deadline' else [0, 1])
+                assert stop(process) == 0
+                errors.seek(0)
+                diagnostic = errors.read()
+                assert 'panic' not in diagnostic.lower(), diagnostic
+            except BaseException:
+                stop(process)
+                errors.seek(0)
+                print(errors.read(), file=sys.stderr)
+                raise
+            finally:
+                stop(process)
+                process.stdout.close()
+    print('PASS generated server-streaming: messages, metadata, terminal errors, limits, expiry and Unary coexistence ' + ('Unix' if unix else 'TCP'))
+
+
+if __name__ == '__main__':
+    executable = str(pathlib.Path(sys.argv[1]).resolve())
+    verify(executable, False)
+    verify(executable, True)

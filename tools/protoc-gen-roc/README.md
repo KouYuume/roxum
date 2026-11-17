@@ -553,9 +553,11 @@ also builds these artifacts and includes their versions, compiler contract, URLs
 and hashes under `protobuf` in `release.json` and in `protobuf.json`. A build does
 not publish a release.
 
-## Optional roxum Unary bindings
+## Optional roxum service bindings
 
 Use `wire=<path>,grpc=<integration package path>,pf=<platform path>` to generate
 typed service registration modules alongside codecs. Without these options the
 output remains platform-free. See [the integration contract](../../integrations/roxum-grpc/README.md#typed-unary-services)
-for supported RPCs, callbacks, limits and deferred deadline guarantees.
+for Unary/server-streaming callbacks, limits and deadline guarantees.
+Client-streaming and bidirectional methods are rejected until their integration
+APIs are implemented.

@@ -58,20 +58,45 @@ GrpcTimeout := [].{
 
 	## Must precede body waits. Expiry cancels execution and sends the registered
 	## DEADLINE_EXCEEDED response; it cannot preempt pure computation.
-	layer = |metadata_limits| [
-		Middleware.Stage.BeforeBody(
-			|_model, head| {
-				_ = GrpcWire.request_metadata(head.version, head.method, head.headers, metadata_limits).map_err(GrpcWire.reject_request)?
-				timeout = GrpcTimeout.from_headers(head.headers).map_err(|_| rejection(GrpcStatus.Code.InvalidArgument, "invalid grpc-timeout"))?
-				match timeout {
-					Absent => {}
-					Nanoseconds(duration) => RequestExecution.limit_with_response!(duration, Respond.to_response(rejection(GrpcStatus.Code.DeadlineExceeded, "deadline exceeded"))).map_err(|_| rejection(GrpcStatus.Code.Internal, "execution control unavailable"))?
-				}
-				Ok(head)
+	layer = |metadata_limits| layer_with_duration(metadata_limits, Absent)
+
+	streaming_layer = |limits| layer_with_duration(limits.metadata, Nanoseconds(limits.duration_nanoseconds))
+
+	streaming_duration = |headers, maximum| match GrpcTimeout.from_headers(headers)? {
+		Absent => Ok(maximum)
+		Nanoseconds(duration) => Ok(
+			if duration < maximum {
+				duration
+			} else {
+				maximum
 			},
-		),
-	]
+		)
+	}
 }
+
+layer_with_duration = |metadata_limits, default_timeout| [
+	Middleware.Stage.BeforeBody(
+		|_model, head| {
+			_ = GrpcWire.request_metadata(head.version, head.method, head.headers, metadata_limits).map_err(GrpcWire.reject_request)?
+			timeout = GrpcTimeout.from_headers(head.headers).map_err(|_| rejection(GrpcStatus.Code.InvalidArgument, "invalid grpc-timeout"))?
+			selected = match (timeout, default_timeout) {
+				(Absent, value) | (value, Absent) => value
+				(Nanoseconds(duration), Nanoseconds(cap)) => Nanoseconds(
+					if duration < cap {
+						duration
+					} else {
+						cap
+					},
+				)
+			}
+			match selected {
+				Absent => {}
+				Nanoseconds(duration) => RequestExecution.limit_with_response!(duration, Respond.to_response(rejection(GrpcStatus.Code.DeadlineExceeded, "deadline exceeded"))).map_err(|_| rejection(GrpcStatus.Code.Internal, "execution control unavailable"))?
+			}
+			Ok(head)
+		},
+	),
+]
 
 rejection = |code, text| GrpcWire.failure(code, text, [], { status_bytes: 128, metadata: GrpcMetadata.defaults }) ?? Reply.status(500)
 
@@ -121,6 +146,23 @@ expect {
 		is_unit = List.contains(['H', 'M', 'S', 'm', 'u', 'n'], byte)
 		$ok = $ok and GrpcTimeout.parse(['1', byte]).is_ok() == is_unit
 		$byte = $byte + 1
+	}
+	$ok
+}
+
+# A client deadline may shorten a streaming cap but never extend it.
+expect GrpcTimeout.streaming_duration([], 10) == Ok(10)
+expect {
+	var $ok = Bool.True
+	for duration in [0.U64, 9, 10, 11] {
+		headers = [RequestHeader.{ name: HeaderName.("grpc-timeout"), value: "${duration.to_str()}n".to_utf8() }]
+		$ok = $ok and GrpcTimeout.streaming_duration(headers, 10) == Ok(
+			if duration < 10 {
+				duration
+			} else {
+				10
+			},
+		)
 	}
 	$ok
 }
