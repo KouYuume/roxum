@@ -78,6 +78,7 @@ routes = {
 		.route("/metadata-reject", MethodRouter.post(handler).layer([Middleware.Stage.BeforeBody(|_model, _head| Err(Reply.status(403)))]))
 		.route("/metadata-reject-body", MethodRouter.post(handler).layer([Middleware.Stage.BeforeBody(|_model, _head| Err(Reply.text("denied").with_status(403)))]))
 		.route("/metadata-reject-trailers", MethodRouter.post(handler).layer([Middleware.Stage.BeforeBody(|_model, _head| Err(Reply.text("denied").with_status(403).with_trailers([ResponseHeader.{ name: HeaderName.("x-result"), value: "done" }])))]))
+		.route("/half-close", MethodRouter.post(handler).layer([Middleware.Stage.BeforeBody(half_close!)]))
 		.route("/metadata-limit", MethodRouter.post(handler).layer(BodyLimit.whole(4)))
 		.route("/input-limited", MethodRouter.post(incremental_input).layer(BodyLimit.streamed(Server.BodyLimit.Bytes(4))))
 		.route("/input-count", MethodRouter.post(incremental_input).layer(BodyLimit.streamed(Server.BodyLimit.Unlimited)))
@@ -89,6 +90,29 @@ routes = {
 		.route("/metadata-wait", MethodRouter.post(handler).layer([Middleware.Stage.BeforeBody(metadata_wait!)]))
 		.route("/metadata-deadline", MethodRouter.post(Handler.effectful(must_not_run!)).layer([Middleware.Stage.BeforeBody(metadata_wait!)]))
 		.route("/metadata-zero", MethodRouter.post(Handler.effectful(must_not_run!)).layer([Middleware.Stage.BeforeBody(metadata_wait!)]))
+}
+
+half_close! = |Model.(state), head| {
+	Concurrency.acquire!(state.limiter, "cancel-key", 1).map_err(|_| Reply.status(429))?
+	mode = Str.from_utf8_lossy(head.query)
+	if mode == "expiry" {
+		RequestExecution.limit_with_trailers!(500_000_000, [ResponseHeader.{ name: HeaderName.("x-result"), value: "expired" }]).map_err(|_| Reply.status(500))?
+	}
+	Err(Reply.stream(|writer| {
+		if mode != "empty" { ResponseWriter.write!(writer, "first".to_utf8())? }
+		if mode == "expiry" {
+			Sleep.millis!(60_000)
+			crash "half-close expiry resumed"
+		}
+		if mode != "empty" { ResponseWriter.write!(writer, List.repeat(120, 32_768))? }
+		if mode == "implicit" {
+			Ok({})
+		} else {
+			ResponseWriter.finish!(writer, [ResponseHeader.{ name: HeaderName.("x-result"), value: "done" }]).map_err(|_| StreamClosed)?
+			Sleep.millis!(60_000)
+			crash "half-close completion resumed"
+		}
+	}))
 }
 
 metadata_wait! = |Model.(state), head| {

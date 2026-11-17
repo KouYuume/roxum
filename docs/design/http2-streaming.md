@@ -1,8 +1,9 @@
 # HTTP/2 streaming contract
 
 Status: production `Reply.stream` output, explicit terminal metadata and execution
-expiry trailers and production incremental input are implemented. Duplex
-coordination below remains the implementation target for [0.3](../plans/grpc-streaming-0.3.md).
+expiry trailers, production incremental input and streamed-response half-close
+cleanup are implemented. Duplex coordination below remains the implementation
+target for [0.3](../plans/grpc-streaming-0.3.md).
 
 ## Production callback writer
 
@@ -68,6 +69,20 @@ by normal stream closure; complete required application I/O before calling finis
 Held native permits and writer quota are released once during request cleanup;
 normal callbacks remain alive through terminal consumption, whereas cancellation
 abandons them. Access logging retains the selected timeout/failure outcome.
+
+When streamed output completes before request EOF, the engine queues
+`RST_STREAM(NO_ERROR)` only after the transport consumes the full terminal field
+section. This applies to explicit finish, callback return and selected expiry
+trailers, including empty responses. It releases unread input and returns
+connection credit without reopening the stream window. The input deadline ends
+at terminal consumption, so it cannot overwrite completion while the reset awaits
+serialization. Input EOF arriving first
+needs no reset and does not stop response writes. This follows
+[RFC 9113 section 8.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.1).
+The protocol lease remains reserved until closure, and request resources remain
+pinned until callback cleanup. A normal completion remains `handled` in access
+logs; an expiry completion remains `timeout`. A subsequent callback wait is
+cancelled after closure, just as when request EOF precedes completion.
 
 ## Engine output
 
@@ -180,12 +195,12 @@ failures, reset and body/execution timeout abandon the request using existing
 cleanup; they do not resume Roc's abort callback. The HTTP/2 body timeout remains
 an absolute deadline from metadata completion, including time spent in callbacks.
 
-After an early response, finishing execution releases queued input and switches
+After an early finite response, finishing execution releases queued input and switches
 the open request side to discard mode with credit recovery. Whole/unread requests
 retain the finite server cap; streamed requests discard without accumulating more
 payload. The input deadline and protocol lease remain until EOF or reset. This
-preserves early response delivery; coordinated response-first cancellation and
-simultaneous read/write waits remain the next duplex gate.
+preserves finite early response delivery. Streamed responses use the completion
+reset described above. Simultaneous read/write waits remain the next duplex gate.
 
 ## Target request-scoped API and duplex coordination
 
@@ -265,14 +280,13 @@ outside that retention guarantee. The integration must also charge retained
 message storage against the worker budget. A single request must not allocate
 its advertised decoded bound outside the aggregate ceiling.
 
-## Target completion, failure and middleware
+## Completion, failure and middleware
 
-Request EOF and response completion are independent. Request EOF allows output
-to continue. Response completion first cancels remaining handler work and
-discards unread input with connection-credit recovery; after terminal output is
-consumed, reset the unfinished request side rather than waiting indefinitely for
-peer EOF. The lease remains reserved until protocol closure. Both orders keep
-their own input/write deadlines.
+Request EOF and streamed response completion are independent. Request EOF allows
+output to continue. Streamed response completion closes unfinished input after
+terminal consumption, as specified above; both directions retain their input/write
+deadlines until completion or cancellation. The target duplex coordinator must
+preserve these rules when adding simultaneous read/write waits.
 
 The implemented terminal-selection and failure rules above also apply to duplex
 execution. The integration chooses gRPC status fields; the host owns their

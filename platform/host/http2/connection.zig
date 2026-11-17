@@ -391,6 +391,10 @@ pub const Connection = struct {
         if (self.streams.leases.find(id)) |ticket| {
             self.deadlines[ticket.slot] = 0;
             self.writing[ticket.slot] = false;
+            // Streamed completion closes unread input. Its reset can wait for
+            // the next owner turn; a body timeout must not overwrite completion.
+            // Finite early replies still wait for input under their body deadline.
+            if (self.terminals[ticket.slot].selection != terminal.Selection.open) self.body_deadlines[ticket.slot] = 0;
             if (self.execution(ticket)) |execution_value| {
                 if (execution_value.finishing and self.terminals[ticket.slot].selection == terminal.Selection.normal) execution_value.response_complete = true;
             }
@@ -995,4 +999,78 @@ test "expiry response discards unread engine input after execution becomes inval
     try std.testing.expectError(error.InvalidState, connection.owner.engine.checkDispatchable(work.id));
     try std.testing.expectEqual(@as(usize, 0), connection.budget.used);
     try std.testing.expectError(error.Closed, connection.owner.engine.requestReady(work.id));
+}
+
+test "streamed completion retires input deadline before reset serialization" {
+    const Form = enum { streamed, expiry, finite };
+    const Outcome = @import("../access_log.zig").Outcome;
+    for (std.enums.values(Form)) |form| {
+        var pair: [2]c_int = undefined;
+        try std.testing.expectEqual(@as(c_int, 0), std.c.socketpair(std.c.AF.UNIX, std.c.SOCK.STREAM, 0, &pair));
+        defer net.closeSocket(pair[1]);
+        try net.setListenerNonBlocking(pair[0]);
+        var readiness = try poller.Poller.init();
+        defer readiness.deinit();
+        const connection = try Connection.create(pair[0], &readiness, 1, .{});
+        defer {
+            connection.executions = @splat(.{});
+            connection.disconnect();
+            connection.destroy();
+        }
+        connection.now = try net.monotonicNanoseconds();
+        try connection.owner.engine.receive("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" ++
+            "\x00\x00\x00\x04\x00\x00\x00\x00\x00" ++
+            "\x00\x00\x0e\x01\x04\x00\x00\x00\x01\x83\x86\x84\x01\x09localhost");
+        const work = connection.streams.nextMetadata().?.execute;
+        defer _ = connection.streams.finish(work.ticket);
+        connection.executions[work.ticket.slot] = .{ .ticket = work.ticket };
+        connection.access[work.ticket.slot] = .{ .status = 200 };
+        const deadline = connection.body_deadlines[work.ticket.slot];
+        if (form == Form.finite) {
+            try connection.owner.engine.respond(work.id, 200, &.{}, "finite");
+            try std.testing.expect(connection.streams.leases.commitResponse(work.ticket));
+        } else {
+            if (form == Form.expiry) try connection.registerExpiryTrailers(work.ticket, 0, &.{});
+            try connection.owner.engine.beginStreamingResponse(work.id, 200, &.{});
+            if (form == Form.expiry) {
+                connection.expire(work.headers_at);
+                try connection.completeExpired(work.id);
+            } else try connection.selectCompletion(work.ticket, &.{});
+        }
+        var consumed = false;
+        for (0..32) |_| {
+            connection.advanceTerminals();
+            const bytes = try connection.owner.engine.output();
+            if (bytes.len == 0) break;
+            const last = connection.owner.engine.pending_response_end != null;
+            try connection.owner.engine.consumeOutput(bytes.len);
+            if (last) {
+                consumed = true;
+                break;
+            }
+        }
+        try std.testing.expect(consumed);
+        // No output() call may serialize the queued reset before these checks.
+        for ([_]u64{ deadline - 1, deadline, deadline + 1 }) |now| {
+            connection.expire(now);
+            const expected = if (form == Form.expiry or (form == Form.finite and now >= deadline)) Outcome.timeout else Outcome.handled;
+            try std.testing.expectEqual(expected, connection.access[work.ticket.slot].?.outcome);
+            try std.testing.expect(!connection.failed);
+        }
+        if (form != Form.finite) {
+            try std.testing.expectEqual(@as(u64, 0), connection.body_deadlines[work.ticket.slot]);
+            var resets: usize = 0;
+            for (0..32) |_| {
+                const bytes = try connection.owner.engine.output();
+                if (bytes.len == 0) break;
+                if (bytes[3] == 3) {
+                    resets += 1;
+                    try std.testing.expectEqual(@as(u32, 0), std.mem.readInt(u32, bytes[9..13], std.builtin.Endian.big));
+                }
+                try connection.owner.engine.consumeOutput(bytes.len);
+            }
+            try std.testing.expectEqual(@as(usize, 1), resets);
+            try std.testing.expectEqual(@as(usize, 0), connection.owner.engine.activeStreams());
+        }
+    }
 }
