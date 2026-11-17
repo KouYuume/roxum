@@ -833,7 +833,8 @@ fn RequestFiber(comptime Environment: type) type {
             if (!self.http2_stream_started or self.http2_stream_finished) return 4;
             if (trailers.len > 64) return 2;
             var fields: [64]@import("http2/engine.zig").Header = undefined;
-            for (trailers, 0..) |header, index| fields[index] = .{ .name = header.name.asSlice(), .value = header.value.asSlice() };
+            // Short Roc strings live inline; borrow the original list elements.
+            for (trailers, 0..) |*header, index| fields[index] = .{ .name = header.name.asSlice(), .value = header.value.asSlice() };
             {
                 const item = &self.shared.handoff.connections[self.dispatch.slot];
                 item.lock.lock();
@@ -900,7 +901,8 @@ fn RequestFiber(comptime Environment: type) type {
             const self: *Self = @ptrCast(@alignCast(ptr));
             if (trailers.len > 64) return 2;
             var fields: [64]@import("http2/engine.zig").Header = undefined;
-            for (trailers, 0..) |header, index| fields[index] = .{ .name = header.name.asSlice(), .value = header.value.asSlice() };
+            // Short Roc strings live inline; borrow the original list elements.
+            for (trailers, 0..) |*header, index| fields[index] = .{ .name = header.name.asSlice(), .value = header.value.asSlice() };
             const item = &self.shared.handoff.connections[self.dispatch.slot];
             item.lock.lock();
             defer item.lock.unlock();

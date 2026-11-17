@@ -82,6 +82,10 @@ jobs:
           brew list openssl@3 >/dev/null || brew install openssl@3
           zig build test-grpc-unary
           zig build test-grpc-example
+      - name: Verify generated server-streaming on TCP and Unix listeners
+        env:
+          ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
+        run: zig build test-grpc-streaming
       - name: Verify platform-dependent package boundary
         env:
           ROC_BIN: ${{ github.workspace }}/.roc-bin/roc

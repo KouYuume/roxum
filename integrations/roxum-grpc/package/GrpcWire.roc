@@ -9,8 +9,8 @@ import GrpcFrame
 import GrpcMetadata
 import GrpcStatus
 
-## Finite protocol helpers; dispatch, schema decoding and deadlines belong to
-## the Unary layer. Call request_metadata before decoding the buffered body.
+## Protocol fields and finite replies; typed integrations own dispatch, schema
+## decoding and deadlines. Validate request metadata before decoding the body.
 GrpcWire := [].{
 	RequestError : [HttpVersion, HttpMethod, ContentType, InvalidHeaders, UnsupportedEncoding, MetadataLimit, InvalidMetadata, InvalidBase64]
 	ResponseError : [MessageLimit, MetadataLimit, InvalidMetadata, InvalidBase64, StatusLimit, InvalidStatus]
@@ -66,6 +66,22 @@ GrpcWire := [].{
 		headers = GrpcMetadata.encode(initial, response_limits(limits.metadata))?
 		trailers = trailer_fields(trailing, response_limits(limits.metadata))?
 		Ok(Reply.bytes(body, "application/grpc+proto").with_headers(headers).with_trailers(trailers.append(ResponseHeader.{ name: HeaderName.("grpc-status"), value: "0" })))
+	}
+
+	## Shared validation for streamed initial metadata and terminal status.
+	initial_fields = |metadata, limits| GrpcMetadata.encode(metadata, response_limits(limits))
+
+	terminal_fields = |code, message, trailing, limits| {
+		trailers = trailer_fields(trailing, response_limits(limits.metadata))?
+		encoded = GrpcStatus.encode_message(message, limits.status_bytes)?
+		status = HeaderValue.from_str(GrpcStatus.number(code).to_str()).map_err(|_| InvalidMetadata)?
+		detail = HeaderValue.from_str(encoded).map_err(|_| InvalidMetadata)?
+		Ok(
+			trailers.concat([
+				ResponseHeader.{ name: HeaderName.("grpc-status"), value: status },
+				ResponseHeader.{ name: HeaderName.("grpc-message"), value: detail },
+			]),
+		)
 	}
 
 	failure : GrpcStatus.Code, Str, List(GrpcMetadata.Entry), { status_bytes : U64, metadata : GrpcMetadata.Limits } -> Try(Reply, GrpcWire.ResponseError)

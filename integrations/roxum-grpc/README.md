@@ -1,7 +1,9 @@
-# Unary gRPC integration
+# gRPC integration
 
-This package provides finite Unary wire helpers, typed handlers, and opt-in
-generated service bindings using roxum's HTTP/2 capabilities. Generated routes
+This package provides Unary and server-streaming typed handlers with opt-in
+generated service bindings using roxum's HTTP/2 capabilities. Server-streaming
+is part of the unreleased 0.3 work; client-streaming and bidirectional RPC remain
+unsupported. Generated routes
 install deadlines before waiting for request bodies and register a final gRPC
 status response on expiry. Independent generated clients and raw HTTP/2 checks
 cover direct TCP/Unix listeners and nginx TLS termination; see
@@ -30,7 +32,7 @@ Registration adds exact POST routes using the original fully qualified service
 and method names. Callback field names use `call_` plus the lowercase method
 name and `!`; collisions are rejected. Existing router fallbacks continue to
 handle unknown routes (the default HTTP 404 is mapped by gRPC clients to
-UNIMPLEMENTED). Service and method options, streaming RPCs, missing or invisible
+UNIMPLEMENTED). Service and method options, client-streaming/bidirectional RPCs, missing or invisible
 message types, and module/binding name collisions fail generation atomically.
 This includes `Handlers`, the generated callback record type.
 Codec-only generation retains its platform-free package and ignores services.
@@ -46,6 +48,58 @@ These handlers run after finite body assembly. Generated registration installs
 `GrpcTimeout.layer` before body reception. Manual `GrpcUnary.handler` users must
 attach that layer themselves; the handler alone does not install deadlines.
 Start with the [greeting example](example/README.md) for registration and handlers.
+
+## Typed server-streaming services
+
+A method returning `stream Output` generates a callback returning
+`Try(GrpcServerStream.Response(Output), GrpcUnary.Failure)`. Construct the response
+with `GrpcServerStream.response(state, step!)`. Each step returns
+`Ok(Next(message, next_state))`, `Ok(Done(trailing_metadata))`, or
+`Err(GrpcUnary.failure(code, message))`. The response record also accepts initial
+metadata. The integration pulls and sends one encoded message at a time; callers
+do not receive a raw transport writer or need to choose when to finish.
+
+```roc
+watch! = |_model, Request.(request), _metadata| Ok(
+    GrpcServerStream.response(0.U32, |index| {
+        if index == request.count { return Ok(Done([])) }
+        Ok(Next(Update.{ sequence: index, text: "item" }, index + 1))
+    }),
+)
+```
+
+Server-streaming-only registration takes `GrpcServerStream.Limits`; a service
+mixing Unary and streaming methods takes `{ unary, streaming }` limits. Unary-only
+registration is unchanged. Generated codecs still use the supplied
+`ProtobufWire.Limits`. Request input remains exactly one finite message.
+
+`GrpcServerStream.defaults` permits 2 MiB request and response payloads, 65,536
+output messages, 64 MiB cumulative output payload (excluding envelope prefixes),
+and five minutes from initial metadata. Override the duration per service;
+client deadlines and server execution caps can only shorten it. Custom metadata
+and encoded status bounds use the same rules as Unary. Logical limits do not
+account for application-owned state: a producer that retains history retains it
+intentionally. Message-count exhaustion is detected when the producer supplies
+the first excess message; it is not encoded or sent.
+
+Normal exhaustion sends status OK even for zero messages. An application failure
+after output sends its status after earlier messages; invalid status/metadata or
+encoding failures become INTERNAL. Count and cumulative-payload limits send
+RESOURCE_EXHAUSTED. The callback itself can suspend; cancellation abandons it.
+Generic compression and keep-alive middleware must not alter RPC output.
+
+Generated registration installs a finite DEADLINE_EXCEEDED response before body
+waits, then the handler replaces it with copied expiry trailers before streamed
+output. Expiry after headers drains accepted DATA before status 4, subject to
+write timeout and cancellation. Expiry between trailer registration and initial
+headers can reset the stream. Manual handler users must install
+`GrpcTimeout.streaming_layer(limits)` themselves for pre-body duration enforcement.
+The integration owns final completion; required I/O belongs in producer steps,
+not after the terminal status.
+
+[Production fixtures](../../tests/grpc-streaming/README.md) cover generated
+clients and raw framing. Proxy/slow-reader and sustained-memory acceptance are
+the next gate; the existing release example continues to demonstrate Unary.
 
 ## Timeout and cancellation
 `GrpcTimeout.parse` accepts one to eight ASCII digits and the case-sensitive
