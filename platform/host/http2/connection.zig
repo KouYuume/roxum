@@ -7,6 +7,7 @@ const streams = @import("streams.zig");
 const net = @import("../net.zig");
 const poller = @import("../net/poller.zig");
 const fiber = @import("../fiber.zig");
+const terminal = @import("terminal_fields.zig");
 const fiber_wait = @import("../fiber_wait.zig");
 
 var worker_memory = @import("worker_memory.zig").Budget{};
@@ -14,7 +15,9 @@ var worker_memory = @import("worker_memory.zig").Budget{};
 pub const Execution = struct {
     ticket: ?streams.Ticket = null,
     claimed: bool = false,
-    waiter: ?struct { target: *fiber.Fiber, serial: u64, body_limit: ?u64 = null, output: bool = false } = null,
+    response_complete: bool = false,
+    finishing: bool = false,
+    waiter: ?struct { target: *fiber.Fiber, serial: u64, body_limit: ?u64 = null, output: bool = false, completion: bool = false } = null,
 };
 
 pub const Connection = struct {
@@ -22,6 +25,7 @@ pub const Connection = struct {
     budget: input.Budget = .{ .backing = std.heap.smp_allocator, .limit = 16 * 1024 * 1024 },
     streams: streams.Streams = undefined,
     executions: [16]Execution = @splat(.{}),
+    terminals: [16]terminal.Terminal = @splat(.{}),
     failed: bool = false,
     closed: bool = false,
     draining: bool = false,
@@ -72,6 +76,7 @@ pub const Connection = struct {
     pub fn destroy(self: *Connection) void {
         std.debug.assert(!self.busy());
         self.streams.disconnect();
+        for (&self.terminals) |*value| value.deinit();
         self.owner.engine.destroy();
         std.debug.assert(self.budget.used == 0);
         worker_memory.allocator().destroy(self);
@@ -94,6 +99,11 @@ pub const Connection = struct {
         for (self.executions) |execution_value| {
             const ticket = execution_value.ticket orelse continue;
             const waiter = execution_value.waiter orelse continue;
+            if (waiter.completion and execution_value.finishing and !self.failed and !self.closed) {
+                if (execution_value.response_complete) fiber_wait.wake(waiter.target, waiter.serial);
+                // Protocol close may precede consumption of terminal output.
+                if (self.terminals[ticket.slot].selection == terminal.Selection.normal or execution_value.response_complete) continue;
+            }
             if (self.streams.leases.runningStream(ticket) == null) {
                 fiber_wait.wakeStopped(waiter.target, waiter.serial, fiber.Stop.client_gone);
             } else if (waiter.output) {
@@ -134,6 +144,7 @@ pub const Connection = struct {
         }
         self.completed_access_count = 0;
         self.streams.disconnect();
+        for (&self.terminals) |*value| value.deinit();
         self.wakeClosed();
         // Remove interest before close so a concurrent epoll scan cannot
         // defer the socket's final release until its next userspace return.
@@ -187,12 +198,85 @@ pub const Connection = struct {
         }
     }
 
+    /// Register expiry fields before committing headers. Failed validation leaves
+    /// the previous deadline and snapshot unchanged.
+    pub fn registerExpiryTrailers(self: *Connection, ticket: streams.Ticket, duration: u64, fields: []const engine.Header) !void {
+        const id = self.streams.leases.runningStream(ticket) orelse return error.Closed;
+        try self.owner.engine.checkDispatchable(id);
+        var copy = try terminal.Fields.init(self.budget.allocator(), self.owner.engine, fields);
+        errdefer copy.deinit();
+        if (!self.streams.leases.limitExecution(ticket, duration, std.math.maxInt(u64))) return error.Closed;
+        self.terminals[ticket.slot].deinit();
+        self.terminals[ticket.slot].fields = copy;
+        self.streams.clearExpiryResponse(ticket);
+    }
+
+    /// Selection is serialized with expiry. Accepted normal completion disables
+    /// execution expiry, but never the response-write deadline.
+    pub fn selectCompletion(self: *Connection, ticket: streams.Ticket, fields: []const engine.Header) !void {
+        const copy = try terminal.Fields.init(self.budget.allocator(), self.owner.engine, fields);
+        return self.selectPreparedCompletion(ticket, copy);
+    }
+
+    /// Consumes the copied fields on every outcome. Production callers recheck
+    /// expiry after preparing the copy, before selecting normal completion.
+    pub fn selectPreparedCompletion(self: *Connection, ticket: streams.Ticket, fields: terminal.Fields) !void {
+        var copy = fields;
+        errdefer copy.deinit();
+        const id = self.streams.leases.runningStream(ticket) orelse return error.Closed;
+        const selected = &self.terminals[ticket.slot];
+        if (selected.selection != terminal.Selection.open) return error.InvalidState;
+        _ = try self.owner.engine.streamingReady(id);
+        if (!self.streams.leases.commitResponse(ticket)) return error.Closed;
+        selected.deinit();
+        selected.* = .{ .selection = terminal.Selection.normal, .fields = copy };
+        self.streams.clearExpiryResponse(ticket);
+        if (self.execution(ticket)) |execution_value| execution_value.finishing = true;
+        self.owner.runnable = true;
+    }
+
+    /// Retry selected terminal metadata only after accepted DATA has drained.
+    /// This also runs after an expired request fiber has been abandoned.
+    pub fn advanceTerminals(self: *Connection) void {
+        for (&self.terminals, 0..) |*selected, index| {
+            if (selected.selection == terminal.Selection.open or selected.submitted) continue;
+            const ticket = self.streams.entries[index].ticket orelse continue;
+            const id = self.streams.leases.stream(ticket) orelse continue;
+            const ready = self.owner.engine.streamingReady(id) catch {
+                selected.deinit();
+                self.cancelTimedOut(id);
+                continue;
+            };
+            if (!ready) continue;
+            const fields = &(selected.fields orelse unreachable);
+            self.owner.engine.finishResponse(id, fields.fields) catch {
+                selected.deinit();
+                self.cancelTimedOut(id);
+                continue;
+            };
+            selected.fields.?.deinit();
+            selected.fields = null;
+            selected.submitted = true;
+            self.owner.runnable = true;
+        }
+    }
+
     /// Called between engine operations, under the connection lock. Expiry has
     /// already invalidated execution; only its copied response remains usable.
     pub fn completeExpired(self: *Connection, id: engine.StreamId) !void {
         const ticket = self.streams.leases.find(id) orelse return;
         defer self.streams.clearExpiryResponse(ticket);
         if (self.streams.leases.executionExpired(ticket)) {
+            const selected = &self.terminals[ticket.slot];
+            if (selected.fields != null and selected.selection == terminal.Selection.open) {
+                _ = self.owner.engine.streamingReady(id) catch {
+                    selected.deinit();
+                    return self.owner.cancel(id);
+                };
+                selected.selection = terminal.Selection.expiry;
+                self.owner.runnable = true;
+                return;
+            }
             if (self.streams.entries[ticket.slot].expiry_response) |*response| {
                 // An I/O timeout may already have queued a reset in this tick.
                 // Never replace it or turn its stream-local failure into a close.
@@ -284,20 +368,25 @@ pub const Connection = struct {
         if (self.streams.leases.find(id)) |ticket| {
             self.deadlines[ticket.slot] = 0;
             self.writing[ticket.slot] = false;
+            if (self.execution(ticket)) |execution_value| {
+                if (execution_value.finishing and self.terminals[ticket.slot].selection == terminal.Selection.normal) execution_value.response_complete = true;
+            }
+            self.terminals[ticket.slot].deinit();
         }
     }
     fn streamClosed(ptr: *anyopaque, id: engine.StreamId) void {
         const self = from(ptr);
         if (self.streams.leases.find(id)) |ticket| {
             const deadline = self.deadlines[ticket.slot];
-            if (self.writing[ticket.slot] and self.owner.engine.close_error == 0 and deadline != 0) {
+            if (self.writing[ticket.slot] and self.owner.engine.close_error == 0 and !self.owner.engine.close_peer_reset and deadline != 0) {
                 if (self.terminal_write_deadline == 0 or deadline < self.terminal_write_deadline) self.terminal_write_deadline = deadline;
             }
+            if (self.owner.engine.close_error != 0 or self.owner.engine.close_peer_reset or self.terminals[ticket.slot].selection != terminal.Selection.normal) self.terminals[ticket.slot].deinit();
             self.body_deadlines[ticket.slot] = 0;
             self.writing[ticket.slot] = false;
             self.deadlines[ticket.slot] = 0;
             if (self.access[ticket.slot]) |*entry| {
-                if (self.owner.engine.close_error != 0 or entry.status == 0) {
+                if (self.owner.engine.close_error != 0 or self.owner.engine.close_peer_reset or entry.status == 0) {
                     if (entry.outcome == @import("../access_log.zig").Outcome.handled) entry.outcome = @import("../access_log.zig").Outcome.client_closed;
                     @import("../access_log.zig").record(entry, self.now);
                 } else if (self.completed_access_count < self.completed_access.len) {
@@ -680,7 +769,12 @@ test "output readiness and execution lookup cannot revive a reused lease" {
     try std.testing.expect(connection.outputReady(first.ticket));
     try std.testing.expect(try connection.owner.engine.writeStreamingResponse(first.id, "chunk"));
     try std.testing.expect(!connection.outputReady(first.ticket));
-    try connection.owner.engine.receive("\x00\x00\x04\x03\x00\x00\x00\x00\x01\x00\x00\x00\x08");
+    try connection.selectCompletion(first.ticket, &.{.{ .name = "x-result", .value = "normal" }});
+    try connection.owner.engine.receive("\x00\x00\x04\x03\x00\x00\x00\x00\x01\x00\x00\x00\x00");
+    connection.advanceTerminals();
+    try std.testing.expect(!connection.failed);
+    try std.testing.expect(connection.terminals[first.ticket.slot].fields == null);
+    try std.testing.expect(!connection.executions[first.ticket.slot].response_complete);
     try std.testing.expect(connection.outputReady(first.ticket));
     try std.testing.expect(connection.streams.finish(first.ticket));
     connection.executions[first.ticket.slot] = .{};
@@ -738,5 +832,104 @@ test "expiry resets open writers but preserves finite and already-finishing resp
         try connection.completeExpired(id);
         try std.testing.expect(connection.streams.entries[work.ticket.slot].expiry_response == null);
         try std.testing.expectError(if (form == Form.writing) error.Closed else error.InvalidState, connection.owner.engine.checkDispatchable(work.id));
+    }
+}
+
+test "terminal selection arbitrates expiry and waits for actual output consumption" {
+    const Winner = enum { normal, expiry };
+    for (std.enums.values(Winner)) |winner| {
+        var pair: [2]c_int = undefined;
+        try std.testing.expectEqual(@as(c_int, 0), std.c.socketpair(std.c.AF.UNIX, std.c.SOCK.STREAM, 0, &pair));
+        defer net.closeSocket(pair[1]);
+        try net.setListenerNonBlocking(pair[0]);
+        var readiness = try poller.Poller.init();
+        defer readiness.deinit();
+        const connection = try Connection.create(pair[0], &readiness, 1, .{});
+        defer {
+            connection.executions = @splat(.{});
+            connection.disconnect();
+            connection.destroy();
+        }
+        try connection.owner.engine.receive("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" ++
+            "\x00\x00\x00\x04\x00\x00\x00\x00\x00" ++
+            "\x00\x00\x0e\x01\x05\x00\x00\x00\x01\x83\x86\x84\x01\x09localhost");
+        const work = connection.streams.nextMetadata().?.execute;
+        defer _ = connection.streams.finish(work.ticket);
+        connection.executions[work.ticket.slot] = .{ .ticket = work.ticket };
+        try connection.registerExpiryTrailers(work.ticket, 10, &.{.{ .name = "X-Result", .value = "expired" }});
+        const limit = connection.budget.limit;
+        connection.budget.limit = connection.budget.used;
+        try std.testing.expectError(error.OutOfMemory, connection.registerExpiryTrailers(work.ticket, 0, &.{.{ .name = "x-result", .value = "replacement" }}));
+        // Byte storage fits, but the descriptor allocation does not. Both
+        // allocation-failure positions must preserve the previous snapshot.
+        const baseline = connection.budget.used;
+        connection.budget.limit = baseline + "x-result".len + "replacement".len;
+        try std.testing.expectError(error.OutOfMemory, connection.registerExpiryTrailers(work.ticket, 0, &.{.{ .name = "x-result", .value = "replacement" }}));
+        try std.testing.expectEqual(baseline, connection.budget.used);
+        connection.budget.limit = limit;
+        try std.testing.expectEqualStrings("expired", connection.terminals[work.ticket.slot].fields.?.fields[0].value);
+        // The field-count bound accepts its nearest values and rejects excess.
+        var many: [65]engine.Header = @splat(.{ .name = "x", .value = "v" });
+        for ([_]usize{ 63, 64, 65 }) |count| {
+            if (count <= 64) {
+                var fields = try terminal.Fields.init(connection.budget.allocator(), connection.owner.engine, many[0..count]);
+                fields.deinit();
+            } else try std.testing.expectError(error.LimitExceeded, terminal.Fields.init(connection.budget.allocator(), connection.owner.engine, many[0..count]));
+        }
+        const maximum_value = connection.owner.engine.limits.header_bytes - 33;
+        const boundary_value = try std.testing.allocator.alloc(u8, maximum_value + 1);
+        defer std.testing.allocator.free(boundary_value);
+        @memset(boundary_value, 'v');
+        for ([_]usize{ maximum_value - 1, maximum_value, maximum_value + 1 }) |size| {
+            const source = [_]engine.Header{.{ .name = "x", .value = boundary_value[0..size] }};
+            if (size <= maximum_value) {
+                var fields = try terminal.Fields.init(connection.budget.allocator(), connection.owner.engine, &source);
+                fields.deinit();
+            } else try std.testing.expectError(error.LimitExceeded, terminal.Fields.init(connection.budget.allocator(), connection.owner.engine, &source));
+        }
+        try std.testing.expectError(error.InvalidHeaders, connection.registerExpiryTrailers(work.ticket, 0, &.{.{ .name = "Content-Length", .value = "0" }}));
+        try connection.owner.engine.beginStreamingResponse(work.id, 200, &.{});
+        while (true) {
+            const bytes = try connection.owner.engine.output();
+            if (bytes.len == 0) break;
+            try connection.owner.engine.consumeOutput(bytes.len);
+        }
+        try std.testing.expect(try connection.owner.engine.writeStreamingResponse(work.id, "accepted DATA"));
+        // Nearest times around expiry; invalid registration must not tighten it.
+        connection.expire(work.headers_at + 9);
+        try std.testing.expect(!connection.streams.leases.executionExpired(work.ticket));
+        if (winner == Winner.normal) {
+            try std.testing.expectError(error.InvalidHeaders, connection.selectCompletion(work.ticket, &.{.{ .name = "connection", .value = "close" }}));
+            try connection.selectCompletion(work.ticket, &.{.{ .name = "x-result", .value = "normal" }});
+            try std.testing.expectError(error.InvalidState, connection.selectCompletion(work.ticket, &.{}));
+        }
+        connection.expire(work.headers_at + 10);
+        connection.expire(work.headers_at + 11);
+        if (winner == Winner.expiry) {
+            try std.testing.expect(connection.streams.leases.executionExpired(work.ticket));
+            const expired = connection.streams.nextMetadata().?.cancel;
+            try connection.completeExpired(expired);
+            try std.testing.expectError(error.Closed, connection.selectCompletion(work.ticket, &.{}));
+        } else try std.testing.expect(!connection.streams.leases.executionExpired(work.ticket));
+        connection.advanceTerminals();
+        try std.testing.expect(!connection.terminals[work.ticket.slot].submitted);
+        var observed_terminal = false;
+        for (0..32) |_| {
+            connection.advanceTerminals();
+            const bytes = try connection.owner.engine.output();
+            if (bytes.len == 0) break;
+            if (connection.owner.engine.pending_response_end != null) {
+                observed_terminal = true;
+                try std.testing.expect(!connection.executions[work.ticket.slot].response_complete);
+                if (bytes.len > 1) {
+                    try connection.owner.engine.consumeOutput(bytes.len - 1);
+                    try std.testing.expect(!connection.executions[work.ticket.slot].response_complete);
+                }
+                try connection.owner.engine.consumeOutput(connection.owner.engine.pending.len);
+                try std.testing.expectEqual(winner == Winner.normal, connection.executions[work.ticket.slot].response_complete);
+            } else try connection.owner.engine.consumeOutput(bytes.len);
+        }
+        try std.testing.expect(observed_terminal);
+        try std.testing.expect(connection.terminals[work.ticket.slot].fields == null);
     }
 }

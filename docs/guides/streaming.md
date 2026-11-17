@@ -18,9 +18,19 @@ receive incremental network data. The streamed-read default comes from
 `Unlimited` cannot remove that finite-input cap. HTTP/2 supports `Reply.stream`
 with default writer options and uncompressed output. Large writes are split into
 bounded chunks, and blocked writes yield the request fiber. Callback return ends
-the response after pending DATA; it does not attach trailers. Keep-alive payloads,
+the response after pending DATA with an empty terminal section. Use
+`ResponseWriter.finish!(writer, trailers)` inside the callback to attach trailers
+and wait until terminal output is written to the socket. Invalid trailers can be
+corrected and retried; successful finish closes the writer. The operation returns
+`Unavailable` on HTTP/1. It does not acknowledge peer receipt. Keep-alive payloads,
 `ends_on_drain`, compression and file streams remain unsupported on HTTP/2 and
 reset the attempted stream. Request reads after starting output are unsupported.
+For execution expiry after partial output, register generic trailers with
+`RequestExecution.limit_with_trailers!` before returning the streamed reply.
+The host copies the fields, stops the callback on expiry, and drains accepted DATA
+before the terminal section, subject to the write timeout. Normal finish and
+expiry select their terminal once. The integration chooses status fields such as
+`grpc-status`; the host does not.
 The SSE and incremental input examples below require HTTP/1.
 
 ## Writing a body

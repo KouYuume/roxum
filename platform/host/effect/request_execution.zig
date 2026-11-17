@@ -10,6 +10,7 @@ pub const Active = struct {
     /// Null duration reads elapsed time; a duration also tightens the deadline.
     /// Null result means execution ended and must not return to application code.
     apply: *const fn (*anyopaque, ?u64) ?u64,
+    limit_trailers: ?*const fn (*anyopaque, u64, []const abi.HttpResponseHeader) u8 = null,
     limit_response: ?*const fn (*anyopaque, u64, abi.HttpResponse, *abi.RocHost) Result = null,
 };
 
@@ -67,6 +68,19 @@ pub fn hostedLimitWithResponse(duration: u64, response: abi.HttpResponse) callco
     }
     response.decref(&roc_host);
     return 1;
+}
+
+pub fn hostedLimitWithTrailers(duration: u64, trailers: abi.RocList(abi.HttpResponseHeader)) callconv(std.builtin.CallingConvention.c) u8 {
+    const context = @import("../allocator/context.zig").current() orelse @panic("allocator context is not set");
+    var roc_host = @import("../runtime.zig").makeRocHost(@ptrCast(context.host_allocator));
+    const result: u8 = if (active()) |current| if (current.limit_trailers) |callback| callback(current.context, duration, trailers.items()) else 1 else 1;
+    abi.decrefListOfHttpResponseHeader(trailers, &roc_host);
+    if (result == 3) {
+        const target = fiber.current() orelse unreachable;
+        _ = target.stop.cmpxchgStrong(fiber.Stop.none, fiber.Stop.client_gone, std.builtin.AtomicOrder.acq_rel, std.builtin.AtomicOrder.acquire);
+        fiber_wait.cancelCurrent();
+    }
+    return result;
 }
 
 test "execution controls are unavailable outside a request fiber" {

@@ -29,10 +29,10 @@ program = { init!, routes: Router.build(routes, {}) }
 
 init! : {} => Try({ model : Model, listen : Server.ListenOptions }, [StartupErr(Str)])
 init! = |{}| {
-	if RequestExecution.elapsed_nanoseconds!({}) != Err(Unavailable) or RequestExecution.limit_nanoseconds!(0) != Err(Unavailable) or RequestExecution.limit_with_response!(0, Respond.to_response(Reply.text("unavailable"))) != Err(Unavailable) {
+	if RequestExecution.elapsed_nanoseconds!({}) != Err(Unavailable) or RequestExecution.limit_nanoseconds!(0) != Err(Unavailable) or RequestExecution.limit_with_response!(0, Respond.to_response(Reply.text("unavailable"))) != Err(Unavailable) or RequestExecution.limit_with_trailers!(0, []) != Err(Unavailable) {
 		return Err(StartupErr("execution controls must be unavailable in init"))
 	}
-	settings : { path : Str, execution_milliseconds : Try(U64, [Missing]), http1 : Try(Bool, [Missing]), body_bytes : Try(U64, [Missing]), body_milliseconds : Try(U64, [Missing]), write_milliseconds : Try(U64, [Missing]), maximum_streams : Try(U64, [Missing]) }
+	settings : { path : Str, execution_milliseconds : Try(U64, [Missing]), http1 : Try(Bool, [Missing]), body_bytes : Try(U64, [Missing]), body_milliseconds : Try(U64, [Missing]), write_milliseconds : Try(U64, [Missing]), maximum_streams : Try(U64, [Missing]), drain_milliseconds : Try(U64, [Missing]) }
 	settings = Config.load!(base_text).map_err(|ConfigErr(message)| StartupErr(message))?
 	limiter = match Concurrency.new!({ max_keys: 1 }) {
 		Ok(value) => value
@@ -61,6 +61,7 @@ init! = |{}| {
 				Server.Protocol.Http2
 			},
 			threads: Server.Threads.Fixed(2),
+			drain_timeout_milliseconds: settings.drain_milliseconds ?? 20_000,
 			timeouts: { ..Server.Timeouts.defaults, request_head_milliseconds: 1_000, request_body_milliseconds: settings.body_milliseconds ?? io_timeout, response_write_milliseconds: settings.write_milliseconds ?? io_timeout },
 			limits: { maximum_streams: match settings.maximum_streams { Ok(value) => Server.Count.Fixed(value) Err(Missing) => Server.Count.Auto }, maximum_body_bytes: settings.body_bytes ?? 1024, maximum_streamed_body_bytes: Server.BodyLimit.Bytes(4), http2_execution: execution },
 			access_log: Server.AccessLog.JsonLines,
@@ -73,7 +74,7 @@ routes : Router(Model, [], {})
 routes = {
 	handler = Handler.effectful(wait_and_answer!)
 	methods = MethodRouter.methods([MethodRouter.get(handler), MethodRouter.post(handler)])
-	Router.new.route("/stream-no-content", methods).route("/stream-reset-content", methods).route("/stream-not-modified", methods).route("/stream-options", methods).route("/stream-output", methods).route("/stream-empty", methods).route("/stream-large", methods).route("/stream-expiry", methods).route("/stream-crash", methods).route("/stream-cancel", methods).route("/trailers", methods).route("/empty-trailers", methods).route("/invalid-trailers", methods).route("/echo", methods).route("/reject", methods).route("/invalid-response", methods).route("/sleep", methods).route("/cancel", methods).route("/permit", methods).route("/tcp", methods).route("/tcp-cancel", methods).route("/id", methods).route("/debug", methods).route("/debug-many", methods).route("/crash", methods).route("/execution-elapsed", methods).route("/execution-zero", methods).route("/execution-stale", methods).route("/execution-limit", methods).route("/execution-cap", methods).route("/execution-unavailable", methods).route("/expiry-zero", methods).route("/expiry-invalid", methods).route("/expiry-replace", methods).route("/expiry-normal", methods)
+	Router.new.route("/stream-finish-http1", methods).route("/stream-finish", methods).route("/stream-finish-empty", methods).route("/stream-terminal-expiry", methods).route("/stream-terminal-pending", methods).route("/stream-terminal-wins", methods).route("/stream-no-content", methods).route("/stream-reset-content", methods).route("/stream-not-modified", methods).route("/stream-options", methods).route("/stream-output", methods).route("/stream-empty", methods).route("/stream-large", methods).route("/stream-expiry", methods).route("/stream-crash", methods).route("/stream-cancel", methods).route("/trailers", methods).route("/empty-trailers", methods).route("/invalid-trailers", methods).route("/echo", methods).route("/reject", methods).route("/invalid-response", methods).route("/sleep", methods).route("/cancel", methods).route("/permit", methods).route("/tcp", methods).route("/tcp-cancel", methods).route("/id", methods).route("/debug", methods).route("/debug-many", methods).route("/crash", methods).route("/execution-elapsed", methods).route("/execution-zero", methods).route("/execution-stale", methods).route("/execution-limit", methods).route("/execution-cap", methods).route("/execution-unavailable", methods).route("/expiry-zero", methods).route("/expiry-invalid", methods).route("/expiry-replace", methods).route("/expiry-normal", methods)
 		.route("/metadata-reject", MethodRouter.post(handler).layer([Middleware.Stage.BeforeBody(|_model, _head| Err(Reply.status(403)))]))
 		.route("/metadata-reject-body", MethodRouter.post(handler).layer([Middleware.Stage.BeforeBody(|_model, _head| Err(Reply.text("denied").with_status(403)))]))
 		.route("/metadata-reject-trailers", MethodRouter.post(handler).layer([Middleware.Stage.BeforeBody(|_model, _head| Err(Reply.text("denied").with_status(403).with_trailers([ResponseHeader.{ name: HeaderName.("x-result"), value: "done" }])))]))
@@ -142,6 +143,41 @@ collect = Handler.streaming(
 
 wait_and_answer! = |Model.(state), context| {
 	path = context.request.path
+	if path == "/stream-finish-http1" {
+		return Ok(Reply.stream(|writer| {
+			if ResponseWriter.finish!(writer, []) != Err(Unavailable) { crash "HTTP/1 finish must be unavailable" }
+			ResponseWriter.write!(writer, Str.to_utf8("unavailable"))
+		}))
+	}
+	if path == "/stream-finish" or path == "/stream-finish-empty" {
+		return Ok(Reply.stream(|writer| {
+			if RequestExecution.limit_with_trailers!(0, []) != Err(InvalidState) { crash "expiry trailers registered after headers" }
+			if path == "/stream-finish" { ResponseWriter.write!(writer, Str.to_utf8("first"))? }
+			if ResponseWriter.finish!(writer, [ResponseHeader.{ name: HeaderName.("Content-Length"), value: "0" }]) != Err(InvalidTrailers) { crash "invalid terminal fields accepted" }
+			ResponseWriter.finish!(writer, [ResponseHeader.{ name: HeaderName.("X-Result"), value: "complete" }]).map_err(|_| StreamClosed)?
+			if ResponseWriter.finish!(writer, []) != Err(InvalidState) { crash "repeated finish accepted" }
+			if ResponseWriter.write!(writer, Str.to_utf8("late")) != Err(StreamClosed) { crash "write after finish accepted" }
+			Ok({})
+		}))
+	}
+	if path == "/stream-terminal-expiry" or path == "/stream-terminal-pending" or path == "/stream-terminal-wins" {
+		if path == "/stream-terminal-wins" { Concurrency.acquire!(state.limiter, "cancel-key", 1).map_err(|_| Reply.status(429))? }
+		RequestExecution.limit_with_trailers!(300_000_000, [ResponseHeader.{ name: HeaderName.("X-Result"), value: "expired" }]).map_err(|_| Reply.status(500))?
+		if RequestExecution.limit_with_trailers!(0, [ResponseHeader.{ name: HeaderName.("content-length"), value: "0" }]) != Err(InvalidTrailers) { crash "invalid expiry registration changed deadline" }
+		return Ok(Reply.stream(|writer| {
+			ResponseWriter.write!(writer, Str.to_utf8("first"))?
+			if path != "/stream-terminal-expiry" { ResponseWriter.write!(writer, Str.to_utf8("end"))? }
+			if path == "/stream-terminal-wins" {
+				match ResponseWriter.finish!(writer, [ResponseHeader.{ name: HeaderName.("x-result"), value: "normal" }]) {
+					Ok({}) => Ok({})
+					Err(_) => crash "cancelled finish returned to application code"
+				}
+			} else {
+				Sleep.millis!(60_000)
+				crash "expiry trailers resumed application code"
+			}
+		}))
+	}
 	if path == "/stream-no-content" or path == "/stream-reset-content" or path == "/stream-not-modified" {
 		status = if path == "/stream-no-content" { 204 } else if path == "/stream-reset-content" { 205 } else { 304 }
 		return Ok(Reply.stream(|writer| {
@@ -188,7 +224,7 @@ wait_and_answer! = |Model.(state), context| {
 		return Ok(Reply.stream(|writer| ResponseWriter.write!(writer, [])))
 	}
 	if path == "/execution-unavailable" {
-		if RequestExecution.elapsed_nanoseconds!({}) == Err(Unavailable) and RequestExecution.limit_nanoseconds!(0) == Err(Unavailable) and RequestExecution.limit_with_response!(0, Respond.to_response(Reply.text("unavailable"))) == Err(Unavailable) {
+		if RequestExecution.elapsed_nanoseconds!({}) == Err(Unavailable) and RequestExecution.limit_nanoseconds!(0) == Err(Unavailable) and RequestExecution.limit_with_response!(0, Respond.to_response(Reply.text("unavailable"))) == Err(Unavailable) and RequestExecution.limit_with_trailers!(0, []) == Err(Unavailable) {
 			return Ok(Reply.text("unavailable"))
 		}
 		return Err(Reply.status(500))

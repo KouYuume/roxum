@@ -53,6 +53,8 @@ pub fn exportRuntime() void {
         .name = "roxum_stream_start",
         .visibility = std.builtin.SymbolVisibility.hidden,
     });
+    @export(&response_writer.hostedStreamFinish, .{ .name = "roxum_stream_finish", .visibility = std.builtin.SymbolVisibility.hidden });
+    @export(&request_execution_effect.hostedLimitWithTrailers, .{ .name = "roxum_request_execution_limit_with_trailers", .visibility = std.builtin.SymbolVisibility.hidden });
     @export(&response_writer.hostedStreamWrite, .{
         .name = "roxum_stream_write",
         .visibility = std.builtin.SymbolVisibility.hidden,

@@ -86,6 +86,7 @@ platform "roxum"
 		"roxum_request_execution_elapsed": HostRequestExecution.elapsed_nanoseconds!,
 		"roxum_request_execution_limit": HostRequestExecution.limit_nanoseconds!,
 		"roxum_request_execution_limit_with_response": HostRequestExecution.limit_with_response!,
+		"roxum_request_execution_limit_with_trailers": HostRequestExecution.limit_with_trailers!,
 		"roxum_rate_counter_add": HostRateCounter.add!,
 		"roxum_rate_counter_new": HostRateCounter.new!,
 		"roxum_secret_derive": HostSecret.derive!,
@@ -95,6 +96,7 @@ platform "roxum"
 		"roxum_sleep_until": HostSleep.until_nanoseconds!,
 		"roxum_stream_start": HostStream.start!,
 		"roxum_stream_write": HostStream.write!,
+		"roxum_stream_finish": HostStream.finish!,
 		"roxum_tcp_acquire": HostTcp.acquire!,
 		"roxum_tcp_acquire_origin": HostTcp.acquire_origin!,
 		"roxum_tcp_check_ca": HostTcp.check_ca!,
@@ -240,7 +242,7 @@ handle_for_host! = |model, request| {
 				Err(NotCompressible) => { headers: answered.response.headers, gzip: Bool.False }
 			}
 			head = { ..answered.response, headers: planned.headers }
-			token = HostStream.start!(head, keep_alive_milliseconds, keep_alive_bytes, written.options.ends_on_drain, 18_446_744_073_709_551_615, planned.gzip)
+			token = HostStream.start!(head, keep_alive_milliseconds, keep_alive_bytes, written.options.ends_on_drain, 18_446_744_073_709_551_615, planned.gzip, route)
 			if token != 0 {
 				write! = written.write!
 				_ = write!(ResponseWriter.from_token(token))

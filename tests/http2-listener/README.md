@@ -43,7 +43,12 @@ with ample HTTP/2 credit and a small client socket buffer also leave another
 connection responsive, then complete when the client resumes reading. Execution
 expiry after commit cannot substitute its registered finite response, and callback
 crashes reset only their stream. These cases run on TCP and Unix sockets.
-They do not establish gRPC streaming or incremental input support. Internal
+Explicit completion checks include invalid-field retry, empty/exact-credit
+trailers, repeated finish and late writes, normal-versus-expiry terminal selection,
+accepted DATA draining after expiry, write timeout after normal selection,
+held-permit recovery, and graceful/forced
+shutdown while completion waits. Forced drain keeps the existing exit-status-1
+contract. They do not establish gRPC streaming or incremental input support. Internal
 engine/wire fixtures retain framing, flow-control and allocator fault coverage.
 
 Execution-cap checks run additional TCP and Unix listeners with a 250 ms cap and

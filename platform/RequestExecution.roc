@@ -24,8 +24,9 @@ RequestExecution := [].{
 	## Zero, or a duration already elapsed, stops this request before returning.
 	##
 	## Expiry cancels suspended I/O and resets the stream unless a response was
-	## registered with `limit_with_response!`. Pure computation is not preempted.
-	## Response commitment wins over later expiry; socket writes still have their
+	## registered with `limit_with_response!` or `limit_with_trailers!`. Pure
+	## computation is not preempted. Finite response commitment or streamed
+	## terminal selection wins over later expiry; socket writes still have their
 	## own timeout. This does not change idle/read/write timeouts.
 	limit_nanoseconds! : U64 => Try({}, [Unavailable])
 	limit_nanoseconds! = |nanoseconds|
@@ -49,6 +50,21 @@ RequestExecution := [].{
 			0 => Ok({})
 			1 => Err(Unavailable)
 			_ => Err(InvalidResponse)
+		}
+
+	## Registers terminal fields before starting HTTP/2 streamed output and
+	## tightens the deadline from initial metadata. The host copies and validates
+	## fields atomically. On expiry after headers, accepted DATA drains before
+	## these trailers; before headers, expiry resets the request. A write timeout,
+	## client cancellation or forced shutdown can prevent delivery. Normal finish
+	## and expiry select their terminal exactly once. No abandoned code resumes.
+	limit_with_trailers! : U64, List(Http.ResponseHeader) => Try({}, [Unavailable, InvalidTrailers, InvalidState])
+	limit_with_trailers! = |nanoseconds, trailers|
+		match HostRequestExecution.limit_with_trailers!(nanoseconds, trailers) {
+			0 => Ok({})
+			1 => Err(Unavailable)
+			2 => Err(InvalidTrailers)
+			_ => Err(InvalidState)
 		}
 
 }
