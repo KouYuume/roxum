@@ -526,8 +526,9 @@ response middleware and cannot call back into abandoned application code.
 The isolated fixtures complement production tests; neither substitutes for the
 other. Test READMEs describe reproduction commands and detailed case coverage.
 
-## Incremental output
+## Incremental I/O
 
-The internal engine also supports bounded incremental response chunks. See the
-[streaming contract](http2-streaming.md) for its API and the target input, duplex
-and lifecycle contracts, including the production callback writer.
+The internal engine also supports bounded incremental response chunks and an
+opt-in input mode with explicit receive credit. Production input remains finite.
+See the [streaming contract](http2-streaming.md) for these APIs, the production
+callback writer, and the target request-scoped input and duplex lifecycle.

@@ -86,3 +86,13 @@ admission, retained partial input, early-finish discard, reset/disconnect, expir
 and allocation/limit failures after claiming. Production Roc dispatch uses metadata admission;
 [listener checks](../http2-listener/README.md) exercise its suspended body reader.
 This isolated fixture does not execute Roc middleware or body effects.
+
+Engine unit tests also exercise incremental input directly with fragmented wire
+frames. They cover pending/EOF ordering, copied callback bytes, empty destinations,
+16 KiB queue/window boundaries, the 65,535-byte pre-SETTINGS flight, consumption
+versus buffering, padding, reset/cancellation credit, repeated reads beyond the
+finite body cap, and peer progress while another input is stalled. Connection and
+worker budgets include queue capacity and allocation overhead; boundary and
+backing-allocation failures verify stream-local rejection and recovered credit.
+These tests use the actual nghttp2 parser and serialized WINDOW_UPDATE frames;
+they do not establish production incremental-reader or Roc scheduling support.
