@@ -129,6 +129,10 @@ PRs. Do not silently add features to the release target. If one RPC form cannot
 meet its gates, explicitly revisit the release scope instead of describing
 partial support as completion.
 
+Engine-level incremental input (PR 7) is implemented behind an internal opt-in
+constructor, with bounded queues and explicit receive credit. Production owners
+still collect finite bodies; connecting request-scoped reads is the next gate.
+
 ## Shared acceptance matrix
 
 - Exercise all three Roc backends and both allocator modes on production paths.

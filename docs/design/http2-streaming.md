@@ -1,8 +1,9 @@
 # HTTP/2 streaming contract
 
 Status: production `Reply.stream` output, explicit terminal metadata and execution
-expiry trailers are implemented. Incremental input and the coordination API below remain
-the implementation target for [0.3](../plans/grpc-streaming-0.3.md).
+expiry trailers and engine-level incremental input are implemented. Production
+incremental reads and the coordination API below remain the implementation target
+for [0.3](../plans/grpc-streaming-0.3.md).
 
 ## Production callback writer
 
@@ -114,6 +115,47 @@ The internal `stream_chunk_bytes` limit defaults to 16 KiB per stream. It is
 separate from the finite `response_bytes` cap. Chunk copies and serialized
 output share the existing session allocation budget. There is no accumulated
 response-body buffer and no public configuration change in this slice.
+
+## Engine input
+
+`Engine.createIncremental` selects bounded receive queues with manual flow control.
+The production owner still uses `Engine.create`, preserving finite input and its
+automatic receive windows. Incremental mode does not use `body_bytes` as a
+cumulative cap; integrations must enforce their message, total-work and duration
+limits when production reads are connected.
+
+`readRequest(id, destination)` copies into caller-owned storage and returns
+`data(count)`, `pending`, or `end`. The destination must be nonempty. Reads drain
+queued bytes before returning repeatable EOF; request EOF does not finish output.
+Calls are serialized and forbidden inside observer callbacks. `data` notifications
+report arrivals only; incremental consumers read the owned queue instead of
+collecting another body from those borrowed callback bytes. Reset/rejection makes
+reads fail with `Closed`; session failure also prevents further reads.
+
+The separate, borrowed input budget must outlive the engine and share its owner.
+Use the connection input/conversion budget backed by the worker allocator. Queue
+capacity and allocation overhead are charged there; protocol allocations remain
+in the session budget. Queue storage is allocated on first DATA and released when
+empty, rejected, cancelled, closed or destroyed. A partial read frees logical
+capacity but retains the bounded allocation until the queue empties.
+
+`input_queue_bytes` defaults to 16 KiB (internal range 1–65,535). The engine
+advertises it through SETTINGS. Before the peer acknowledges that setting, the
+protocol permits the initial 65,535-byte window: queues admit that bounded flight
+under the same aggregate budgets. Such an allocation can remain until drained;
+a SETTINGS acknowledgment never discards already accepted input. Once acknowledged,
+new input is limited by the smaller stream window. One stalled stream does not
+pause connection parsing or other streams; enough stalled streams can still
+exhaust the shared connection window.
+
+Copying into a queue returns no credit. Reading returns connection and stream
+credit once through nghttp2's consumption API, which batches WINDOW_UPDATE frames.
+Cancellation, reset and rejected allocations discard unread payload and restore
+only connection credit. The nghttp2 parser itself consumes padding and DATA it
+ignores before invoking the payload callback; the adapter does not credit those
+bytes again. Queue allocation failure resets that stream. Failure while recording
+credit terminates the session, because a partial window update cannot be retried
+safely. Destroying a disconnected engine releases queues without issuing credit.
 
 ## Target request-scoped API and duplex coordination
 
