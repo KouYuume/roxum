@@ -81,7 +81,8 @@ stream duration and total messages must not imply growing retained memory. This
 claim excludes data deliberately retained by application logic.
 
 The concrete contracts are recorded in [HTTP/2 streaming](../design/http2-streaming.md).
-Its status separates the implemented internal output API from pending production work.
+Its status separates the implemented engine output and production callback writer
+from pending explicit completion, incremental input and gRPC integration work.
 
 ## Implementation sequence
 

@@ -406,16 +406,16 @@ Roc or release it with generated cleanup, then finish the execution lease. A
 conversion failure also leaves that lease claimed until caller cleanup. No
 engine call may interleave with this synchronous handoff.
 
-## Production finite HTTP/2 listeners
+## Production HTTP/2 listeners
 
 `Server.ListenOptions.protocol` selects `Http1` (the default) or explicit cleartext
 prior-knowledge `Http2`, independently of TCP/Unix addressing. One initialized
 model and the existing worker threads serve both protocols. The HTTP/2 path
 executes routing and `BeforeBody` stages after initial headers. Ordinary handlers
-wait for finite input EOF. It accepts finite responses and response trailers;
-attempted response writers/file streams reset their stream instead of silently
-returning an empty successful body. Incremental network body delivery remains
-unsupported.
+wait for finite input EOF. It accepts finite responses with trailers and
+[incremental callback responses](http2-streaming.md#production-callback-writer).
+File streams and non-default writer modes reset their stream. Incremental network
+body delivery remains unsupported.
 
 Each connection table slot optionally owns `http2/connection.zig`. Its connection
 lock serializes every engine call, input conversion and response submission.
@@ -530,4 +530,4 @@ other. Test READMEs describe reproduction commands and detailed case coverage.
 
 The internal engine also supports bounded incremental response chunks. See the
 [streaming contract](http2-streaming.md) for its API and the target input, duplex
-and lifecycle contracts. Production Roc writers are not connected to this API yet.
+and lifecycle contracts, including the production callback writer.

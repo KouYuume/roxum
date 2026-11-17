@@ -1,9 +1,41 @@
 # HTTP/2 streaming contract
 
-Status: the internal engine output API below is implemented. The Roc API,
-incremental input, scheduler and integration contracts are the implementation
-target for [0.3](../plans/grpc-streaming-0.3.md), not shipped application APIs.
-Production listeners still use the [finite HTTP/2 contract](http2-engine.md).
+Status: the internal output API and production `Reply.stream` writer are implemented.
+Incremental input, explicit terminal metadata and the coordination API below remain
+the implementation target for [0.3](../plans/grpc-streaming-0.3.md).
+
+## Production callback writer
+
+On HTTP/2, `Reply.stream` and `ResponseWriter.write!` send incremental DATA.
+The writer splits large caller buffers into bounded engine chunks. Those caller
+buffers remain request-owned across suspension; each admitted chunk is copied.
+The last admitted chunk may still be pending when write returns. A successful
+write is not a peer-delivery acknowledgement.
+
+Initial metadata is normalized and validated before commit. The connection lock
+covers state inspection, engine operations and bounded nonblocking transport turns.
+Admitting output drives transport immediately; a blocked write or completion parks
+its request fiber without holding the lock. Parking and transport progress
+check the same readiness predicate, with the connection generation, stream lease
+and wait serial protecting against stale wakes and slot reuse. Socket readiness
+and WINDOW_UPDATE can resume output independently of incoming request EOF.
+
+Callback return waits for accepted DATA to drain, then queues an empty terminal
+HEADERS section. The event loop retains its existing terminal-output deadline
+and access-log consumption tracking. `maximum_streams` counts active callback
+writers; excess writers receive 503. HEAD and bodyless statuses send only headers
+and do not enter the callback. Normal cleanup and abandoned fibers release the
+writer's quota once.
+
+This callback API currently supports default writer options and uncompressed
+output only. Keep-alive payloads, `ends_on_drain`, known-length file writes and
+streaming trailers reset the attempted stream. Request input is still bounded
+and collected before reads; reading after response commit is unsupported.
+Execution expiry, including a previously registered finite expiry response,
+resets committed streaming output instead of replacing its headers. A callback
+crash resets its stream. Graceful drain keeps the existing process deadline;
+there is no streaming-specific terminal status yet. Explicit finish, integration
+expiry trailers and completion-hook semantics remain the contracts below.
 
 ## Engine output
 

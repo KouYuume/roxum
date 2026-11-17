@@ -62,7 +62,7 @@ routes = Router.new
 
 ## 制約
 
-- IPv4・IPv6のTCPとファイルパスを使うUnixソケットに対応。HTTP/1.1が既定です。[平文HTTP/2を明示的に選択](docs/guides/deployment.md#opt-in-http2)すると、有限レスポンス・トレーラー・非圧縮のUnary gRPCを利用できます。HTTP/2のレスポンスストリーミングとストリーミングRPCは未対応です。
+- IPv4・IPv6のTCPとファイルパスを使うUnixソケットに対応。HTTP/1.1が既定です。[平文HTTP/2を明示的に選択](docs/guides/deployment.md#opt-in-http2)すると、有限レスポンス・トレーラー・非圧縮のUnary gRPCを利用できます。既定オプション・非圧縮の `Reply.stream` は逐次送信にも対応しています。ストリーミングRPCは未対応です。
 - 受信TLS・HTTP/3は[リバースプロキシ](docs/guides/reverse-proxy.md)で終端します。WebSocketとHTTP/1トレーラーは未対応、CONNECT・TRACE・任意の拡張メソッドは[対応対象外](docs/design/non-goals.md)です。
 - タイムアウトで任意のRocの計算を強制中断することはできません。
 - 実行時圧縮はgzip。事前圧縮したBrotliは配信可能、複数バイトレンジは未対応です。

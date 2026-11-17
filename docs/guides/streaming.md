@@ -9,14 +9,19 @@ a large request body, such as an upload, in parts as it arrives.
 `zig build test-m9p4` runs the server-sent events example in
 [`integrations/roxum-sse/example`](../../integrations/roxum-sse/example/app.roc).
 
-HTTP/2 currently supports finite bodies. Routing and `BeforeBody` stages run
+HTTP/2 currently collects finite request bodies. Routing and `BeforeBody` stages run
 before input EOF; a body read suspends until the complete bounded input arrives.
 `Handler.streaming` can then consume that collected body in parts, but does not
 receive incremental network data. The streamed-read default comes from
 `maximum_streamed_body_bytes`; route layers can replace that default, but
 `maximum_body_bytes` remains a hard HTTP/2 cap.
-`Unlimited` cannot remove that finite-input cap. Response writers and file streams
-remain unsupported on HTTP/2. The incremental streaming examples below use HTTP/1.
+`Unlimited` cannot remove that finite-input cap. HTTP/2 supports `Reply.stream`
+with default writer options and uncompressed output. Large writes are split into
+bounded chunks, and blocked writes yield the request fiber. Callback return ends
+the response after pending DATA; it does not attach trailers. Keep-alive payloads,
+`ends_on_drain`, compression and file streams remain unsupported on HTTP/2 and
+reset the attempted stream. Request reads after starting output are unsupported.
+The SSE and incremental input examples below require HTTP/1.
 
 ## Writing a body
 
@@ -36,9 +41,12 @@ report = |_context|
 	}))
 ```
 
-The body goes out chunked (HTTP/1.1) and ends when the function returns. `ResponseWriter.write!` waits while the
-client does not take the bytes, and returns `Err(StreamClosed)` when the client is gone or took nothing for
-`Server.Timeouts.response_write_milliseconds` (30 seconds by default); the stream is then over.
+The body uses chunked framing on HTTP/1.1 or DATA frames on HTTP/2, and ends after
+the function returns. `ResponseWriter.write!` waits when output cannot progress.
+On HTTP/1, a disconnected client or a stalled write returns `Err(StreamClosed)`.
+On HTTP/2, cancellation abandons the request fiber, so application code after a
+blocked write does not resume. `Server.Timeouts.response_write_milliseconds`
+(30 seconds by default) limits a stalled HTTP/1 write or the whole HTTP/2 response.
 
 If the client goes while the function waits for anything else, such as `Sleep` or `Tcp`, the function stops at that
 wait: the code after it never runs, and what the request held is given back. The access log says `client_closed`.

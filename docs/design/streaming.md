@@ -2,6 +2,9 @@
 
 The host owns sockets, deadlines, HTTP framing, and backpressure. Applications read inbound chunks with `Handler.streaming` and produce outbound chunks with `Reply.stream` or `Reply.stream_with`. Internal reader tokens are not public socket handles.
 
+The lifecycle below describes HTTP/1. The [HTTP/2 streaming contract](http2-streaming.md)
+describes its production callback writer and the remaining input/duplex work.
+
 ## Response lifecycle
 
 Validate the entire response head before sending any bytes. The writer callback emits chunks under the response-write deadline; a blocked write yields the request fiber. Empty writes do not emit an HTTP terminal chunk. When the callback returns, HTTP/1.1 receives the terminal chunk and the connection follows its persistence policy.

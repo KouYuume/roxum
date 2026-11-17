@@ -14,7 +14,7 @@ var worker_memory = @import("worker_memory.zig").Budget{};
 pub const Execution = struct {
     ticket: ?streams.Ticket = null,
     claimed: bool = false,
-    waiter: ?struct { target: *fiber.Fiber, serial: u64, body_limit: ?u64 = null } = null,
+    waiter: ?struct { target: *fiber.Fiber, serial: u64, body_limit: ?u64 = null, output: bool = false } = null,
 };
 
 pub const Connection = struct {
@@ -96,10 +96,18 @@ pub const Connection = struct {
             const waiter = execution_value.waiter orelse continue;
             if (self.streams.leases.runningStream(ticket) == null) {
                 fiber_wait.wakeStopped(waiter.target, waiter.serial, fiber.Stop.client_gone);
+            } else if (waiter.output) {
+                if (self.outputReady(ticket)) fiber_wait.wake(waiter.target, waiter.serial);
             } else if (waiter.body_limit) |limit| {
                 if (self.bodyReady(ticket, limit)) fiber_wait.wake(waiter.target, waiter.serial);
             }
         }
+    }
+
+    pub fn outputReady(self: *Connection, ticket: streams.Ticket) bool {
+        if (self.failed or self.closed) return true;
+        const id = self.streams.leases.runningStream(ticket) orelse return true;
+        return self.owner.engine.streamingReady(id) catch true;
     }
 
     /// Called under the owner lock both after input callbacks and when parking
@@ -189,7 +197,13 @@ pub const Connection = struct {
                 // An I/O timeout may already have queued a reset in this tick.
                 // Never replace it or turn its stream-local failure into a close.
                 self.owner.engine.checkDispatchable(id) catch |err| switch (err) {
-                    error.Closed, error.InvalidState => return,
+                    error.Closed => return,
+                    error.InvalidState => {
+                        // Keep finite or already-finishing output. An open writer
+                        // has no generic expiry trailers yet, so reset it.
+                        _ = self.owner.engine.streamingReady(id) catch return;
+                        return self.owner.cancel(id);
+                    },
                     else => return err,
                 };
                 try response.submit(self.owner.engine, id);
@@ -634,5 +648,95 @@ test "deferred expiry responses own bytes through cleanup and release on every t
                 try connection.owner.engine.consumeOutput(bytes.len);
             }
         }
+    }
+}
+
+test "output readiness and execution lookup cannot revive a reused lease" {
+    var pair: [2]c_int = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), std.c.socketpair(std.c.AF.UNIX, std.c.SOCK.STREAM, 0, &pair));
+    defer net.closeSocket(pair[1]);
+    try net.setListenerNonBlocking(pair[0]);
+    var readiness = try poller.Poller.init();
+    defer readiness.deinit();
+    const connection = try Connection.create(pair[0], &readiness, 17, .{});
+    defer {
+        connection.executions = @splat(.{});
+        connection.disconnect();
+        connection.destroy();
+    }
+    try connection.owner.engine.receive("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" ++
+        "\x00\x00\x00\x04\x00\x00\x00\x00\x00" ++
+        "\x00\x00\x0e\x01\x05\x00\x00\x00\x01\x83\x86\x84\x01\x09localhost");
+    const first = connection.streams.nextMetadata().?.execute;
+    connection.executions[first.ticket.slot] = .{ .ticket = first.ticket };
+    try connection.owner.engine.beginStreamingResponse(first.id, 200, &.{});
+    try std.testing.expect(!connection.outputReady(first.ticket));
+    while (true) {
+        const bytes = try connection.owner.engine.output();
+        if (bytes.len == 0) break;
+        try connection.owner.engine.consumeOutput(bytes.len);
+    }
+    // The same predicate is checked before parking and after output progress.
+    try std.testing.expect(connection.outputReady(first.ticket));
+    try std.testing.expect(try connection.owner.engine.writeStreamingResponse(first.id, "chunk"));
+    try std.testing.expect(!connection.outputReady(first.ticket));
+    try connection.owner.engine.receive("\x00\x00\x04\x03\x00\x00\x00\x00\x01\x00\x00\x00\x08");
+    try std.testing.expect(connection.outputReady(first.ticket));
+    try std.testing.expect(connection.streams.finish(first.ticket));
+    connection.executions[first.ticket.slot] = .{};
+    try connection.owner.engine.receive("\x00\x00\x0e\x01\x05\x00\x00\x00\x03\x83\x86\x84\x01\x09localhost");
+    const second = connection.streams.nextMetadata().?.execute;
+    defer _ = connection.streams.finish(second.ticket);
+    try std.testing.expectEqual(first.ticket.slot, second.ticket.slot);
+    try std.testing.expect(first.ticket.sequence != second.ticket.sequence);
+    connection.executions[second.ticket.slot] = .{ .ticket = second.ticket };
+    try std.testing.expect(connection.execution(first.ticket) == null);
+    var stale_connection = second.ticket;
+    stale_connection.connection += 1;
+    try std.testing.expect(connection.execution(stale_connection) == null);
+    try std.testing.expect(connection.execution(second.ticket) != null);
+    try connection.owner.engine.beginStreamingResponse(second.id, 200, &.{});
+    try std.testing.expect(!connection.outputReady(second.ticket));
+}
+
+test "expiry resets open writers but preserves finite and already-finishing responses" {
+    const Form = enum { finite, writing, finishing };
+    for (std.enums.values(Form)) |form| {
+        var pair: [2]c_int = undefined;
+        try std.testing.expectEqual(@as(c_int, 0), std.c.socketpair(std.c.AF.UNIX, std.c.SOCK.STREAM, 0, &pair));
+        defer net.closeSocket(pair[1]);
+        try net.setListenerNonBlocking(pair[0]);
+        var readiness = try poller.Poller.init();
+        defer readiness.deinit();
+        const connection = try Connection.create(pair[0], &readiness, 1, .{});
+        defer {
+            connection.disconnect();
+            connection.destroy();
+        }
+        try connection.owner.engine.receive("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" ++
+            "\x00\x00\x00\x04\x00\x00\x00\x00\x00" ++
+            "\x00\x00\x0e\x01\x05\x00\x00\x00\x01\x83\x86\x84\x01\x09localhost");
+        const work = connection.streams.nextMetadata().?.execute;
+        defer _ = connection.streams.finish(work.ticket);
+        connection.streams.entries[work.ticket.slot].expiry_response = try @import("deferred_response.zig").Response.init(connection.budget.allocator(), connection.owner.engine, work.id, 504, &.{}, "expired", &.{});
+        try std.testing.expect(connection.streams.leases.limitExecution(work.ticket, 10, 10));
+        if (form == Form.finite) {
+            try connection.owner.engine.respond(work.id, 200, &.{}, "finite");
+        } else {
+            try connection.owner.engine.beginStreamingResponse(work.id, 200, &.{});
+            if (form == Form.finishing) {
+                while (true) {
+                    const bytes = try connection.owner.engine.output();
+                    if (bytes.len == 0) break;
+                    try connection.owner.engine.consumeOutput(bytes.len);
+                }
+                try connection.owner.engine.finishResponse(work.id, &.{});
+            }
+        }
+        connection.expire(work.headers_at + 10);
+        const id = connection.streams.nextMetadata().?.cancel;
+        try connection.completeExpired(id);
+        try std.testing.expect(connection.streams.entries[work.ticket.slot].expiry_response == null);
+        try std.testing.expectError(if (form == Form.writing) error.Closed else error.InvalidState, connection.owner.engine.checkDispatchable(work.id));
     }
 }
