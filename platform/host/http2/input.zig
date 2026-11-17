@@ -1,5 +1,5 @@
-//! Owned finite request input, serialized by its connection owner. Borrowed engine
-//! callback bytes never escape. This is not a streaming receive-window manager.
+//! Owned request metadata and optional finite body storage. Incremental transports
+//! retain payload in the engine queue and only count it here for route limits.
 const std = @import("std");
 const Header = @import("../http_field.zig").Header;
 pub const Budget = @import("memory.zig").Memory;
@@ -14,6 +14,7 @@ pub const Input = struct {
     fields: std.ArrayList(Header) = std.ArrayList(Header).empty,
     bytes: std.ArrayList(u8) = std.ArrayList(u8).empty,
     header_bytes: usize = 0,
+    received_bytes: usize = 0,
 
     /// Budget must outlive this input and all other inputs that share it.
     pub fn init(budget: *Budget, limits: Limits) Input {
@@ -53,6 +54,13 @@ pub const Input = struct {
         errdefer self.reject();
         if (bytes.len > self.limits.body_bytes - self.bytes.items.len) return error.LimitExceeded;
         try self.bytes.appendSlice(self.budget.allocator(), bytes);
+    }
+
+    /// Incremental transport retains payload in its bounded engine queue. This
+    /// metadata snapshot only counts received bytes for cumulative route limits.
+    pub fn observeData(self: *Input, length: usize) Error!void {
+        if (self.phase != Phase.body) return error.InvalidState;
+        self.received_bytes = std.math.add(usize, self.received_bytes, length) catch return error.LimitExceeded;
     }
 
     pub fn end(self: *Input) Error!void {

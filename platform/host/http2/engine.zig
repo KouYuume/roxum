@@ -37,6 +37,7 @@ const Slot = struct {
     received: usize = 0,
     input: std.ArrayList(u8) = std.ArrayList(u8).empty,
     input_ended: bool = false,
+    discard_limit: ?u64 = null,
     rejected: bool = false,
     peer_reset: bool = false,
     responded: bool = false,
@@ -140,7 +141,7 @@ pub const Engine = struct {
         defer self.entered = false;
         if (self.input_budget == null or destination.len == 0) return error.InvalidState;
         const slot = self.find(@backingInt(id)) orelse return error.Closed;
-        if (slot.rejected) return error.Closed;
+        if (slot.rejected or slot.discard_limit != null) return error.Closed;
         const count = @min(destination.len, slot.input.items.len);
         if (count == 0) return if (slot.input_ended) ReadResult.end else ReadResult.pending;
         @memcpy(destination[0..count], slot.input.items[0..count]);
@@ -154,6 +155,40 @@ pub const Engine = struct {
             return err;
         };
         return .{ .data = count };
+    }
+
+    /// Level-triggered readiness, checked under the same lock as reader parking.
+    pub fn requestReady(self: *Engine, id: StreamId) Error!bool {
+        try self.enter();
+        defer self.entered = false;
+        if (self.input_budget == null) return error.InvalidState;
+        const slot = self.find(@backingInt(id)) orelse return error.Closed;
+        if (slot.rejected or slot.discard_limit != null) return error.Closed;
+        return slot.input.items.len != 0 or slot.input_ended;
+    }
+
+    /// Execution ended before input EOF. Drain within a cumulative bound while
+    /// retaining the protocol lease and its body deadline; never queue more input.
+    pub fn discardRequest(self: *Engine, id: StreamId, maximum: u64) Error!void {
+        try self.enter();
+        defer self.entered = false;
+        if (self.input_budget == null) return error.InvalidState;
+        const slot = self.find(@backingInt(id)) orelse return error.Closed;
+        if (slot.rejected) return error.Closed;
+        slot.discard_limit = maximum;
+        if (slot.received > maximum) {
+            if (self.reject(slot) != 0) {
+                self.failed = true;
+                return error.Protocol;
+            }
+            return;
+        }
+        const count = slot.input.items.len;
+        self.releaseInput(slot);
+        check(c.nghttp2_session_consume(self.session, slot.id, count)) catch |err| {
+            self.failed = true;
+            return err;
+        };
     }
 
     fn releaseInput(self: *Engine, slot: *Slot) void {
@@ -523,6 +558,19 @@ fn dataReceived(_: ?*c.nghttp2_session, _: u8, id: i32, data: [*c]const u8, leng
     const slot = self.find(id) orelse return self.discardCredit(length);
     if (slot.rejected) return self.discardCredit(length);
     if (self.input_budget) |memory| {
+        const total = std.math.add(usize, slot.received, length) catch {
+            if (self.discardCredit(length) != 0) return c.NGHTTP2_ERR_CALLBACK_FAILURE;
+            return self.reject(slot);
+        };
+        slot.received = total;
+        if (slot.discard_limit) |maximum| {
+            if (total > maximum) {
+                if (self.discardCredit(length) != 0) return c.NGHTTP2_ERR_CALLBACK_FAILURE;
+                return self.reject(slot);
+            }
+            if (c.nghttp2_session_consume(self.session, id, length) != 0) return c.NGHTTP2_ERR_CALLBACK_FAILURE;
+            return 0;
+        }
         // A peer may send the default 65,535-byte window before acknowledging
         // our smaller SETTINGS. Retain that bounded flight until it is read.
         const limit = if (self.input_settings_acked) self.limits.input_queue_bytes else 65535;
@@ -1652,4 +1700,49 @@ test "cancelling within a fragmented DATA frame credits both queued and later ig
         try std.testing.expectEqual(@as(usize, 0), input_memory.used);
     }
     try std.testing.expectEqual(@as(usize, 65536), credit);
+}
+
+test "early input disposal frees queues and enforces cumulative drain boundaries" {
+    for ([_]usize{ 3, 4, 5 }) |size| {
+        var context: u8 = 0;
+        var input_memory = Memory{ .backing = std.testing.allocator, .limit = 128 * 1024 };
+        const self = try Engine.createIncremental(std.testing.allocator, .{}, TestObserver.observer(&context), &input_memory);
+        defer self.destroy();
+        try InputTest.start(self, true);
+        try InputTest.frame(self, c.NGHTTP2_DATA, 0, 1, "abcde"[0..size]);
+        try self.discardRequest(InputTest.id, 4);
+        try std.testing.expectEqual(@as(usize, 0), input_memory.used);
+        try std.testing.expectEqual(size > 4, self.find(1).?.rejected);
+        try std.testing.expectError(error.Closed, self.requestReady(InputTest.id));
+        var destination: [1]u8 = undefined;
+        try std.testing.expectError(error.Closed, self.readRequest(InputTest.id, &destination));
+        _ = try InputTest.flush(self);
+        if (size > 4) continue;
+        if (size < 4) try InputTest.frame(self, c.NGHTTP2_DATA, 0, 1, "d");
+        try std.testing.expectEqual(@as(usize, 0), input_memory.used);
+        try self.discardRequest(InputTest.id, 4);
+        try InputTest.frame(self, c.NGHTTP2_DATA, 0, 1, "e");
+        try std.testing.expect(self.find(1).?.rejected);
+    }
+    var context: u8 = 0;
+    var input_memory = Memory{ .backing = std.testing.allocator, .limit = 128 * 1024 };
+    const self = try Engine.createIncremental(std.testing.allocator, .{}, TestObserver.observer(&context), &input_memory);
+    defer self.destroy();
+    try InputTest.start(self, true);
+    const payload: [16384]u8 = @splat('d');
+    try InputTest.frame(self, c.NGHTTP2_DATA, 0, 1, &payload);
+    try self.respond(InputTest.id, 403, &.{}, "early");
+    try self.discardRequest(InputTest.id, 65536);
+    var total = try InputTest.flush(self);
+    for (0..3) |_| {
+        try InputTest.frame(self, c.NGHTTP2_DATA, 0, 1, &payload);
+        const credit = try InputTest.flush(self);
+        total.connection += credit.connection;
+        total.stream += credit.stream;
+        try std.testing.expectEqual(@as(usize, 0), input_memory.used);
+    }
+    try std.testing.expectEqual(@as(usize, 65536), total.connection);
+    try std.testing.expectEqual(@as(usize, 65536), total.stream);
+    try InputTest.frame(self, c.NGHTTP2_DATA, c.NGHTTP2_FLAG_END_STREAM, 1, "");
+    try std.testing.expectEqual(@as(usize, 0), self.activeStreams());
 }

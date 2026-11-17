@@ -1,9 +1,8 @@
 # HTTP/2 streaming contract
 
 Status: production `Reply.stream` output, explicit terminal metadata and execution
-expiry trailers and engine-level incremental input are implemented. Production
-incremental reads and the coordination API below remain the implementation target
-for [0.3](../plans/grpc-streaming-0.3.md).
+expiry trailers and production incremental input are implemented. Duplex
+coordination below remains the implementation target for [0.3](../plans/grpc-streaming-0.3.md).
 
 ## Production callback writer
 
@@ -35,8 +34,8 @@ This callback API currently supports default writer options and uncompressed
 output only. Keep-alive payloads, `ends_on_drain`, known-length file writes and
 trailers attached with `Reply.with_trailers` remain unsupported for callback
 writers. Use `ResponseWriter.finish!` for streamed trailers; unsupported writer
-options reset the attempted stream. Request input is still bounded
-and collected before reads; reading after response commit is unsupported.
+options reset the attempted stream. Request reads use bounded incremental input;
+reading after response commit is unsupported.
 
 `ResponseWriter.finish!(writer, trailers)` validates and copies bounded fields,
 selects normal completion once, and waits for socket consumption. Invalid fields
@@ -119,10 +118,10 @@ response-body buffer and no public configuration change in this slice.
 ## Engine input
 
 `Engine.createIncremental` selects bounded receive queues with manual flow control.
-The production owner still uses `Engine.create`, preserving finite input and its
-automatic receive windows. Incremental mode does not use `body_bytes` as a
-cumulative cap; integrations must enforce their message, total-work and duration
-limits when production reads are connected.
+The production owner uses this mode for all requests. `Engine.create` remains
+available to finite engine fixtures. Incremental mode does not use `body_bytes`
+as a cumulative cap: production readers enforce whole/streamed body limits,
+and integrations remain responsible for message, total-work and duration limits.
 
 `readRequest(id, destination)` copies into caller-owned storage and returns
 `data(count)`, `pending`, or `end`. The destination must be nonempty. Reads drain
@@ -156,6 +155,37 @@ ignores before invoking the payload callback; the adapter does not credit those
 bytes again. Queue allocation failure resets that stream. Failure while recording
 credit terminates the session, because a partial window update cannot be retried
 safely. Destroying a disconnected engine releases queues without issuing credit.
+
+## Production request reads
+
+The existing internal `Http.RequestStream` capability feeds `Handler.streaming`
+as bytes arrive. `Pipeline` still collects the whole body before ordinary handlers
+run. No public token or new hosted ABI is needed. Metadata snapshots retain fields
+and a cumulative byte count; payload lives only in the engine queue and the
+current Roc-owned chunk (at most 16 KiB). The request heap accounts for Roc values.
+
+Readers validate the connection's stream lease under its lock, copy a chunk into
+request-owned memory, and drive a bounded transport turn to send receive credit.
+When no bytes are ready they park the actual request fiber. Both parking and input
+progress check the same level-triggered predicate, including queued bytes, EOF,
+rejection and the current cumulative limit. Generation, lease and wait serial
+checks prevent stale wakes; input never wakes a fiber waiting on unrelated I/O.
+No connection lock or borrowed queue view survives a yield.
+
+Whole reads retain the server's finite `maximum_body_bytes` cap; a tighter route
+limit returns `TooLarge`. Streamed reads use `maximum_streamed_body_bytes`,
+replaceable by `BodyLimit.streamed`, independently of the finite cap. Route limits
+count received payload across chunks rather than each queue's size. Transport
+failures, reset and body/execution timeout abandon the request using existing
+cleanup; they do not resume Roc's abort callback. The HTTP/2 body timeout remains
+an absolute deadline from metadata completion, including time spent in callbacks.
+
+After an early response, finishing execution releases queued input and switches
+the open request side to discard mode with credit recovery. Whole/unread requests
+retain the finite server cap; streamed requests discard without accumulating more
+payload. The input deadline and protocol lease remain until EOF or reset. This
+preserves early response delivery; coordinated response-first cancellation and
+simultaneous read/write waits remain the next duplex gate.
 
 ## Target request-scoped API and duplex coordination
 

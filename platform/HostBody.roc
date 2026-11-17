@@ -17,9 +17,11 @@ HostBody := [].{
 	##
 	## On HTTP/1, after `BadRequest`, `TooLarge`, `TimedOut`, or `Failed`, the
 	## host closes the connection once the response is sent. The standard
-	## extractors map these to 400, 413, 408, and 500. HTTP/2 reads wait for
-	## finite input EOF; route limits can return `TooLarge`, while transport
-	## limits, timeouts, and resets cancel the request without returning to Roc.
+	## extractors map these to 400, 413, 408, and 500. HTTP/2 reads return
+	## available chunks before EOF; cumulative route limits return `TooLarge`.
+	## Transport limits, timeouts and resets cancel the request without
+	## returning to Roc. Its body deadline covers the entire input, including
+	## time spent in callbacks.
 	## Other HTTP/2 streams remain independent.
 	RequestRead := [
 		Chunk(List(U8)),

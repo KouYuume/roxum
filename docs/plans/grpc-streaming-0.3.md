@@ -129,9 +129,10 @@ PRs. Do not silently add features to the release target. If one RPC form cannot
 meet its gates, explicitly revisit the release scope instead of describing
 partial support as completion.
 
-Engine-level incremental input (PR 7) is implemented behind an internal opt-in
-constructor, with bounded queues and explicit receive credit. Production owners
-still collect finite bodies; connecting request-scoped reads is the next gate.
+Bounded incremental input and explicit receive credit (PR 7) are connected to
+production request-scoped reads (PR 8). `Handler.streaming` receives input before
+EOF on real Roc fibers; ordinary handlers still receive complete bodies.
+Half-close coordination and simultaneous read/write waits remain the next gate.
 
 ## Shared acceptance matrix
 

@@ -29,7 +29,18 @@ pub const Owner = struct {
     /// Takes the nonblocking accepted socket only on success. The token must
     /// never identify a different live connection or a stale queued event.
     pub fn init(allocator: std.mem.Allocator, socket: net.Socket, poller: *readiness.Poller, token: u64, limits: protocol.Limits, observer: protocol.Observer) Error!Owner {
-        const engine = try protocol.Engine.create(allocator, limits, observer);
+        return initWithInput(allocator, socket, poller, token, limits, observer, null);
+    }
+
+    pub fn initIncremental(allocator: std.mem.Allocator, socket: net.Socket, poller: *readiness.Poller, token: u64, limits: protocol.Limits, observer: protocol.Observer, budget: *@import("input.zig").Budget) Error!Owner {
+        return initWithInput(allocator, socket, poller, token, limits, observer, budget);
+    }
+
+    fn initWithInput(allocator: std.mem.Allocator, socket: net.Socket, poller: *readiness.Poller, token: u64, limits: protocol.Limits, observer: protocol.Observer, budget: ?*@import("input.zig").Budget) Error!Owner {
+        const engine = if (budget) |input_budget|
+            try protocol.Engine.createIncremental(allocator, limits, observer, input_budget)
+        else
+            try protocol.Engine.create(allocator, limits, observer);
         errdefer engine.destroy();
         try poller.watchReadable(socket, token);
         return .{ .engine = engine, .socket = socket, .poller = poller, .token = token };

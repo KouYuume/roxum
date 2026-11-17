@@ -71,9 +71,10 @@ has a separate HTTP/2 adapter for initial field sections, described in
 [the engine contract](http2-engine.md#request-metadata-mapping). Neither entry
 installs an HTTP/2 body reader by itself. The production metadata adapter copies
 initial fields and attaches a request-scoped body token. The shared worker scheduler
-runs routing and metadata stages before EOF; body effects suspend while bounded
-input is collected and copy results under the connection lock. Incremental network
-body delivery remains separate work.
+runs routing and metadata stages before EOF; body effects copy available input
+chunks under the connection lock and suspend while the bounded queue is empty.
+Whole-body assembly stays in the Roc pipeline; streaming handlers process each
+chunk as it arrives.
 
 Code that exhaustively matches `Http.Version` must also handle `Http20`. Build
 Roc platform sources and host archives together after this enum extension;

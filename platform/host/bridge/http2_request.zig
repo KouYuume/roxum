@@ -131,7 +131,7 @@ pub fn requestFromHttp2Input(
     return requestFromHttp2(input.budget.allocator(), fields, body, remote, id, host);
 }
 
-/// Copy admitted initial metadata while retaining finite input for a request
+/// Copy admitted initial metadata while retaining its snapshot for a request
 /// reader. The token is a request-scoped capability, never a protocol identity.
 /// The owner must hold its input lock across conversion and install the reader.
 pub fn requestFromHttp2Metadata(

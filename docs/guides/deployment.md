@@ -1,7 +1,7 @@
 # Deployment
 
 roxum serves plain HTTP/1.1 by default over IPv4 or IPv6 TCP, or a filesystem Unix domain socket.
-Opt-in cleartext HTTP/2 supports buffered requests and finite responses. Run it behind a reverse proxy or
+Opt-in cleartext HTTP/2 supports incremental request reads and finite or streamed responses. Run it behind a reverse proxy or
 load balancer that terminates TLS (and optionally HTTP/2 or HTTP/3 for clients), such as nginx, Caddy, or AWS Application Load
 Balancer.
 
@@ -14,7 +14,7 @@ client ──HTTPS / HTTP/2──> proxy / load balancer ──HTTP/1.1──> r
 | | in front of roxum | in roxum |
 |---|---|---|
 | TLS and HTTP/3 to clients | the proxy | — |
-| HTTP/2 | the proxy can terminate it or use an HTTP/2 upstream | explicit cleartext prior-knowledge listener for finite responses |
+| HTTP/2 | the proxy can terminate it or use an HTTP/2 upstream | explicit cleartext prior-knowledge listener with incremental I/O |
 | Static files | the proxy or a CDN, for a site mostly made of them | `Files.serve` and `Reply.file`, for files the app's routes own or check access to ([Files](files.md)) |
 | Compression | the proxy's `gzip` / `brotli`, for everything at once | `Compression.layer`, for the routes you choose, and precompressed `.br` / `.gz` files ([Files](files.md#compressing-responses)) |
 
@@ -70,7 +70,8 @@ effects apply to the current request and expose no reusable resource handle.
 Install integration deadlines in `BeforeBody`, before body waits. Ordinary handlers
 and `AfterBody` run after EOF. The listener cap also bounds work before Roc begins.
 
-The configured finite body limit applies. Each connection admits at most 16
+Whole reads retain the finite body cap; `Handler.streaming` uses the independent
+streamed-body limit. Each connection admits at most 16
 streams, with 16 KiB field sections and at most 2 MiB per finite response. Input
 and conversion storage have a 16 MiB connection budget; the protocol session and
 pending output have another 16 MiB budget. A shared 128 MiB worker ceiling covers
@@ -97,7 +98,8 @@ reset before its write timeout closes the connection.
 Shutdown sends GOAWAY, allows admitted streams to finish, and retains connection
 storage until queued/running handlers finish cleanup. The configured drain timeout
 still bounds the process shutdown. [Finite response trailers](responses.md#finite-http2-trailers)
-are supported; incremental streaming remains outside the current scope. See the
+and [incremental reads and writes](streaming.md) are supported. Duplex coordination
+remains separate work. See the
 [gRPC roadmap](../plans/grpc.md) for future capability gates.
 
 ## Building for Linux
