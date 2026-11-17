@@ -640,10 +640,8 @@ fn RequestFiber(comptime Environment: type) type {
                     target.stop.store(fiber.Stop.client_gone, std.builtin.AtomicOrder.release);
                 }
             } else if (parked) {
-                if (self.http2_output_waiting and protocol.outputReady(ticket)) fiber_wait.wake(target, target.wait_serial);
-                if (self.http2_body.waiting_limit) |limit| {
-                    if (protocol.bodyReady(ticket, limit)) fiber_wait.wake(target, target.wait_serial);
-                }
+                if (protocol.waitReady(ticket, self.http2_body.waiting_limit, self.http2_output_waiting) != 0)
+                    fiber_wait.wake(target, target.wait_serial);
             }
         }
 
@@ -776,6 +774,65 @@ fn RequestFiber(comptime Environment: type) type {
                 }
             }
             return true;
+        }
+
+        fn tryHttp2Write(ptr: *anyopaque, bytes: []const u8) u8 {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            if (!self.http2_stream_started or self.http2_stream_finished) return 4;
+            const result = self.tryHttp2WriteLocked(bytes);
+            if (result == 3) {
+                self.http2_stream_started = false;
+                self.stopHttp2IfCancelled();
+            }
+            return result;
+        }
+
+        fn tryHttp2WriteLocked(self: *Self, bytes: []const u8) u8 {
+            const item = &self.shared.handoff.connections[self.dispatch.slot];
+            item.lock.lock();
+            defer item.lock.unlock();
+            if (item.generation != self.dispatch.generation) return 3;
+            const protocol = item.http2 orelse return 3;
+            if (bytes.len > protocol.owner.engine.limits.stream_chunk_bytes) return 5;
+            const ticket = self.dispatch.http2.?;
+            protocol.expire(net.monotonicNanoseconds() catch return 3);
+            if (protocol.failed or protocol.closed) return 3;
+            const id = protocol.streams.leases.runningStream(ticket) orelse return 3;
+            if (!(protocol.owner.engine.writeStreamingResponse(id, bytes) catch return 3)) return 2;
+            if (protocol.access[ticket.slot]) |*entry| entry.body_bytes += bytes.len;
+            protocol.owner.runnable = true;
+            self.thread.io.driveHttp2Output(self.dispatch);
+            return 0;
+        }
+
+        fn waitHttp2Duplex(ptr: *anyopaque, interest: u8) u8 {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            if (!self.http2_stream_started or self.http2_stream_finished or interest == 0 or interest > 3) return 4;
+            self.http2_body.waiting_limit = if (interest & 1 != 0) self.http2_body.streamed_limit else null;
+            self.http2_output_waiting = interest & 2 != 0;
+            defer {
+                self.http2_body.waiting_limit = null;
+                self.http2_output_waiting = false;
+            }
+            while (true) {
+                const result = blk: {
+                    const item = &self.shared.handoff.connections[self.dispatch.slot];
+                    item.lock.lock();
+                    defer item.lock.unlock();
+                    if (item.generation != self.dispatch.generation) break :blk @as(u8, 5);
+                    const protocol = item.http2 orelse break :blk @as(u8, 5);
+                    const ticket = self.dispatch.http2.?;
+                    protocol.expire(net.monotonicNanoseconds() catch break :blk @as(u8, 5));
+                    if (protocol.failed or protocol.closed or protocol.streams.leases.runningStream(ticket) == null) break :blk @as(u8, 5);
+                    if (protocol.executions[ticket.slot].finishing) break :blk @as(u8, 4);
+                    break :blk protocol.waitReady(ticket, self.http2_body.waiting_limit, self.http2_output_waiting);
+                };
+                if (result == 5) self.stopHttp2IfCancelled();
+                if (result != 0) return result;
+                // Parking rechecks both interests under the connection lock.
+                _ = fiber_wait.waitSocket(-1, 0, std.math.maxInt(u64)) orelse unreachable;
+                fiber_wait.stopIfStreamEnds();
+            }
         }
 
         fn waitHttp2Output(self: *Self) void {
@@ -1014,7 +1071,9 @@ fn RequestFiber(comptime Environment: type) type {
             protocol.expire(net.monotonicNanoseconds() catch diagnostics.fatal("monotonic clock read failed"));
             if (protocol.failed or protocol.closed) return bodyResult(abi.HostBodyRequestReadTag.Closed);
             const id = protocol.streams.leases.runningStream(ticket) orelse return bodyResult(abi.HostBodyRequestReadTag.Closed);
-            protocol.owner.engine.checkDispatchable(id) catch return bodyResult(abi.HostBodyRequestReadTag.Closed);
+            if (self.http2_stream_started) {
+                if (self.http2_stream_finished or protocol.executions[ticket.slot].finishing) return bodyResult(abi.HostBodyRequestReadTag.Closed);
+            } else protocol.owner.engine.checkDispatchable(id) catch return bodyResult(abi.HostBodyRequestReadTag.Closed);
             const input = protocol.streams.runningInput(ticket) orelse return bodyResult(abi.HostBodyRequestReadTag.Closed);
             if (input.phase == @import("http2/input.zig").Phase.rejected) return bodyResult(abi.HostBodyRequestReadTag.Closed);
             if (self.http2_body.failed) return bodyResult(abi.HostBodyRequestReadTag.Failed);
@@ -1090,7 +1149,7 @@ fn RequestFiber(comptime Environment: type) type {
             const locals = fiber.currentLocals() orelse unreachable;
             locals.request_execution = .{ .context = self, .apply = requestExecution, .limit_response = requestExecutionResponse, .limit_trailers = requestExecutionTrailers };
             defer locals.request_execution = null;
-            writer.activate(.{ .context = self, .start = startHttp2Stream, .write = writeHttp2Stream, .abort = abortHttp2Stream, .finish = finishHttp2Writer, .route = setHttp2Route });
+            writer.activate(.{ .context = self, .start = startHttp2Stream, .write = writeHttp2Stream, .abort = abortHttp2Stream, .finish = finishHttp2Writer, .route = setHttp2Route, .try_write = tryHttp2Write, .wait = waitHttp2Duplex });
             const answered = bridge.rocHandle(self.shared.model_root.retainForHandle(), request);
             writer.deactivate();
             if (self.http2_stream_attempted) {

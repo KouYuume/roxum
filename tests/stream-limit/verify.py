@@ -107,6 +107,37 @@ def check_limit(executable):
             raise RuntimeError(f"no warning for the 503 answers: {log[-500:]!r}")
 
 
+def check_callback_error(executable):
+    """A callback error after headers must not publish a successful terminator."""
+    with tempfile.TemporaryFile() as stderr:
+        server = subprocess.Popen([executable], stdout=subprocess.PIPE, stderr=stderr,
+                                  text=True, start_new_session=True)
+        try:
+            port = read_port(server)
+            workers = ready_workers(server)
+            # The fixture uses Server's single-process default and one writer
+            # slot. A leaked slot cannot be hidden by a second worker.
+            assert len(workers) == 1
+            for _ in range(3):
+                with socket.create_connection(("127.0.0.1", port), timeout=5) as client:
+                    client.sendall(b"GET /error HTTP/1.1\r\nHost: x\r\n\r\n")
+                    response = read_to_close(client)
+                head, body = response.split(b"\r\n\r\n", 1)
+                assert head.startswith(b"HTTP/1.1 200 "), head
+                assert b"transfer-encoding: chunked" in head.lower(), head
+                assert body == b"7\r\npartial\r\n", body
+                # A successful writer immediately afterwards must acquire the
+                # only slot and emit its normal terminal chunk.
+                response = request(port, "GET", "/short")
+                assert response.startswith(b"HTTP/1.1 200 "), response[:100]
+                assert response.endswith(b"0\r\n\r\n"), response[-40:]
+                assert ready_workers(server) == workers, "worker restart hid abort failure"
+            assert stop(server) == 0
+        finally:
+            stop(server)
+            server.stdout.close()
+
+
 def check_zero_rejected(executable):
     result = subprocess.run([executable], capture_output=True, text=True, timeout=30)
     if result.returncode == 0:
@@ -239,6 +270,7 @@ def check_waiting_limit(executable):
 
 
 def main():
+    check_callback_error(sys.argv[1])
     check_limit(sys.argv[1])
     check_written_body_watch(sys.argv[1])
     check_zero_rejected(sys.argv[2])

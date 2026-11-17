@@ -109,12 +109,21 @@ pub const Connection = struct {
             }
             if (self.streams.leases.runningStream(ticket) == null) {
                 fiber_wait.wakeStopped(waiter.target, waiter.serial, fiber.Stop.client_gone);
-            } else if (waiter.output) {
-                if (self.outputReady(ticket)) fiber_wait.wake(waiter.target, waiter.serial);
-            } else if (waiter.body_limit) |limit| {
-                if (self.bodyReady(ticket, limit)) fiber_wait.wake(waiter.target, waiter.serial);
+            } else if (self.waitReady(ticket, waiter.body_limit, waiter.output) != 0) {
+                fiber_wait.wake(waiter.target, waiter.serial);
             }
         }
+    }
+
+    /// Read and write interests are independent. Use the same predicate before
+    /// parking and after transport progress so neither direction masks the other.
+    pub fn waitReady(self: *Connection, ticket: streams.Ticket, body_limit: ?u64, output: bool) u8 {
+        var result: u8 = 0;
+        if (body_limit) |limit| {
+            if (self.bodyReady(ticket, limit)) result |= 1;
+        }
+        if (output and self.outputReady(ticket)) result |= 2;
+        return result;
     }
 
     pub fn outputReady(self: *Connection, ticket: streams.Ticket) bool {
@@ -126,6 +135,7 @@ pub const Connection = struct {
     /// Called under the owner lock both after input callbacks and when parking
     /// a reader. The second check closes the input-completion/parking race.
     pub fn bodyReady(self: *Connection, ticket: streams.Ticket, limit: u64) bool {
+        if (self.failed or self.closed) return true;
         const buffer = self.streams.runningInput(ticket) orelse return true;
         if (buffer.phase == input.Phase.rejected or buffer.received_bytes > limit) return true;
         const id = self.streams.leases.runningStream(ticket) orelse return true;
@@ -1073,4 +1083,65 @@ test "streamed completion retires input deadline before reset serialization" {
             try std.testing.expectEqual(@as(usize, 0), connection.owner.engine.activeStreams());
         }
     }
+}
+
+test "duplex waits wake for either direction without masking input or stale serials" {
+    var pair: [2]c_int = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), std.c.socketpair(std.c.AF.UNIX, std.c.SOCK.STREAM, 0, &pair));
+    defer net.closeSocket(pair[1]);
+    try net.setListenerNonBlocking(pair[0]);
+    var readiness = try poller.Poller.init();
+    defer readiness.deinit();
+    const connection = try Connection.create(pair[0], &readiness, 19, .{});
+    defer {
+        connection.executions = @splat(.{});
+        connection.disconnect();
+        connection.destroy();
+    }
+    try connection.owner.engine.receive("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" ++
+        "\x00\x00\x00\x04\x00\x00\x00\x00\x00" ++
+        "\x00\x00\x0e\x01\x04\x00\x00\x00\x01\x83\x86\x84\x01\x09localhost");
+    const work = connection.streams.nextMetadata().?.execute;
+    defer _ = connection.streams.finish(work.ticket);
+    var target = fiber.Fiber{ .memory = undefined, .wait_serial = 7 };
+    connection.executions[work.ticket.slot] = .{ .ticket = work.ticket, .waiter = .{
+        .target = &target,
+        .serial = 7,
+        .body_limit = 4,
+        .output = true,
+    } };
+    try connection.owner.engine.beginStreamingResponse(work.id, 200, &.{});
+    // Queued headers block writes; neither interest is ready.
+    target.wait.expires_at_nanoseconds = 99;
+    connection.wakeClosed();
+    try std.testing.expectEqual(@as(u64, 99), target.wait.expires_at_nanoseconds);
+    try std.testing.expectEqual(@as(u8, 0), connection.waitReady(work.ticket, 4, true));
+    try connection.owner.engine.receive("\x00\x00\x01\x00\x00\x00\x00\x00\x01a");
+    try std.testing.expectEqual(@as(u8, 1), connection.waitReady(work.ticket, 4, true));
+    connection.wakeClosed();
+    try std.testing.expectEqual(@as(u64, 0), target.wait.expires_at_nanoseconds);
+    // A delayed wake cannot resume a later wait.
+    target.wait_serial = 8;
+    target.wait.expires_at_nanoseconds = 99;
+    connection.wakeClosed();
+    try std.testing.expectEqual(@as(u64, 99), target.wait.expires_at_nanoseconds);
+    target.wait_serial = 7;
+    while (true) {
+        const output = try connection.owner.engine.output();
+        if (output.len == 0) break;
+        try connection.owner.engine.consumeOutput(output.len);
+    }
+    try std.testing.expectEqual(@as(u8, 3), connection.waitReady(work.ticket, 4, true));
+    var byte: [1]u8 = undefined;
+    _ = try connection.owner.engine.readRequest(work.id, &byte);
+    try std.testing.expectEqual(@as(u8, 2), connection.waitReady(work.ticket, 4, true));
+    connection.wakeClosed();
+    try std.testing.expectEqual(@as(u64, 0), target.wait.expires_at_nanoseconds);
+    // EOF wakes read interests even while a newly admitted write is pending.
+    try std.testing.expect(try connection.owner.engine.writeStreamingResponse(work.id, "pending"));
+    try connection.owner.engine.receive("\x00\x00\x00\x00\x01\x00\x00\x00\x01");
+    try std.testing.expectEqual(@as(u8, 1), connection.waitReady(work.ticket, 4, true));
+    connection.streams.close(work.id);
+    connection.wakeClosed();
+    try std.testing.expectEqual(fiber.Stop.client_gone, target.stop.load(std.builtin.AtomicOrder.acquire));
 }

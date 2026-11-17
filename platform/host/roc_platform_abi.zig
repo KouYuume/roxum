@@ -3759,6 +3759,30 @@ pub const HostStreamWriteArgs = extern struct {
     arg1: RocListWith(u8, false),
 };
 
+/// Arguments for HostStream.abort!
+/// Roc signature: U64 => {}
+/// Refcounted fields are owned by the hosted function.
+pub const HostStreamAbortArgs = extern struct {
+    arg0: u64,
+};
+
+/// Arguments for HostStream.try_write!
+/// Roc signature: U64, List(U8) => U8
+/// Refcounted fields are owned by the hosted function.
+pub const HostStreamTry_writeArgs = extern struct {
+    arg0: u64,
+    arg1: RocListWith(u8, false),
+};
+
+/// Arguments for HostBody.wait!
+/// Roc signature: U64, U64, U8 => U8
+/// Refcounted fields are owned by the hosted function.
+pub const HostBodyWaitArgs = extern struct {
+    arg0: u64,
+    arg1: u64,
+    arg2: u8,
+};
+
 /// Arguments for HostStream.finish!
 /// Roc signature: U64, List(Http.ResponseHeader) => U8
 /// Refcounted fields are owned by the hosted function.
@@ -5071,6 +5095,21 @@ pub extern fn roxum_stream_start(arg0: HttpResponse, arg1: u64, arg2: RocListWit
 /// moved into storage or into the result:
 ///     arg1.decref(roc_host);
 pub extern fn roxum_stream_write(arg0: u64, arg1: RocListWith(u8, false)) callconv(.c) bool;
+
+/// Hosted symbol for HostStream.abort!
+/// Roc signature: U64 => {}
+pub extern fn roxum_stream_abort(arg0: u64) callconv(.c) void;
+
+/// Hosted symbol for HostStream.try_write!
+/// Roc signature: U64, List(U8) => U8
+/// Owned arguments. Release each exactly once before returning, unless it is
+/// moved into storage or into the result:
+///     arg1.decref(roc_host);
+pub extern fn roxum_stream_try_write(arg0: u64, arg1: RocListWith(u8, false)) callconv(.c) u8;
+
+/// Hosted symbol for HostBody.wait!
+/// Roc signature: U64, U64, U8 => U8
+pub extern fn roxum_stream_wait(arg0: u64, arg1: u64, arg2: u8) callconv(.c) u8;
 
 /// Hosted symbol for HostStream.finish!
 /// Roc signature: U64, List(Http.ResponseHeader) => U8

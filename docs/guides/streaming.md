@@ -19,14 +19,16 @@ limit returns 413. The HTTP/2 body timeout covers the entire input from metadata
 completion, including callback execution; reset and timeout cancel the request
 without invoking its Roc abort callback. HTTP/2 supports `Reply.stream`
 with default writer options and uncompressed output. Large writes are split into
-bounded chunks, and blocked writes yield the request fiber. Callback return ends
-the response after pending DATA with an empty terminal section. Use
+bounded chunks, and blocked writes yield the request fiber. Successful callback
+return ends the response after pending DATA with an empty terminal section.
+Returning Err(StreamClosed) aborts unfinished output; on HTTP/1 it closes the
+connection without the terminal chunk, and on HTTP/2 it resets the stream. Use
 `ResponseWriter.finish!(writer, trailers)` inside the callback to attach trailers
 and wait until terminal output is written to the socket. Invalid trailers can be
 corrected and retried; successful finish closes the writer. The operation returns
 `Unavailable` on HTTP/1. It does not acknowledge peer receipt. Keep-alive payloads,
 `ends_on_drain`, compression and file streams remain unsupported on HTTP/2 and
-reset the attempted stream. Request reads after starting output are unsupported.
+reset the attempted stream. Use `Handler.duplex` to continue reading while producing output.
 For execution expiry after partial output, register generic trailers with
 `RequestExecution.limit_with_trailers!` before returning the streamed reply.
 The host copies the fields, stops the callback on expiry, and drains accepted DATA
@@ -41,6 +43,39 @@ completion may be cancelled. Early finite replies retain their bounded input-dra
 behavior.
 
 The SSE example below requires HTTP/1; incremental request handlers also work on HTTP/2.
+
+## Independent HTTP/2 input and output
+
+Use `Handler.duplex({ begin!, ready! })` when input must keep progressing while
+the peer has stopped reading output. `begin!` receives the model and request
+head and returns `Ok({ state, status, headers, interest })`, or an error reply.
+Choose `Handler.Interest.Read`, `Write` or `Both`.
+
+`ready!(state, event, writer)` receives input as `Idle`, `Chunk(bytes)`,
+`End` or `Failed(reason)`, plus `event.writable`. Return
+`Handler.DuplexNext.Await({ state, interest })` to continue, or
+`Handler.DuplexNext.Finish(trailers)` to complete. After End or Failed, select
+Write only or finish. Choose Read when there is no output to produce; repeatedly
+asking for unused write readiness can spin.
+
+Use `ResponseWriter.try_write!` with at most 16 KiB per call. Accepted means
+the host copied the bytes; Pending retains nothing, so preserve the unsent bytes
+in your state. Readiness is a hint, so a try-write can still return Pending after
+a writable event. A pending write does not prevent processing input. Blocking
+`write!` is still available but can stall your input processing. Return Finish
+rather than calling `finish!` yourself from the readiness callback.
+
+`OnChunk` transformations and EOF checks run normally. A rejection after
+headers resets the stream; a body-limit failure is delivered as Failed so you
+can finish with application-specific trailers. Response middleware runs before
+headers, and AfterBody does not run. Reset, timeout and disconnect cancel the
+request and release held permits. Returning Err(StreamClosed) aborts the stream.
+HTTP/1 answers 501 without running the duplex callbacks.
+
+The [production fixture](../../tests/http2-listener/app.roc) demonstrates a
+bounded counter and output producer; its client withholds output credit while
+sending input larger than the connection window. The transport and lifetime
+contracts are in [HTTP/2 streaming](../design/http2-streaming.md).
 
 ## Writing a body
 

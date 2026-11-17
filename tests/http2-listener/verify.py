@@ -20,6 +20,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'support'))
 from roxum_process import stop, STOP_TIMEOUT_SECONDS
 from incremental import verify_incremental
 from half_close import verify_half_close
+from duplex import verify_duplex, verify_duplex_http1
 
 
 def verify(executable, unix, debug=False):
@@ -1203,6 +1204,9 @@ def verify_stream_shutdown(executable, unix, forced):
 
 if __name__ == '__main__':
     executable = str(pathlib.Path(sys.argv[1]).resolve())
+    verify_duplex_http1(executable)
+    verify_duplex(executable, False)
+    verify_duplex(executable, True)
     verify_half_close(executable, False)
     verify_half_close(executable, True)
     verify_incremental(executable, False)

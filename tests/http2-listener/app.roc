@@ -15,6 +15,7 @@ import pf.Reply
 import pf.RequestBody
 import pf.Response
 import pf.ResponseHeader
+import pf.HeaderValue
 import pf.HeaderName
 import pf.ResponseWriter
 import pf.ResponseBody
@@ -63,7 +64,15 @@ init! = |{}| {
 			threads: Server.Threads.Fixed(2),
 			drain_timeout_milliseconds: settings.drain_milliseconds ?? 20_000,
 			timeouts: { ..Server.Timeouts.defaults, request_head_milliseconds: 1_000, request_body_milliseconds: settings.body_milliseconds ?? io_timeout, response_write_milliseconds: settings.write_milliseconds ?? io_timeout },
-			limits: { maximum_streams: match settings.maximum_streams { Ok(value) => Server.Count.Fixed(value) Err(Missing) => Server.Count.Auto }, maximum_body_bytes: settings.body_bytes ?? 1024, maximum_streamed_body_bytes: Server.BodyLimit.Bytes(4), http2_execution: execution },
+			limits: {
+				maximum_streams: match settings.maximum_streams {
+					Ok(value) => Server.Count.Fixed(value)
+					Err(Missing) => Server.Count.Auto
+				},
+				maximum_body_bytes: settings.body_bytes ?? 1024,
+				maximum_streamed_body_bytes: Server.BodyLimit.Bytes(4),
+				http2_execution: execution,
+			},
 			access_log: Server.AccessLog.JsonLines,
 			request_id: Server.RequestIdSource.TrustIncoming,
 		},
@@ -78,6 +87,38 @@ routes = {
 		.route("/metadata-reject", MethodRouter.post(handler).layer([Middleware.Stage.BeforeBody(|_model, _head| Err(Reply.status(403)))]))
 		.route("/metadata-reject-body", MethodRouter.post(handler).layer([Middleware.Stage.BeforeBody(|_model, _head| Err(Reply.text("denied").with_status(403)))]))
 		.route("/metadata-reject-trailers", MethodRouter.post(handler).layer([Middleware.Stage.BeforeBody(|_model, _head| Err(Reply.text("denied").with_status(403).with_trailers([ResponseHeader.{ name: HeaderName.("x-result"), value: "done" }])))]))
+		.route("/duplex-limit", MethodRouter.post(duplex).layer(BodyLimit.streamed(Server.BodyLimit.Bytes(4))))
+		.route(
+			"/duplex-reject",
+			MethodRouter.post(duplex).layer([
+				Middleware.Stage.OnChunk(
+					Middleware.ChunkCheck.new(
+						{},
+						|_state, _bytes| Err(Reply.status(403)),
+						|_state| Ok({}),
+					),
+				),
+			]),
+		)
+		.route(
+			"/duplex-reject-end",
+			MethodRouter.post(duplex).layer([
+				Middleware.Stage.OnChunk(
+					Middleware.ChunkCheck.new(
+						{},
+						|state, bytes| Ok({ state, bytes }),
+						|_state| Err(Reply.status(403)),
+					),
+				),
+			]),
+		)
+		.route(
+			"/duplex",
+			MethodRouter.post(duplex).layer(BodyLimit.streamed(Server.BodyLimit.Unlimited)).layer([
+				Middleware.Stage.OnChunk(uppercase),
+				Middleware.Stage.AfterHandler(|_model, _head, reply| reply.with_headers([ResponseHeader.{ name: HeaderName.("x-duplex"), value: "checked" }])),
+			]),
+		)
 		.route("/half-close", MethodRouter.post(handler).layer([Middleware.Stage.BeforeBody(half_close!)]))
 		.route("/metadata-limit", MethodRouter.post(handler).layer(BodyLimit.whole(4)))
 		.route("/input-limited", MethodRouter.post(incremental_input).layer(BodyLimit.streamed(Server.BodyLimit.Bytes(4))))
@@ -98,21 +139,29 @@ half_close! = |Model.(state), head| {
 	if mode == "expiry" {
 		RequestExecution.limit_with_trailers!(500_000_000, [ResponseHeader.{ name: HeaderName.("x-result"), value: "expired" }]).map_err(|_| Reply.status(500))?
 	}
-	Err(Reply.stream(|writer| {
-		if mode != "empty" { ResponseWriter.write!(writer, "first".to_utf8())? }
-		if mode == "expiry" {
-			Sleep.millis!(60_000)
-			crash "half-close expiry resumed"
-		}
-		if mode != "empty" { ResponseWriter.write!(writer, List.repeat(120, 32_768))? }
-		if mode == "implicit" {
-			Ok({})
-		} else {
-			ResponseWriter.finish!(writer, [ResponseHeader.{ name: HeaderName.("x-result"), value: "done" }]).map_err(|_| StreamClosed)?
-			Sleep.millis!(60_000)
-			crash "half-close completion resumed"
-		}
-	}))
+	Err(
+		Reply.stream(
+			|writer| {
+				if mode != "empty" {
+					ResponseWriter.write!(writer, "first".to_utf8())?
+				}
+				if mode == "expiry" {
+					Sleep.millis!(60_000)
+					crash "half-close expiry resumed"
+				}
+				if mode != "empty" {
+					ResponseWriter.write!(writer, List.repeat(120, 32_768))?
+				}
+				if mode == "implicit" {
+					Ok({})
+				} else {
+					ResponseWriter.finish!(writer, [ResponseHeader.{ name: HeaderName.("x-result"), value: "done" }]).map_err(|_| StreamClosed)?
+					Sleep.millis!(60_000)
+					crash "half-close completion resumed"
+				}
+			},
+		),
+	)
 }
 
 metadata_wait! = |Model.(state), head| {
@@ -200,78 +249,134 @@ incremental_input = Handler.streaming(
 wait_and_answer! = |Model.(state), context| {
 	path = context.request.path
 	if path == "/stream-finish-http1" {
-		return Ok(Reply.stream(|writer| {
-			if ResponseWriter.finish!(writer, []) != Err(Unavailable) { crash "HTTP/1 finish must be unavailable" }
-			ResponseWriter.write!(writer, Str.to_utf8("unavailable"))
-		}))
+		return Ok(
+			Reply.stream(
+				|writer| {
+					if ResponseWriter.finish!(writer, []) != Err(Unavailable) {
+						crash "HTTP/1 finish must be unavailable"
+					}
+					ResponseWriter.write!(writer, Str.to_utf8("unavailable"))
+				},
+			),
+		)
 	}
 	if path == "/stream-finish" or path == "/stream-finish-empty" {
-		return Ok(Reply.stream(|writer| {
-			if RequestExecution.limit_with_trailers!(0, []) != Err(InvalidState) { crash "expiry trailers registered after headers" }
-			if path == "/stream-finish" { ResponseWriter.write!(writer, Str.to_utf8("first"))? }
-			if ResponseWriter.finish!(writer, [ResponseHeader.{ name: HeaderName.("Content-Length"), value: "0" }]) != Err(InvalidTrailers) { crash "invalid terminal fields accepted" }
-			ResponseWriter.finish!(writer, [ResponseHeader.{ name: HeaderName.("X-Result"), value: "complete" }]).map_err(|_| StreamClosed)?
-			if ResponseWriter.finish!(writer, []) != Err(InvalidState) { crash "repeated finish accepted" }
-			if ResponseWriter.write!(writer, Str.to_utf8("late")) != Err(StreamClosed) { crash "write after finish accepted" }
-			Ok({})
-		}))
+		return Ok(
+			Reply.stream(
+				|writer| {
+					if RequestExecution.limit_with_trailers!(0, []) != Err(InvalidState) {
+						crash "expiry trailers registered after headers"
+					}
+					if path == "/stream-finish" {
+						ResponseWriter.write!(writer, Str.to_utf8("first"))?
+					}
+					if ResponseWriter.finish!(writer, [ResponseHeader.{ name: HeaderName.("Content-Length"), value: "0" }]) != Err(InvalidTrailers) {
+						crash "invalid terminal fields accepted"
+					}
+					ResponseWriter.finish!(writer, [ResponseHeader.{ name: HeaderName.("X-Result"), value: "complete" }]).map_err(|_| StreamClosed)?
+					if ResponseWriter.finish!(writer, []) != Err(InvalidState) {
+						crash "repeated finish accepted"
+					}
+					if ResponseWriter.write!(writer, Str.to_utf8("late")) != Err(StreamClosed) {
+						crash "write after finish accepted"
+					}
+					Ok({})
+				},
+			),
+		)
 	}
 	if path == "/stream-terminal-expiry" or path == "/stream-terminal-pending" or path == "/stream-terminal-wins" {
-		if path == "/stream-terminal-wins" { Concurrency.acquire!(state.limiter, "cancel-key", 1).map_err(|_| Reply.status(429))? }
+		if path == "/stream-terminal-wins" {
+			Concurrency.acquire!(state.limiter, "cancel-key", 1).map_err(|_| Reply.status(429))?
+		}
 		RequestExecution.limit_with_trailers!(300_000_000, [ResponseHeader.{ name: HeaderName.("X-Result"), value: "expired" }]).map_err(|_| Reply.status(500))?
-		if RequestExecution.limit_with_trailers!(0, [ResponseHeader.{ name: HeaderName.("content-length"), value: "0" }]) != Err(InvalidTrailers) { crash "invalid expiry registration changed deadline" }
-		return Ok(Reply.stream(|writer| {
-			ResponseWriter.write!(writer, Str.to_utf8("first"))?
-			if path != "/stream-terminal-expiry" { ResponseWriter.write!(writer, Str.to_utf8("end"))? }
-			if path == "/stream-terminal-wins" {
-				match ResponseWriter.finish!(writer, [ResponseHeader.{ name: HeaderName.("x-result"), value: "normal" }]) {
-					Ok({}) => Ok({})
-					Err(_) => crash "cancelled finish returned to application code"
-				}
-			} else {
-				Sleep.millis!(60_000)
-				crash "expiry trailers resumed application code"
-			}
-		}))
+		if RequestExecution.limit_with_trailers!(0, [ResponseHeader.{ name: HeaderName.("content-length"), value: "0" }]) != Err(InvalidTrailers) {
+			crash "invalid expiry registration changed deadline"
+		}
+		return Ok(
+			Reply.stream(
+				|writer| {
+					ResponseWriter.write!(writer, Str.to_utf8("first"))?
+					if path != "/stream-terminal-expiry" {
+						ResponseWriter.write!(writer, Str.to_utf8("end"))?
+					}
+					if path == "/stream-terminal-wins" {
+						match ResponseWriter.finish!(writer, [ResponseHeader.{ name: HeaderName.("x-result"), value: "normal" }]) {
+							Ok({}) => Ok({})
+							Err(_) => crash "cancelled finish returned to application code"
+						}
+					} else {
+						Sleep.millis!(60_000)
+						crash "expiry trailers resumed application code"
+					}
+				},
+			),
+		)
 	}
 	if path == "/stream-no-content" or path == "/stream-reset-content" or path == "/stream-not-modified" {
-		status = if path == "/stream-no-content" { 204 } else if path == "/stream-reset-content" { 205 } else { 304 }
-		return Ok(Reply.stream(|writer| {
-			_ = ResponseWriter.write!(writer, [])
-			crash "bodyless writer callback ran"
-		}).with_status(status))
+		status = if path == "/stream-no-content" {
+			204
+		} else if path == "/stream-reset-content" {
+			205
+		} else {
+			304
+		}
+		return Ok(
+			Reply.stream(
+				|writer| {
+					_ = ResponseWriter.write!(writer, [])
+					crash "bodyless writer callback ran"
+				},
+			).with_status(status),
+		)
 	}
 	if path == "/stream-options" {
 		return Ok(Reply.stream_with(ResponseWriter.Options.{ ends_on_drain: Bool.True }, |writer| ResponseWriter.write!(writer, [])))
 	}
 	if path == "/stream-output" {
-		return Ok(Reply.stream(|writer| {
-			ResponseWriter.write!(writer, Str.to_utf8("first"))?
-			ResponseWriter.write!(writer, List.repeat(120, 70_000))?
-			ResponseWriter.write!(writer, Str.to_utf8("last"))
-		}))
+		return Ok(
+			Reply.stream(
+				|writer| {
+					ResponseWriter.write!(writer, Str.to_utf8("first"))?
+					ResponseWriter.write!(writer, List.repeat(120, 70_000))?
+					ResponseWriter.write!(writer, Str.to_utf8("last"))
+				},
+			),
+		)
 	}
 	if path == "/stream-cancel" {
-		return Ok(Reply.stream(|writer| {
-			ResponseWriter.write!(writer, Str.to_utf8("first"))?
-			_ = ResponseWriter.write!(writer, List.repeat(120, 70_000))
-			crash "cancelled writer resumed application code"
-		}))
+		return Ok(
+			Reply.stream(
+				|writer| {
+					ResponseWriter.write!(writer, Str.to_utf8("first"))?
+					_ = ResponseWriter.write!(writer, List.repeat(120, 70_000))
+					crash "cancelled writer resumed application code"
+				},
+			),
+		)
 	}
 	if path == "/stream-expiry" {
 		RequestExecution.limit_with_response!(300_000_000, Respond.to_response(Reply.text("must-not-replace-stream").with_status(504))).map_err(|_| Reply.status(500))?
-		return Ok(Reply.stream(|writer| {
-			ResponseWriter.write!(writer, Str.to_utf8("first"))?
-			Sleep.millis!(60_000)
-			crash "expired streaming callback resumed"
-		}))
+		return Ok(
+			Reply.stream(
+				|writer| {
+					ResponseWriter.write!(writer, Str.to_utf8("first"))?
+					Sleep.millis!(60_000)
+					crash "expired streaming callback resumed"
+				},
+			),
+		)
 	}
 	if path == "/stream-crash" {
-		return Ok(Reply.stream(|writer| {
-			ResponseWriter.write!(writer, Str.to_utf8("first"))?
-			ResponseWriter.write!(writer, Str.to_utf8("x"))?
-			crash "streaming callback failure"
-		}))
+		return Ok(
+			Reply.stream(
+				|writer| {
+					ResponseWriter.write!(writer, Str.to_utf8("first"))?
+					ResponseWriter.write!(writer, Str.to_utf8("x"))?
+					crash "streaming callback failure"
+				},
+			),
+		)
 	}
 	if path == "/stream-large" {
 		return Ok(Reply.stream(|writer| ResponseWriter.write!(writer, List.repeat(120, 4 * 1024 * 1024))))
@@ -435,3 +540,59 @@ debug_countdown = |remaining| {
 		debug_countdown(remaining - 1) + 1
 	}
 }
+
+duplex = Handler.duplex({
+	begin!: |Model.(model), _head| {
+		Concurrency.acquire!(model.limiter, "cancel-key", 1).map_err(|_| Reply.status(429))?
+		Ok({ state: { received: 0.U64, remaining: 32768.U64, ended: Bool.False }, status: 200, headers: [], interest: Handler.Interest.Both })
+	},
+	ready!: |state, event, writer| {
+		var $state = state
+		match event.input {
+			Chunk(bytes) => {
+				for byte in bytes {
+					if byte != 65 {
+						crash "duplex chunk middleware was skipped"
+					}
+				}
+				$state = { ..$state, received: $state.received + List.len(bytes).to_u64() }
+			}
+			End => {
+				$state = { ..$state, ended: Bool.True }
+			}
+			Idle => {}
+			Failed(_) => return Ok(Handler.DuplexNext.Finish([ResponseHeader.{ name: HeaderName.("x-result"), value: "input-failed" }]))
+		}
+		if event.writable and $state.remaining > 0 {
+			count = if $state.remaining > 16384 {
+				16384
+			} else {
+				$state.remaining
+			}
+			if ResponseWriter.try_write!(writer, List.repeat(120.U8, 16385)) != Err(TooLarge) {
+				crash "oversized duplex write accepted"
+			}
+			match ResponseWriter.try_write!(writer, List.repeat(120.U8, count)).map_err(|_| StreamClosed)? {
+				Accepted => {
+					$state = { ..$state, remaining: $state.remaining - count }
+					if ResponseWriter.try_write!(writer, List.repeat(120.U8, 16385)) != Err(TooLarge) {
+						crash "backpressure hid oversized duplex write"
+					}
+				}
+				Pending => {}
+			}
+		}
+		if $state.ended and $state.remaining == 0 {
+			Ok(Handler.DuplexNext.Finish([ResponseHeader.{ name: HeaderName.("x-received"), value: HeaderValue.from_str($state.received.to_str()).map_err(|_| StreamClosed)? }]))
+		} else {
+			interest = if $state.ended {
+				Handler.Interest.Write
+			} else if $state.remaining == 0 {
+				Handler.Interest.Read
+			} else {
+				Handler.Interest.Both
+			}
+			Ok(Handler.DuplexNext.Await({ state: $state, interest }))
+		}
+	},
+})

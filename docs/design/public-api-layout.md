@@ -9,3 +9,9 @@ Do not expose a host implementation type merely because glue needs it. In partic
 Integrations declare their platform dependency explicitly. Compiler platform-identity checks and the compatibility manifest ensure they refer to the same platform as the application. See [integration releases](integration-releases.md).
 
 `Extract` exposes both explicit extractor functions (such as `Extract.json`) and typed handler fields (such as `Extract.JsonBody`). Custom field types implement `parser_for`, optionally annotated with `Extract.Parser(value, provided)`, and use `Extract.reading` to access the request context. `RequestDecoder` implements record traversal and rejection capture internally and is not exported by the platform.
+
+`Handler.duplex` exposes request-scoped readiness callbacks with explicit Roc
+state and read/write interests. The pipeline retains the internal reader and
+stateful chunk checks; applications receive owned input chunks and an opaque
+`ResponseWriter`. This keeps middleware processing ordered without exposing
+body tokens or adding general concurrency effects.

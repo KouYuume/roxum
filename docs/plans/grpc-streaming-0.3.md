@@ -26,14 +26,15 @@ No generic application task-spawning API is assumed by this plan.
 
 The [gRPC roadmap](grpc.md) records completed finite HTTP/2 and Unary gates.
 The host provides bounded incremental input and output with explicit receive
-credit and request-scoped cancellation. Existing `Handler.streaming` and
-`Reply.stream` do not yet expose coordinated HTTP/2 duplex execution. The
-remaining core work is the request-scoped coordination API and simultaneous waits.
+credit and request-scoped cancellation. `Handler.streaming` receives input,
+`Reply.stream` produces output, and `Handler.duplex` coordinates both directions
+with scoped callbacks and explicit readiness interests. Remaining work connects
+these capabilities to client-streaming and bidirectional gRPC services.
 
 | Layer | Required work |
 |---|---|
 | Host | Incremental HTTP/2 input/output, explicit receive credit, bounded queues, request-scoped waits, cancellation, half-closes and terminal output. |
-| Core Roc API | Typed request-scoped read/write capabilities and generic response completion; no stream IDs, pointers or gRPC policy. |
+| Core Roc API | Typed request-scoped input callbacks, writers and generic response completion; no stream IDs, pointers or gRPC policy. |
 | gRPC integration | Incremental envelope parsing, message cardinality, metadata, terminal statuses and the four typed service forms. |
 | Generator | Bind schema method streaming flags to the supported service APIs; preserve the existing codec subset. |
 | Application | Business policy, authorization and processing; retaining message history is an explicit application choice. |
@@ -84,7 +85,8 @@ The concrete contracts are recorded in [HTTP/2 streaming](../design/http2-stream
 Its status separates the implemented engine output and production callback writer
 and explicit completion/expiry trailers. Generated server-streaming integration
 and its production acceptance fixtures are implemented. Incremental production
-input and streamed-response half-close cleanup are also implemented.
+input, streamed-response half-close cleanup and request-scoped duplex coordination
+are also implemented.
 [Server-streaming acceptance](../../tests/grpc-streaming/README.md) records
 the proxy, cancellation, fixed-budget and memory-sampling workloads; the generated
 example also runs from extracted artifacts. Platform-specific results still belong
@@ -133,9 +135,10 @@ partial support as completion.
 Bounded incremental input and explicit receive credit (PR 7) are connected to
 production request-scoped reads (PR 8). `Handler.streaming` receives input before
 EOF on real Roc fibers; ordinary handlers still receive complete bodies.
-Streamed-response half-close cleanup is implemented as the first part of PR 9.
-The remaining core gate is the request-scoped duplex API and simultaneous
-read/write waits; phase 9 is not yet complete.
+Phase 9 adds streamed-response half-close cleanup and `Handler.duplex` with
+independent input/output waits, middleware checks and nonblocking writes.
+The next implementation gate is generated client-streaming integration (phase 10);
+gRPC framing and generated bidirectional service APIs remain phases 11–12.
 
 ## Shared acceptance matrix
 

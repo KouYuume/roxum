@@ -96,6 +96,9 @@ platform "roxum"
 		"roxum_sleep_until": HostSleep.until_nanoseconds!,
 		"roxum_stream_start": HostStream.start!,
 		"roxum_stream_write": HostStream.write!,
+		"roxum_stream_abort": HostStream.abort!,
+		"roxum_stream_try_write": HostStream.try_write!,
+		"roxum_stream_wait": HostBody.wait!,
 		"roxum_stream_finish": HostStream.finish!,
 		"roxum_tcp_acquire": HostTcp.acquire!,
 		"roxum_tcp_acquire_origin": HostTcp.acquire_origin!,
@@ -245,7 +248,10 @@ handle_for_host! = |model, request| {
 			token = HostStream.start!(head, keep_alive_milliseconds, keep_alive_bytes, written.options.ends_on_drain, 18_446_744_073_709_551_615, planned.gzip, route)
 			if token != 0 {
 				write! = written.write!
-				_ = write!(ResponseWriter.from_token(token))
+				match write!(ResponseWriter.from_token(token)) {
+					Ok({}) => {}
+					Err(StreamClosed) => HostStream.abort!(token)
+				}
 			}
 		}
 		Err(NotStreamed) => {}

@@ -115,3 +115,10 @@ A connection test crosses the input deadline immediately before, at and after it
 boundary between terminal consumption and reset serialization: normal streaming
 completion stays handled, expiry stays timeout, and finite early replies retain
 their input deadline.
+
+Duplex checks run `Handler.duplex` with input transformation and response
+middleware. With only 1 KiB of response credit, a 128 KiB upload must still
+progress through receive-window updates while an unrelated request completes.
+Empty input and 16 KiB chunk boundaries verify counts and terminal trailers;
+reset while both directions wait must release the native permit without a
+worker restart. The same probes run over TCP and Unix in every backend/allocator.

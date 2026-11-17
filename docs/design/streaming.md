@@ -3,11 +3,11 @@
 The host owns sockets, deadlines, HTTP framing, and backpressure. Applications read inbound chunks with `Handler.streaming` and produce outbound chunks with `Reply.stream` or `Reply.stream_with`. Internal reader tokens are not public socket handles.
 
 The lifecycle below describes HTTP/1. The [HTTP/2 streaming contract](http2-streaming.md)
-describes its production callback writer and the remaining input/duplex work.
+describes its production input, callback writer and duplex coordination.
 
 ## Response lifecycle
 
-Validate the entire response head before sending any bytes. The writer callback emits chunks under the response-write deadline; a blocked write yields the request fiber. Empty writes do not emit an HTTP terminal chunk. When the callback returns, HTTP/1.1 receives the terminal chunk and the connection follows its persistence policy.
+Validate the entire response head before sending any bytes. The writer callback emits chunks under the response-write deadline; a blocked write yields the request fiber. Empty writes do not emit an HTTP terminal chunk. When the callback returns `Ok({})`, HTTP/1.1 receives the terminal chunk and the connection follows its persistence policy. Returning `Err(StreamClosed)` aborts the response: the connection closes without a terminal chunk.
 
 Writer capabilities belong to the active request and callback. The host allocates a nonzero capability token when a stream starts; buffered responses do not allocate one. Token zero is invalid. Writes after closure or with an invalid token fail with `StreamClosed`. HEAD, 204, 205, and 304 responses do not transmit a body. A crash after the head has been sent closes the connection instead of sending a second status line.
 
@@ -22,7 +22,7 @@ For streams configured with `ends_on_drain`, draining stops the handler at an el
 | Unread body requires another socket read | Close without draining the socket |
 | Read framing failure, EOF, or timeout | Invalidate reader and close |
 | Write timeout or peer disconnect | Close and cancel outstanding request work |
-| Crash after response head | Close without a terminal chunk |
+| Callback error or crash after response head | Close without a terminal chunk |
 
 Skipping an unread body must not consume bytes from the next request. Production cleanup does not introduce another socket-read wait merely to preserve keep-alive.
 

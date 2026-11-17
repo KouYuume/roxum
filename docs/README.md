@@ -18,7 +18,7 @@ These documents describe the current implementation, its invariants, and the pro
 - [Public API layout](design/public-api-layout.md) and [request representation](design/request-repr.md)
 - [Execution and ownership](design/execution-model.md) and [I/O scheduling](design/io-execution.md)
 - [Internal HTTP/2 engine](design/http2-engine.md): dependency, ownership, limits, and finite production listener integration
-- [HTTP/2 streaming](design/http2-streaming.md): internal incremental output and target 0.3 API/lifecycle contracts
+- [HTTP/2 streaming](design/http2-streaming.md): incremental input/output, duplex coordination and 0.3 lifecycle contracts
 - [Streaming lifecycle](design/streaming.md) and [HTTP field lists](design/http-field-lists.md)
 - [Independent Protobuf distribution](../libraries/roc-protobuf/DISTRIBUTION.md): codec/tool compatibility, standalone setup, and artifact metadata
 - [Versioning](design/versioning.md) and [integration releases](design/integration-releases.md)
