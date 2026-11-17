@@ -1,5 +1,5 @@
 //! `ResponseWriter`: the body a handler writes as it goes. While a
-//! request's Roc code runs, its session is the sink: `start!` sends the
+//! request's Roc code runs, its protocol adapter is the sink: `start!` sends the
 //! head and `write!` the parts of the body. The handle lives in the
 //! request fiber's `Locals`, so it follows the fiber to another thread.
 const std = @import("std");
@@ -8,7 +8,7 @@ const allocator_context = @import("../allocator/context.zig");
 const fiber = @import("../fiber.zig");
 const runtime = @import("../runtime.zig");
 
-/// Where a request's written body goes: its session.
+/// Request-scoped protocol operations for an output writer.
 pub const Sink = struct {
     context: *anyopaque,
     /// Sends the head from the response's status and headers; false when

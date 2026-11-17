@@ -16,6 +16,7 @@ import pf.RequestBody
 import pf.Response
 import pf.ResponseHeader
 import pf.HeaderName
+import pf.ResponseWriter
 import pf.ResponseBody
 import pf.Router
 import pf.Server
@@ -31,7 +32,7 @@ init! = |{}| {
 	if RequestExecution.elapsed_nanoseconds!({}) != Err(Unavailable) or RequestExecution.limit_nanoseconds!(0) != Err(Unavailable) or RequestExecution.limit_with_response!(0, Respond.to_response(Reply.text("unavailable"))) != Err(Unavailable) {
 		return Err(StartupErr("execution controls must be unavailable in init"))
 	}
-	settings : { path : Str, execution_milliseconds : Try(U64, [Missing]), http1 : Try(Bool, [Missing]), body_bytes : Try(U64, [Missing]), body_milliseconds : Try(U64, [Missing]), write_milliseconds : Try(U64, [Missing]) }
+	settings : { path : Str, execution_milliseconds : Try(U64, [Missing]), http1 : Try(Bool, [Missing]), body_bytes : Try(U64, [Missing]), body_milliseconds : Try(U64, [Missing]), write_milliseconds : Try(U64, [Missing]), maximum_streams : Try(U64, [Missing]) }
 	settings = Config.load!(base_text).map_err(|ConfigErr(message)| StartupErr(message))?
 	limiter = match Concurrency.new!({ max_keys: 1 }) {
 		Ok(value) => value
@@ -61,7 +62,7 @@ init! = |{}| {
 			},
 			threads: Server.Threads.Fixed(2),
 			timeouts: { ..Server.Timeouts.defaults, request_head_milliseconds: 1_000, request_body_milliseconds: settings.body_milliseconds ?? io_timeout, response_write_milliseconds: settings.write_milliseconds ?? io_timeout },
-			limits: { maximum_body_bytes: settings.body_bytes ?? 1024, maximum_streamed_body_bytes: Server.BodyLimit.Bytes(4), http2_execution: execution },
+			limits: { maximum_streams: match settings.maximum_streams { Ok(value) => Server.Count.Fixed(value) Err(Missing) => Server.Count.Auto }, maximum_body_bytes: settings.body_bytes ?? 1024, maximum_streamed_body_bytes: Server.BodyLimit.Bytes(4), http2_execution: execution },
 			access_log: Server.AccessLog.JsonLines,
 			request_id: Server.RequestIdSource.TrustIncoming,
 		},
@@ -72,7 +73,7 @@ routes : Router(Model, [], {})
 routes = {
 	handler = Handler.effectful(wait_and_answer!)
 	methods = MethodRouter.methods([MethodRouter.get(handler), MethodRouter.post(handler)])
-	Router.new.route("/trailers", methods).route("/empty-trailers", methods).route("/invalid-trailers", methods).route("/echo", methods).route("/reject", methods).route("/invalid-response", methods).route("/sleep", methods).route("/cancel", methods).route("/permit", methods).route("/tcp", methods).route("/tcp-cancel", methods).route("/id", methods).route("/debug", methods).route("/debug-many", methods).route("/crash", methods).route("/execution-elapsed", methods).route("/execution-zero", methods).route("/execution-stale", methods).route("/execution-limit", methods).route("/execution-cap", methods).route("/execution-unavailable", methods).route("/expiry-zero", methods).route("/expiry-invalid", methods).route("/expiry-replace", methods).route("/expiry-normal", methods)
+	Router.new.route("/stream-no-content", methods).route("/stream-reset-content", methods).route("/stream-not-modified", methods).route("/stream-options", methods).route("/stream-output", methods).route("/stream-empty", methods).route("/stream-large", methods).route("/stream-expiry", methods).route("/stream-crash", methods).route("/stream-cancel", methods).route("/trailers", methods).route("/empty-trailers", methods).route("/invalid-trailers", methods).route("/echo", methods).route("/reject", methods).route("/invalid-response", methods).route("/sleep", methods).route("/cancel", methods).route("/permit", methods).route("/tcp", methods).route("/tcp-cancel", methods).route("/id", methods).route("/debug", methods).route("/debug-many", methods).route("/crash", methods).route("/execution-elapsed", methods).route("/execution-zero", methods).route("/execution-stale", methods).route("/execution-limit", methods).route("/execution-cap", methods).route("/execution-unavailable", methods).route("/expiry-zero", methods).route("/expiry-invalid", methods).route("/expiry-replace", methods).route("/expiry-normal", methods)
 		.route("/metadata-reject", MethodRouter.post(handler).layer([Middleware.Stage.BeforeBody(|_model, _head| Err(Reply.status(403)))]))
 		.route("/metadata-reject-body", MethodRouter.post(handler).layer([Middleware.Stage.BeforeBody(|_model, _head| Err(Reply.text("denied").with_status(403)))]))
 		.route("/metadata-reject-trailers", MethodRouter.post(handler).layer([Middleware.Stage.BeforeBody(|_model, _head| Err(Reply.text("denied").with_status(403).with_trailers([ResponseHeader.{ name: HeaderName.("x-result"), value: "done" }])))]))
@@ -141,6 +142,51 @@ collect = Handler.streaming(
 
 wait_and_answer! = |Model.(state), context| {
 	path = context.request.path
+	if path == "/stream-no-content" or path == "/stream-reset-content" or path == "/stream-not-modified" {
+		status = if path == "/stream-no-content" { 204 } else if path == "/stream-reset-content" { 205 } else { 304 }
+		return Ok(Reply.stream(|writer| {
+			_ = ResponseWriter.write!(writer, [])
+			crash "bodyless writer callback ran"
+		}).with_status(status))
+	}
+	if path == "/stream-options" {
+		return Ok(Reply.stream_with(ResponseWriter.Options.{ ends_on_drain: Bool.True }, |writer| ResponseWriter.write!(writer, [])))
+	}
+	if path == "/stream-output" {
+		return Ok(Reply.stream(|writer| {
+			ResponseWriter.write!(writer, Str.to_utf8("first"))?
+			ResponseWriter.write!(writer, List.repeat(120, 70_000))?
+			ResponseWriter.write!(writer, Str.to_utf8("last"))
+		}))
+	}
+	if path == "/stream-cancel" {
+		return Ok(Reply.stream(|writer| {
+			ResponseWriter.write!(writer, Str.to_utf8("first"))?
+			_ = ResponseWriter.write!(writer, List.repeat(120, 70_000))
+			crash "cancelled writer resumed application code"
+		}))
+	}
+	if path == "/stream-expiry" {
+		RequestExecution.limit_with_response!(300_000_000, Respond.to_response(Reply.text("must-not-replace-stream").with_status(504))).map_err(|_| Reply.status(500))?
+		return Ok(Reply.stream(|writer| {
+			ResponseWriter.write!(writer, Str.to_utf8("first"))?
+			Sleep.millis!(60_000)
+			crash "expired streaming callback resumed"
+		}))
+	}
+	if path == "/stream-crash" {
+		return Ok(Reply.stream(|writer| {
+			ResponseWriter.write!(writer, Str.to_utf8("first"))?
+			ResponseWriter.write!(writer, Str.to_utf8("x"))?
+			crash "streaming callback failure"
+		}))
+	}
+	if path == "/stream-large" {
+		return Ok(Reply.stream(|writer| ResponseWriter.write!(writer, List.repeat(120, 4 * 1024 * 1024))))
+	}
+	if path == "/stream-empty" {
+		return Ok(Reply.stream(|writer| ResponseWriter.write!(writer, [])))
+	}
 	if path == "/execution-unavailable" {
 		if RequestExecution.elapsed_nanoseconds!({}) == Err(Unavailable) and RequestExecution.limit_nanoseconds!(0) == Err(Unavailable) and RequestExecution.limit_with_response!(0, Respond.to_response(Reply.text("unavailable"))) == Err(Unavailable) {
 			return Ok(Reply.text("unavailable"))

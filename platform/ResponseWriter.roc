@@ -4,7 +4,8 @@ import HostStream
 ## `Reply.stream`. The handle is opaque and valid only inside that function.
 ResponseWriter :: U64.{
 	## How a written body behaves while its function waits, for
-	## `Reply.stream_with`. Fields left out keep their defaults.
+	## `Reply.stream_with`. Fields left out keep their defaults. HTTP/2
+	## currently supports only the default options.
 	##
 	## `ends_on_drain: Bool.True` lets the server end the body when it stops
 	##: once a drain starts, the function stops at its next wait, as
@@ -24,10 +25,12 @@ ResponseWriter :: U64.{
 	KeepAlive := [None, Every({ milliseconds : U64, bytes : List(U8) })]
 
 	## Sends `bytes` as the next part of the body, waiting while the client
-	## does not take them; other requests go on meanwhile. Returns
-	## `Err(StreamClosed)` when the client is gone or did not take the bytes
-	## within `Server.Timeouts.response_write_milliseconds`; the stream is then
-	## over and later writes fail too. Empty bytes write nothing. For a `HEAD`
+	## does not take them; other requests go on meanwhile. On HTTP/1, returns
+	## `Err(StreamClosed)` when the client is gone or a write exceeds
+	## `Server.Timeouts.response_write_milliseconds`; later writes fail too.
+	## On HTTP/2, that timeout covers the whole response, and cancellation
+	## abandons the request: code after a blocked write does not resume.
+	## Empty bytes write nothing. For a `HEAD`
 	## request and for 204 and 304 responses the bytes are not sent.
 	write! : ResponseWriter, List(U8) => Try({}, [StreamClosed])
 	write! = |ResponseWriter.(token), bytes|

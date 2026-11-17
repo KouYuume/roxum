@@ -483,6 +483,10 @@ fn RequestFiber(comptime Environment: type) type {
                 request.heap = null;
                 request.failure = null;
                 request.http2_stream_attempted = false;
+                request.http2_stream_started = false;
+                request.http2_stream_head = null;
+                request.http2_stream_counted = false;
+                request.http2_output_waiting = false;
                 request.http2_body = .{
                     .whole_limit = shared.limits.maximum_body_bytes,
                     .streamed_limit = shared.limits.maximum_streamed_body_bytes,
@@ -519,6 +523,10 @@ fn RequestFiber(comptime Environment: type) type {
         /// When the Roc thread took the request from the queue.
         started_at: u64 = 0,
         http2_stream_attempted: bool = false,
+        http2_stream_started: bool = false,
+        http2_stream_head: ?@import("http2/deferred_response.zig").Response = null,
+        http2_stream_counted: bool = false,
+        http2_output_waiting: bool = false,
         http2_semantics: bridge.ResponseRequestSemantics = bridge.ResponseRequestSemantics.regular,
         http2_body: struct {
             offset: usize = 0,
@@ -562,6 +570,7 @@ fn RequestFiber(comptime Environment: type) type {
             const shared = self.shared;
             const environment = self.thread.environment;
             if (self.dispatch.http2 != null) {
+                self.releaseHttp2Stream();
                 if (self.heap) |*heap| environment.abandonStream(heap) else try environment.abandonRequest();
                 self.heap = null;
                 self.thread.io.finishHttp2(self.dispatch, switch (stop) {
@@ -613,7 +622,7 @@ fn RequestFiber(comptime Environment: type) type {
             const protocol = item.http2 orelse unreachable;
             const ticket = self.dispatch.http2.?;
             const execution = protocol.execution(ticket) orelse unreachable;
-            execution.waiter = if (parked) .{ .target = target, .serial = target.wait_serial, .body_limit = self.http2_body.waiting_limit } else null;
+            execution.waiter = if (parked) .{ .target = target, .serial = target.wait_serial, .body_limit = self.http2_body.waiting_limit, .output = self.http2_output_waiting } else null;
             if (protocol.streams.leases.runningStream(ticket) == null) {
                 if (parked) {
                     fiber_wait.wakeStopped(target, target.wait_serial, fiber.Stop.client_gone);
@@ -621,25 +630,195 @@ fn RequestFiber(comptime Environment: type) type {
                     target.stop.store(fiber.Stop.client_gone, std.builtin.AtomicOrder.release);
                 }
             } else if (parked) {
+                if (self.http2_output_waiting and protocol.outputReady(ticket)) fiber_wait.wake(target, target.wait_serial);
                 if (self.http2_body.waiting_limit) |limit| {
                     if (protocol.bodyReady(ticket, limit)) fiber_wait.wake(target, target.wait_serial);
                 }
             }
         }
 
-        fn refuseHttp2Stream(ptr: *anyopaque, _: *const bridge.HttpResponse, _: u64, _: []const u8, _: bool, _: ?u64, _: bool) bool {
+        fn releaseHttp2Stream(self: *Self) void {
+            if (self.http2_stream_head) |*head| {
+                const item = &self.shared.handoff.connections[self.dispatch.slot];
+                item.lock.lock();
+                defer item.lock.unlock();
+                head.deinit();
+                self.http2_stream_head = null;
+            }
+            if (self.http2_stream_counted) {
+                _ = self.shared.handoff.active_streams.fetchSub(1, std.builtin.AtomicOrder.monotonic);
+                self.http2_stream_counted = false;
+            }
+        }
+
+        fn startHttp2Stream(ptr: *anyopaque, response: *const bridge.HttpResponse, keep_alive: u64, _: []const u8, ends_on_drain: bool, content_length: ?u64, gzip_body: bool) bool {
             const self: *Self = @ptrCast(@alignCast(ptr));
             self.http2_stream_attempted = true;
-            return false;
+            // These HTTP/1 writer modes need their own HTTP/2 lifecycle contract.
+            if (keep_alive != 0 or ends_on_drain or content_length != null or gzip_body or response.trailers.items().len != 0) return false;
+            const item = &self.shared.handoff.connections[self.dispatch.slot];
+            item.lock.lock();
+            defer item.lock.unlock();
+            if (item.generation != self.dispatch.generation) return false;
+            const protocol = item.http2 orelse return false;
+            const ticket = self.dispatch.http2.?;
+            protocol.expire(net.monotonicNanoseconds() catch return false);
+            if (protocol.failed or protocol.closed) return false;
+            const id = protocol.streams.leases.runningStream(ticket) orelse return false;
+            // Reuse response-field validation and normalization, without retaining
+            // a Roc body or its synthetic finite Content-Length across a wait.
+            var head = response.*;
+            head.body = std.mem.zeroes(bridge.HttpResponseBody);
+            head.body.tag = bridge.HttpResponseBodyTag.Empty;
+            head.incref(1);
+            var owned = @import("bridge/http2_response.zig").OwnedResponse.init(head, &self.roc_host, protocol.budget.allocator(), self.http2_semantics, .{
+                .header_bytes = protocol.owner.engine.limits.header_bytes,
+                .body_bytes = 0,
+            }) catch return false;
+            defer owned.deinit();
+            const bodyless = self.http2_semantics == bridge.ResponseRequestSemantics.head or response.status == 204 or response.status == 205 or response.status == 304;
+            var status = response.status;
+            if (!bodyless) {
+                const count = &self.shared.handoff.active_streams;
+                if (count.fetchAdd(1, std.builtin.AtomicOrder.monotonic) >= self.shared.limits.maximum_streams) {
+                    _ = count.fetchSub(1, std.builtin.AtomicOrder.monotonic);
+                    status = 503;
+                } else self.http2_stream_counted = true;
+            }
+            var fields: [64]@import("http2/engine.zig").Header = undefined;
+            var field_count: usize = 0;
+            for (owned.headers) |field| {
+                if (std.mem.eql(u8, field.name, "content-length")) continue;
+                fields[field_count] = field;
+                field_count += 1;
+            }
+            if (bodyless or (status == 503 and !self.http2_stream_counted)) {
+                // Route metadata arrives when rocHandle returns. Keep this finite
+                // head unsubmitted so completion cannot log an unnamed route.
+                self.http2_stream_head = @import("http2/deferred_response.zig").Response.init(protocol.budget.allocator(), protocol.owner.engine, id, status, if (bodyless) fields[0..field_count] else &.{}, "", &.{}) catch return false;
+            } else {
+                protocol.owner.engine.beginStreamingResponse(id, status, fields[0..field_count]) catch return false;
+                self.http2_stream_started = true;
+            }
+            protocol.owner.runnable = true;
+            protocol.deadlines[ticket.slot] = protocol.now +| protocol.write_timeout;
+            protocol.writing[ticket.slot] = true;
+            if (protocol.access[ticket.slot]) |*entry| {
+                entry.status = status;
+                if (!bodyless and !self.http2_stream_counted) entry.outcome = access_log.Outcome.stream_limit;
+            }
+            if (self.http2_stream_started) self.thread.io.driveHttp2Output(self.dispatch);
+            return self.http2_stream_started;
         }
-        fn refuseHttp2Write(_: *anyopaque, _: []const u8) bool {
-            return false;
+
+        fn writeHttp2Stream(ptr: *anyopaque, bytes: []const u8) bool {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            if (!self.http2_stream_started) return false;
+            const ok = self.writeHttp2Bytes(bytes);
+            if (!ok) {
+                self.http2_stream_started = false;
+                const cancelled = blk: {
+                    const item = &self.shared.handoff.connections[self.dispatch.slot];
+                    item.lock.lock();
+                    defer item.lock.unlock();
+                    if (item.generation != self.dispatch.generation) break :blk true;
+                    const protocol = item.http2 orelse break :blk true;
+                    break :blk protocol.failed or protocol.closed or protocol.streams.leases.runningStream(self.dispatch.http2.?) == null;
+                };
+                if (cancelled) {
+                    fiber.current().?.stop.store(fiber.Stop.client_gone, std.builtin.AtomicOrder.release);
+                    fiber_wait.cancelCurrent();
+                }
+            }
+            return ok;
         }
-        fn refuseHttp2Abort(_: *anyopaque) void {}
+
+        fn writeHttp2Bytes(self: *Self, bytes: []const u8) bool {
+            var offset: usize = 0;
+            var first = true;
+            while (first or offset < bytes.len) {
+                first = false;
+                const accepted = blk: {
+                    const item = &self.shared.handoff.connections[self.dispatch.slot];
+                    item.lock.lock();
+                    defer item.lock.unlock();
+                    if (item.generation != self.dispatch.generation) return false;
+                    const protocol = item.http2 orelse return false;
+                    const ticket = self.dispatch.http2.?;
+                    protocol.expire(net.monotonicNanoseconds() catch return false);
+                    if (protocol.failed or protocol.closed) return false;
+                    const id = protocol.streams.leases.runningStream(ticket) orelse return false;
+                    const count = @min(bytes.len - offset, protocol.owner.engine.limits.stream_chunk_bytes);
+                    if (!(protocol.owner.engine.writeStreamingResponse(id, bytes[offset..][0..count]) catch return false)) break :blk false;
+                    offset += count;
+                    protocol.owner.runnable = true;
+                    if (protocol.access[ticket.slot]) |*entry| entry.body_bytes += count;
+                    self.thread.io.driveHttp2Output(self.dispatch);
+                    break :blk true;
+                };
+                if (!accepted) {
+                    self.waitHttp2Output();
+                    first = true;
+                }
+            }
+            return true;
+        }
+
+        fn waitHttp2Output(self: *Self) void {
+            self.http2_output_waiting = true;
+            _ = fiber_wait.waitSocket(-1, 0, std.math.maxInt(u64)) orelse unreachable;
+            self.http2_output_waiting = false;
+            fiber_wait.stopIfStreamEnds();
+        }
+
+        fn submitHttp2StreamHead(self: *Self) bool {
+            const item = &self.shared.handoff.connections[self.dispatch.slot];
+            item.lock.lock();
+            defer item.lock.unlock();
+            const head = &(self.http2_stream_head orelse return false);
+            const protocol = item.http2 orelse return false;
+            protocol.expire(net.monotonicNanoseconds() catch return false);
+            if (protocol.failed or protocol.closed) return false;
+            const id = protocol.streams.leases.runningStream(self.dispatch.http2.?) orelse return false;
+            head.submit(protocol.owner.engine, id) catch return false;
+            protocol.owner.runnable = true;
+            self.thread.io.driveHttp2Output(self.dispatch);
+            return true;
+        }
+
+        fn finishHttp2Stream(self: *Self) bool {
+            while (true) {
+                const finished = blk: {
+                    const item = &self.shared.handoff.connections[self.dispatch.slot];
+                    item.lock.lock();
+                    defer item.lock.unlock();
+                    const protocol = item.http2 orelse return false;
+                    const ticket = self.dispatch.http2.?;
+                    protocol.expire(net.monotonicNanoseconds() catch return false);
+                    if (protocol.failed or protocol.closed) return false;
+                    const id = protocol.streams.leases.runningStream(ticket) orelse return false;
+                    protocol.owner.engine.finishResponse(id, &.{}) catch |err| switch (err) {
+                        error.InvalidState => break :blk false,
+                        else => return false,
+                    };
+                    protocol.owner.runnable = true;
+                    self.thread.io.driveHttp2Output(self.dispatch);
+                    break :blk true;
+                };
+                if (finished) return true;
+                self.waitHttp2Output();
+            }
+        }
+
+        fn abortHttp2Stream(ptr: *anyopaque) void {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            self.http2_stream_started = false;
+        }
 
         fn serveHttp2(self: *Self) !void {
             allocator_context.setCurrent(.{ .host_allocator = &self.host_allocator, .domain = Domain.request, .generation = self.generation });
             const failed = self.invokeHttp2() catch true;
+            self.releaseHttp2Stream();
             request_debug.endRequest();
             allocator_context.clearCurrent();
             const environment = self.thread.environment;
@@ -800,13 +979,23 @@ fn RequestFiber(comptime Environment: type) type {
             const locals = fiber.currentLocals() orelse unreachable;
             locals.request_execution = .{ .context = self, .apply = requestExecution, .limit_response = requestExecutionResponse };
             defer locals.request_execution = null;
-            writer.activate(.{ .context = self, .start = refuseHttp2Stream, .write = refuseHttp2Write, .abort = refuseHttp2Abort });
+            writer.activate(.{ .context = self, .start = startHttp2Stream, .write = writeHttp2Stream, .abort = abortHttp2Stream });
             const answered = bridge.rocHandle(self.shared.model_root.retainForHandle(), request);
             writer.deactivate();
             if (self.http2_stream_attempted) {
+                {
+                    item.lock.lock();
+                    defer item.lock.unlock();
+                    if (item.http2) |protocol| {
+                        if (protocol.streams.leases.runningStream(ticket) != null) {
+                            if (protocol.access[ticket.slot]) |*entry| entry.route.set(answered.route.asSlice());
+                        }
+                    }
+                }
                 answered.route.decref(&self.roc_host);
                 answered.response.decref(&self.roc_host);
-                return true;
+                if (self.http2_stream_head != null) return !self.submitHttp2StreamHead();
+                return !self.http2_stream_started or !self.finishHttp2Stream();
             }
             defer answered.route.decref(&self.roc_host);
             item.lock.lock();

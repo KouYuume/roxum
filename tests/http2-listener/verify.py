@@ -731,8 +731,198 @@ def verify_execution_config(executable):
     print('PASS execution limit startup validation and HTTP/1 isolation')
 
 
+def verify_stream_output(executable, unix):
+    with tempfile.TemporaryDirectory(prefix='roxum-h2-writer-', dir='/tmp') as directory:
+        path = str(pathlib.Path(directory) / 'http.sock') if unix else ''
+        config = pathlib.Path(directory) / 'config'
+        config.mkdir()
+        (config / 'local.toml').write_text('path = ' + json.dumps(path) + '\nwrite_milliseconds = 30000\nmaximum_streams = 2\n')
+        with tempfile.TemporaryFile(mode='w+') as errors:
+            process = subprocess.Popen([executable], cwd=directory, stdout=subprocess.PIPE,
+                                       stderr=errors, text=True, start_new_session=True)
+            try:
+                assert select.select([process.stdout], [], [], 30)[0], 'startup timed out'
+                endpoint = process.stdout.readline().strip()
+                with socket.socket(socket.AF_UNIX if unix else socket.AF_INET) as sock:
+                    sock.settimeout(10)
+                    sock.connect(path if unix else ('127.0.0.1', int(endpoint)))
+                    client = H2Connection(config=H2Configuration(client_side=True, header_encoding='utf-8'))
+                    client.initiate_connection()
+                    client.update_settings({SettingCodes.INITIAL_WINDOW_SIZE: 5})
+                    bodies, headers, ended, reset = collections.defaultdict(bytes), {}, set(), set()
+                    def flush():
+                        sock.sendall(client.data_to_send())
+                    def request(sid, route, method='GET'):
+                        client.send_headers(sid, [(':method', method), (':scheme', 'http'),
+                                                 (':authority', 'localhost'), (':path', route),
+                                                 ('x-request-id', f'writer-{sid}')], end_stream=True)
+                        flush()
+                    def until(predicate):
+                        deadline = time.monotonic() + 5
+                        while not predicate():
+                            sock.settimeout(max(.001, deadline - time.monotonic()))
+                            wire = sock.recv(65536)
+                            assert wire, 'unexpected EOF'
+                            for event in client.receive_data(wire):
+                                assert not isinstance(event, ConnectionTerminated), event
+                                if isinstance(event, ResponseReceived):
+                                    headers[event.stream_id] = dict(event.headers)
+                                elif isinstance(event, DataReceived):
+                                    bodies[event.stream_id] += event.data
+                                    if event.flow_controlled_length:
+                                        client.increment_flow_control_window(event.flow_controlled_length)
+                                elif isinstance(event, StreamEnded):
+                                    ended.add(event.stream_id)
+                                elif isinstance(event, StreamReset):
+                                    reset.add(event.stream_id)
+                            flush()
+                            assert time.monotonic() < deadline
+                    request(1, '/stream-output')
+                    until(lambda: bodies[1] == b'first')
+                    assert 1 not in ended and not reset
+                    # The blocked writer releases its Roc thread and connection lock.
+                    request(3, '/stream-output')
+                    until(lambda: bodies[3] == b'first')
+                    request(5, '/stream-empty')
+                    until(lambda: 5 in ended)
+                    assert headers[5][':status'] == '503' and bodies[5] == b''
+                    request(7, '/echo')
+                    client.increment_flow_control_window(64, stream_id=7)
+                    flush()
+                    until(lambda: 7 in ended)
+                    assert headers[1][':status'] == headers[3][':status'] == headers[7][':status'] == '200'
+                    assert bodies[7] == b'42|h2|' and bodies[1] == bodies[3] == b'first'
+                    client.increment_flow_control_window(70004, stream_id=1)
+                    flush()
+                    until(lambda: 1 in ended)
+                    assert bodies[1] == b'first' + b'x' * 70000 + b'last'
+                    assert 'content-length' not in headers[1] and not reset
+                    # Reset sleeping writers and recycle more than all 16 lease slots.
+                    client.reset_stream(3)
+                    flush()
+                    for sid in range(9, 49, 2):
+                        request(sid, '/stream-cancel')
+                        until(lambda: bodies[sid] == b'first')
+                        client.reset_stream(sid)
+                        flush()
+                    request(49, '/stream-empty')
+                    until(lambda: 49 in ended)
+                    assert bodies[49] == b'' and headers[49][':status'] == '200'
+                    for sid, route in ((51, '/stream-expiry'), (53, '/stream-crash')):
+                        request(sid, route)
+                        until(lambda: sid in reset)
+                        assert headers[sid][':status'] == '200'
+                        assert bodies[sid] == b'first' and sid not in ended
+                    request(55, '/stream-empty')
+                    until(lambda: 55 in ended)
+                    assert headers[55][':status'] == '200'
+                    # Bodyless statuses and HEAD must skip the callback and keep
+                    # matched route metadata through finite response completion.
+                    for sid, route, method, status in (
+                        (57, '/stream-no-content', 'GET', '204'),
+                        (59, '/stream-reset-content', 'GET', '205'),
+                        (61, '/stream-not-modified', 'GET', '304'),
+                        (63, '/stream-output', 'HEAD', '200'),
+                    ):
+                        request(sid, route, method)
+                        until(lambda: sid in ended)
+                        assert headers[sid][':status'] == status and bodies[sid] == b''
+                        assert sid not in reset
+                    request(65, '/stream-options')
+                    until(lambda: 65 in reset)
+                    request(67, '/stream-empty')
+                    until(lambda: 67 in ended)
+                    assert headers[67][':status'] == '200'
+
+                # Both writers have ample HTTP/2 credit; a small socket receive
+                # buffer makes their multi-megabyte output wait on transport writes.
+                with socket.socket(socket.AF_UNIX if unix else socket.AF_INET) as slow:
+                    slow.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 64 * 1024)
+                    slow.settimeout(10)
+                    slow.connect(path if unix else ('127.0.0.1', int(endpoint)))
+                    streaming = H2Connection(config=H2Configuration(client_side=True, header_encoding='utf-8'))
+                    streaming.initiate_connection()
+                    streaming.update_settings({SettingCodes.INITIAL_WINDOW_SIZE: 16 * 1024 * 1024})
+                    streaming.increment_flow_control_window(16 * 1024 * 1024)
+                    for sid in (1, 3):
+                        streaming.send_headers(sid, [(':method', 'GET'), (':scheme', 'http'),
+                                                    (':authority', 'localhost'), (':path', '/stream-large')], end_stream=True)
+                    slow.sendall(streaming.data_to_send())
+                    started, finished, counts = set(), set(), collections.Counter()
+                    def receive_large():
+                        wire = slow.recv(65536)
+                        assert wire
+                        for event in streaming.receive_data(wire):
+                            assert not isinstance(event, (StreamReset, ConnectionTerminated)), (event, dict(counts))
+                            if isinstance(event, ResponseReceived):
+                                assert dict(event.headers)[':status'] == '200'
+                                started.add(event.stream_id)
+                            elif isinstance(event, DataReceived):
+                                assert event.data == b'x' * len(event.data)
+                                counts[event.stream_id] += len(event.data)
+                            elif isinstance(event, StreamEnded):
+                                finished.add(event.stream_id)
+                        pending = streaming.data_to_send()
+                        if pending:
+                            slow.sendall(pending)
+                    # Stop reading at the first response: waiting for both
+                    # headers could drain one writer before the other is scheduled.
+                    while not started:
+                        receive_large()
+                    assert not finished
+                    with socket.socket(socket.AF_UNIX if unix else socket.AF_INET) as peer:
+                        peer.settimeout(2)
+                        peer.connect(path if unix else ('127.0.0.1', int(endpoint)))
+                        independent = H2Connection(config=H2Configuration(client_side=True, header_encoding='utf-8'))
+                        independent.initiate_connection()
+                        independent.send_headers(1, [(':method', 'GET'), (':scheme', 'http'),
+                                                     (':authority', 'localhost'), (':path', '/echo')], end_stream=True)
+                        peer.sendall(independent.data_to_send())
+                        peer_body, done = b'', False
+                        while not done:
+                            wire = peer.recv(65536)
+                            assert wire
+                            for event in independent.receive_data(wire):
+                                assert not isinstance(event, (StreamReset, ConnectionTerminated)), event
+                                if isinstance(event, ResponseReceived):
+                                    assert dict(event.headers)[':status'] == '200'
+                                elif isinstance(event, DataReceived):
+                                    peer_body += event.data
+                                elif isinstance(event, StreamEnded):
+                                    done = True
+                        assert peer_body == b'42|h2|'
+                    slow.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024 * 1024)
+                    while finished != {1, 3}:
+                        receive_large()
+                    assert counts == {1: 4 * 1024 * 1024, 3: 4 * 1024 * 1024}
+                assert stop(process) == 0
+                errors.seek(0)
+                diagnostic = errors.read()
+                assert 'panic' not in diagnostic.lower(), diagnostic
+                assert 'cancelled writer resumed application code' not in diagnostic, diagnostic
+                assert 'expired streaming callback resumed' not in diagnostic, diagnostic
+                assert 'bodyless writer callback ran' not in diagnostic, diagnostic
+                entries = [json.loads(line) for line in diagnostic.splitlines() if line.startswith('{')]
+                for sid, route, status, method in (
+                    (5, '/stream-empty', 503, 'GET'),
+                    (57, '/stream-no-content', 204, 'GET'),
+                    (59, '/stream-reset-content', 205, 'GET'),
+                    (61, '/stream-not-modified', 304, 'GET'),
+                    (63, '/stream-output', 200, 'HEAD'),
+                ):
+                    matches = [entry for entry in entries if entry.get('request_id') == f'writer-{sid}'
+                               and entry.get('status') == status and entry.get('method') == method]
+                    assert len(matches) == 1 and matches[0].get('route') == route, (route, matches)
+            finally:
+                stop(process)
+                process.stdout.close()
+    print('PASS production streaming writer: early DATA, credit waits, peer progress, reset and lease reuse')
+
+
 if __name__ == '__main__':
     executable = str(pathlib.Path(sys.argv[1]).resolve())
+    verify_stream_output(executable, False)
+    verify_stream_output(executable, True)
     verify(executable, False)
     verify(executable, True)
     verify(executable, False, True)

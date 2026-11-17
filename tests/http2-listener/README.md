@@ -33,8 +33,18 @@ until GOAWAY is observed. Both streams must return their distinct payloads, HTTP
 200 and exactly one EOF without a reset before the connection closes and the
 process terminates successfully.
 
-The test does not claim streaming response or gRPC support. Internal engine/wire
-fixtures retain detailed framing, flow-control and allocator fault coverage.
+Callback writer checks stall two Roc writers on stream credit while another
+request completes, then verify exact DATA and zero-credit completion. Resetting
+more than sixteen writers exercises lease reuse. A configured two-writer quota
+returns 503 for the next writer and recovers after cleanup. HEAD and 204/205/304
+skip the callback; these finite responses and quota 503 preserve the matched
+route in the access log. Unsupported writer options reset only their stream. Two large responses
+with ample HTTP/2 credit and a small client socket buffer also leave another
+connection responsive, then complete when the client resumes reading. Execution
+expiry after commit cannot substitute its registered finite response, and callback
+crashes reset only their stream. These cases run on TCP and Unix sockets.
+They do not establish gRPC streaming or incremental input support. Internal
+engine/wire fixtures retain framing, flow-control and allocator fault coverage.
 
 Execution-cap checks run additional TCP and Unix listeners with a 250 ms cap and
 10-second body/write timeouts. They verify that an incomplete request never enters

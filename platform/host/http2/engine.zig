@@ -179,6 +179,16 @@ pub const Engine = struct {
         self.find(@backingInt(id)).?.streaming = true;
     }
 
+    /// Readiness for a streaming write or finish, under the serialized owner.
+    pub fn streamingReady(self: *Engine, id: StreamId) Error!bool {
+        try self.enter();
+        defer self.entered = false;
+        const slot = self.find(@backingInt(id)) orelse return error.Closed;
+        if (slot.rejected) return error.Closed;
+        if (!slot.streaming or !slot.awaiting_trailers) return error.InvalidState;
+        return slot.streaming_headers_sent and slot.body_done and self.pending.len == 0;
+    }
+
     /// Copies one bounded chunk. False means retry after driving transport output;
     /// no caller bytes are retained on that path. Success is not peer delivery.
     pub fn writeStreamingResponse(self: *Engine, id: StreamId, bytes: []const u8) Error!bool {

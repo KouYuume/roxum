@@ -1189,6 +1189,18 @@ pub const Loop = struct {
         }
     }
 
+    /// A writer has queued output under the connection lock. Drive one bounded
+    /// transport turn now instead of waiting for the acceptor's periodic tick.
+    pub fn driveHttp2Output(self: *Loop, request: work_queue.Request) void {
+        const item = &self.handoff.connections[request.slot];
+        if (item.generation != request.generation) return;
+        const protocol = item.http2 orelse return;
+        const ticket = request.http2 orelse return;
+        if (protocol.execution(ticket) == null) return;
+        self.readClock();
+        self.advanceHttp2(request.slot);
+    }
+
     pub fn finishHttp2(self: *Loop, request: work_queue.Request, failure: ?access_log.Outcome) void {
         const item = &self.handoff.connections[request.slot];
         item.lock.lock();

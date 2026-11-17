@@ -32,9 +32,10 @@ are not supported on this listener.
 HTTP/2 routing and `BeforeBody` middleware run after initial headers; ordinary
 handlers receive complete finite bodies. Request IDs and effects use the worker's
 existing request fibers. A reset cancels the affected suspended request without
-closing its peers. Responses are finite, optionally with trailers. Response
-streaming, SSE, file responses, and incremental request-body processing remain
-unsupported; attempting a streamed response resets that stream. For uncompressed
+closing its peers. Finite responses may include trailers. Uncompressed
+`Reply.stream` responses with default writer options send incremental DATA; see
+[streaming](streaming.md) for their limits. SSE options, file responses and
+incremental request-body processing remain unsupported. For uncompressed
 Unary gRPC, use the [integration](../../integrations/roxum-grpc/README.md).
 
 To bound HTTP/2 execution, set a listener-wide cap:

@@ -62,7 +62,7 @@ Core and integrations are versioned independently. See [versioning](docs/design/
 
 ## Limitations
 
-- IPv4/IPv6 TCP and filesystem Unix sockets; HTTP/1.1 by default. [Opt-in cleartext HTTP/2](docs/guides/deployment.md#opt-in-http2) supports finite responses, trailers, and uncompressed Unary gRPC. HTTP/2 response streaming and streaming RPCs are not supported.
+- IPv4/IPv6 TCP and filesystem Unix sockets; HTTP/1.1 by default. [Opt-in cleartext HTTP/2](docs/guides/deployment.md#opt-in-http2) supports finite responses, trailers, and uncompressed Unary gRPC. Default, uncompressed `Reply.stream` responses also support incremental output; streaming RPCs remain unsupported.
 - Terminate inbound TLS and HTTP/3 at a [reverse proxy](docs/guides/reverse-proxy.md). WebSocket and HTTP/1 trailers are unsupported; CONNECT, TRACE, and arbitrary extension methods are [non-goals](docs/design/non-goals.md).
 - Timeouts cannot forcibly interrupt arbitrary Roc computation.
 - Runtime compression is gzip; precompressed Brotli is supported, multipart byte ranges are not.
