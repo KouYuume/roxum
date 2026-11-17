@@ -1,12 +1,14 @@
-# Generated server-streaming contracts
+# Generated streaming contracts
 
 Run `python3 tools/check.py --only test-grpc-streaming` with the pinned compiler
-and Python 3.13. The check builds a mixed Unary/server-streaming service in all
+and Python 3.13. The check builds Unary, server-streaming and client-streaming services in all
 three backends and both allocator modes, then uses protoc-generated grpcio clients
 against production TCP and Unix listeners. Regenerate the committed service with
 `python3 tests/grpc-streaming/regenerate.py --write` after changing its schema.
 
-The fixture covers ordered output, zero-message success, initial/trailing metadata,
+The upload fixture checks empty and multiple input messages, fragmented and coalesced envelopes, truncated input, and rejection before client half-close.
+
+The server-streaming fixture covers ordered output, zero-message success, initial/trailing metadata,
 application failure before and after output, invalid success-as-failure status,
 message encoding/count/payload bounds, execution expiry after a message, and Unary
 coexistence. A raw HTTP/2 client releases a producer latch only after receiving
@@ -47,6 +49,5 @@ not a general throughput measurement or proof about application-retained history
 Existing allocator and HTTP/2 engine tests cover allocation faults and ownership;
 the production fixture adds generated-message and cancellation coverage.
 
-Incremental request input, client-streaming and bidirectional RPC are not enabled
-by these fixtures. Linux architecture execution is recorded by the CI matrix;
+Bidirectional RPC remains outside these fixtures. Linux architecture execution is recorded by the CI matrix;
 a local arm64 run does not establish x86_64 runtime acceptance.

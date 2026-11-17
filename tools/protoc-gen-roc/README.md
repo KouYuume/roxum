@@ -558,6 +558,5 @@ not publish a release.
 Use `wire=<path>,grpc=<integration package path>,pf=<platform path>` to generate
 typed service registration modules alongside codecs. Without these options the
 output remains platform-free. See [the integration contract](../../integrations/roxum-grpc/README.md#typed-unary-services)
-for Unary/server-streaming callbacks, limits and deadline guarantees.
-Client-streaming and bidirectional methods are rejected until their integration
-APIs are implemented.
+for Unary, server-streaming and client-streaming callbacks, limits and deadline guarantees.
+Bidirectional methods are rejected.

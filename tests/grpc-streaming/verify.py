@@ -1,4 +1,4 @@
-"""Generated server-streaming interoperability on production TCP and Unix listeners."""
+"""Generated streaming interoperability on production TCP and Unix listeners."""
 from contextlib import ExitStack
 import json
 import pathlib
@@ -11,7 +11,7 @@ import tempfile
 import grpc
 from h2.config import H2Configuration
 from h2.connection import H2Connection
-from h2.events import DataReceived, StreamEnded, StreamReset, TrailersReceived
+from h2.events import DataReceived, ResponseReceived, StreamEnded, StreamReset, TrailersReceived
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'zig-out/grpc-streaming'))
@@ -21,6 +21,83 @@ sys.path.insert(0, str(ROOT / 'tests/support'))
 from roxum_process import stop
 sys.path.insert(0, str(ROOT / "tests/grpc-unary"))
 import proxy
+
+
+def verify_upload(channel, address, unix, tls_context):
+    submit = services.UploadsStub(channel).Submit
+    for count in (0, 1, 3, 4):
+        result = submit((messages.Request(count=i) for i in range(count)), timeout=5)
+        assert result.sequence == sum(range(count)) and result.text == 'total'
+    maximum = (1 << 32) - 1
+    for increment in (0, 1, 2):
+        requests = (messages.Request(count=value) for value in (maximum - 1, increment))
+        try:
+            reply = submit(requests, timeout=5)
+        except grpc.RpcError as exc:
+            assert increment == 2 and exc.code() == grpc.StatusCode.OUT_OF_RANGE, exc
+        else:
+            assert increment < 2 and reply.sequence == maximum - 1 + increment
+    # A short nonempty mode string occupies two extra bytes for its tag and length.
+    for sizes, code in (
+        ([31], grpc.StatusCode.OK), ([32], grpc.StatusCode.OK), ([33], grpc.StatusCode.RESOURCE_EXHAUSTED),
+        ([20, 19], grpc.StatusCode.OK), ([20, 20], grpc.StatusCode.OK), ([20, 21], grpc.StatusCode.RESOURCE_EXHAUSTED),
+        ([0] * 5, grpc.StatusCode.RESOURCE_EXHAUSTED),
+    ):
+        requests = [messages.Request(mode='x' * max(0, size - 2)) for size in sizes]
+        assert [msg.ByteSize() for msg in requests] == sizes
+        try:
+            reply = submit(iter(requests), timeout=5)
+        except grpc.RpcError as exc:
+            assert exc.code() == code, exc
+        else:
+            assert code == grpc.StatusCode.OK and reply.text == 'total', sizes
+
+    body = messages.Request(mode='reject').SerializeToString()
+    rejected = b'\0' + len(body).to_bytes(4, 'big') + body
+    # Split one prefix and body, then finish it alongside another entire envelope.
+    for parts, close, expected in (
+        ([b'\0', b'\0\0\0\2\x08', b'\x02' + b'\0' * 5], True, '0'),
+        ([b'\0' * 4], True, '3'),
+        ([b'\0\0\0\0\2x'], True, '3'),
+        ([b'\0\0\0\0\1\xff'], True, '3'),
+        ([b'\x01' + b'\0' * 4], False, '12'),
+        ([b'\x02' + b'\0' * 4], False, '3'),
+        ([b'\0\0\0\0\x21'], False, '8'),
+        ([rejected], False, '7'),
+    ):
+        sock = socket.socket(socket.AF_UNIX if unix and not tls_context else socket.AF_INET)
+        if tls_context:
+            sock = tls_context.wrap_socket(sock, server_hostname='localhost')
+        with sock:
+            sock.settimeout(5)
+            sock.connect(address)
+            client = H2Connection(config=H2Configuration(header_encoding='utf-8'))
+            client.initiate_connection()
+            client.send_headers(1, [(':method', 'POST'), (':scheme', 'https' if tls_context else 'http'),
+                (':authority', 'localhost'), (':path', '/streaming.Uploads/Submit'),
+                ('content-type', 'application/grpc'), ('te', 'trailers')])
+            for index, part in enumerate(parts):
+                client.send_data(1, part, end_stream=close and index == len(parts) - 1)
+            sock.sendall(client.data_to_send())
+            statuses, output = [], bytearray()
+            ended = False
+            while not ended:
+                data = sock.recv(65536)
+                assert data, 'unexpected disconnect'
+                for event in client.receive_data(data):
+                    if isinstance(event, (ResponseReceived, TrailersReceived)):
+                        statuses.extend(v for k, v in event.headers if k == 'grpc-status')
+                    elif isinstance(event, DataReceived):
+                        output.extend(event.data)
+                    elif isinstance(event, StreamEnded):
+                        ended = True
+                sock.sendall(client.data_to_send())
+            assert statuses == [expected], (parts, statuses)
+            if expected == '0':
+                reply = messages.Update(sequence=2, text='total').SerializeToString()
+                assert output == b'\0' + len(reply).to_bytes(4, 'big') + reply
+            else:
+                assert not output
 
 
 def verify(executable, unix, proxied=False):
@@ -47,6 +124,7 @@ def verify(executable, unix, proxied=False):
                     return grpc.secure_channel(target, credentials, options=options) if proxied else grpc.insecure_channel(target, options=options)
                 with channel_for_target() as channel:
                     grpc.channel_ready_future(channel).result(timeout=10)
+                    verify_upload(channel, address, unix, tls_context)
                     stub = services.UpdatesStub(channel)
                     def stream(count, mode='', metadata=()):
                         call = stub.Watch(messages.Request(count=count, mode=mode), timeout=5, metadata=metadata)
@@ -158,7 +236,7 @@ def verify(executable, unix, proxied=False):
             finally:
                 stop(process)
                 process.stdout.close()
-    print('PASS generated server-streaming: messages, metadata, terminal errors, limits, expiry and Unary coexistence ' + ('TLS proxy -> ' if proxied else '') + ('Unix' if unix else 'TCP'))
+    print('PASS generated client/server streaming: messages, metadata, terminal errors, limits, expiry and Unary coexistence ' + ('TLS proxy -> ' if proxied else '') + ('Unix' if unix else 'TCP'))
 
 
 if __name__ == '__main__':

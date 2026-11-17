@@ -6,3 +6,4 @@ service Updates {
   rpc Echo(Request) returns (Update);
   rpc Watch(Request) returns (stream Update);
 }
+service Uploads { rpc Submit(stream Request) returns (Update); }

@@ -5,6 +5,8 @@ import pf.Router
 import pf.Server
 import pf.RateCounter
 import pf.Sleep
+import grpc.GrpcClientStream
+import service.UploadsService
 import service.UpdatesService
 import service.Request
 import service.Update
@@ -38,7 +40,25 @@ init! = |{}| {
 	})
 }
 
-routes = UpdatesService.register(
+routes = UploadsService.register(base_routes, { call_submit!: submit! }, { ..GrpcServerStream.defaults, messages: 4, request_bytes: 32, payload_bytes: 40 }, ProtobufWire.default_limits)
+
+submit! = |_model, _metadata| Ok(
+	GrpcClientStream.consume(
+		0.U32,
+		|sum, Request.(request)| {
+			if request.mode == "reject" {
+				return Err(GrpcUnary.failure(GrpcStatus.Code.PermissionDenied, "denied"))
+			}
+			if request.count > 4_294_967_295.U32 - sum {
+				return Err(GrpcUnary.failure(GrpcStatus.Code.OutOfRange, "total exceeds uint32"))
+			}
+			Ok(sum + request.count)
+		},
+		|sum| Ok(GrpcUnary.response(Update.{ sequence: sum, text: "total" })),
+	),
+)
+
+base_routes = UpdatesService.register(
 	Router.new,
 	{ call_echo!: echo!, call_watch!: watch! },
 	{
