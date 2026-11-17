@@ -23,12 +23,15 @@ pub const Sink = struct {
     write: *const fn (context: *anyopaque, bytes: []const u8) bool,
     /// Aborts the body without writing a successful terminator.
     abort: *const fn (context: *anyopaque) void,
+    finish: ?*const fn (*anyopaque, []const abi.HttpResponseHeader) u8 = null,
+    route: ?*const fn (*anyopaque, []const u8) void = null,
 };
 
 pub const Active = struct {
     token: u64,
     sink: Sink,
     started: bool = false,
+    finished: bool = false,
 };
 
 /// The active sink of code off a fiber, as in tests.
@@ -56,9 +59,10 @@ pub fn deactivate() void {
 
 /// `content_length` is the body's length, or the largest `U64` when it is
 /// not known. With `gzip_body`, the body is gzip-compressed as it goes.
-pub fn hostedStreamStart(response: abi.HttpResponse, keep_alive_milliseconds: u64, keep_alive_bytes: abi.RocListWith(u8, false), ends_on_drain: bool, content_length: u64, gzip_body: bool) callconv(std.builtin.CallingConvention.c) u64 {
+pub fn hostedStreamStart(response: abi.HttpResponse, keep_alive_milliseconds: u64, keep_alive_bytes: abi.RocListWith(u8, false), ends_on_drain: bool, content_length: u64, gzip_body: bool, route: abi.RocStr) callconv(std.builtin.CallingConvention.c) u64 {
     var roc_host = rocHost();
     defer response.decref(&roc_host);
+    defer route.decref(&roc_host);
     defer keep_alive_bytes.decref(&roc_host);
     const place = slot();
     const current = &(place.* orelse return 0);
@@ -69,6 +73,7 @@ pub fn hostedStreamStart(response: abi.HttpResponse, keep_alive_milliseconds: u6
     var token = next_token.fetchAdd(1, std.builtin.AtomicOrder.monotonic);
     if (token == 0) token = next_token.fetchAdd(1, std.builtin.AtomicOrder.monotonic);
     current.token = token;
+    if (current.sink.route) |set_route| set_route(current.sink.context, route.asSlice());
     if (!current.sink.start(current.sink.context, &response, keep_alive_milliseconds, keep_alive_bytes.items(), ends_on_drain, if (content_length == std.math.maxInt(u64)) null else content_length, gzip_body)) return 0;
     return current.token;
 }
@@ -84,8 +89,19 @@ pub fn hostedStreamWrite(token: u64, bytes: abi.RocListWith(u8, false)) callconv
 pub fn write(token: u64, bytes: []const u8) bool {
     if (token == 0) return false;
     const current = slot().* orelse return false;
-    if (current.token != token) return false;
+    if (current.token != token or current.finished) return false;
     return current.sink.write(current.sink.context, bytes);
+}
+
+pub fn hostedStreamFinish(token: u64, trailers: abi.RocList(abi.HttpResponseHeader)) callconv(std.builtin.CallingConvention.c) u8 {
+    var roc_host = rocHost();
+    defer abi.decrefListOfHttpResponseHeader(trailers, &roc_host);
+    const current = &(slot().* orelse return 1);
+    if (token == 0 or current.token != token or !current.started or current.finished) return 4;
+    const finish = current.sink.finish orelse return 1;
+    const result = finish(current.sink.context, trailers.items());
+    if (result == 0) current.finished = true;
+    return result;
 }
 
 pub fn abort(token: u64) void {
@@ -114,7 +130,7 @@ test "stream capabilities reject zero, repeated starts, and previous requests" {
         fn begin() u64 {
             var response = std.mem.zeroes(abi.HttpResponse);
             response.status = 200;
-            return hostedStreamStart(response, 0, abi.RocListWith(u8, false).empty(), false, 0, false);
+            return hostedStreamStart(response, 0, abi.RocListWith(u8, false).empty(), false, 0, false, std.mem.zeroes(abi.RocStr));
         }
     };
     const allocator = @import("../allocator/host_allocator.zig");
@@ -130,6 +146,8 @@ test "stream capabilities reject zero, repeated starts, and previous requests" {
     try std.testing.expect(!write(0, "before start"));
     const first = Mock.begin();
     try std.testing.expect(first != 0);
+    try std.testing.expectEqual(@as(u8, 1), hostedStreamFinish(first, std.mem.zeroes(abi.RocList(abi.HttpResponseHeader))));
+    try std.testing.expectEqual(@as(u8, 4), hostedStreamFinish(0, std.mem.zeroes(abi.RocList(abi.HttpResponseHeader))));
     try std.testing.expectEqual(@as(u64, 0), Mock.begin());
     try std.testing.expect(write(first, "active stream"));
     deactivate();

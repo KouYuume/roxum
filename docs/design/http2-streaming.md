@@ -1,7 +1,7 @@
 # HTTP/2 streaming contract
 
-Status: the internal output API and production `Reply.stream` writer are implemented.
-Incremental input, explicit terminal metadata and the coordination API below remain
+Status: production `Reply.stream` output, explicit terminal metadata and execution
+expiry trailers are implemented. Incremental input and the coordination API below remain
 the implementation target for [0.3](../plans/grpc-streaming-0.3.md).
 
 ## Production callback writer
@@ -20,22 +20,54 @@ check the same readiness predicate, with the connection generation, stream lease
 and wait serial protecting against stale wakes and slot reuse. Socket readiness
 and WINDOW_UPDATE can resume output independently of incoming request EOF.
 
-Callback return waits for accepted DATA to drain, then queues an empty terminal
-HEADERS section. The event loop retains its existing terminal-output deadline
-and access-log consumption tracking. `maximum_streams` counts active callback
-writers; excess writers receive 503. HEAD and bodyless statuses send only headers
+Callback return implicitly completes with empty trailers unless the writer already
+finished explicitly. Both paths drain accepted DATA and wait until the terminal
+HEADERS have been consumed by socket writes. Protocol closure alone is not
+completion: nghttp2 may close a stream before those bytes leave the output cursor.
+The event loop retains its terminal-output deadline and access-log consumption
+tracking. Route metadata is recorded before starting output. `maximum_streams`
+counts active callback writers; excess writers receive 503. HEAD and bodyless statuses send only headers
 and do not enter the callback. Normal cleanup and abandoned fibers release the
 writer's quota once.
 
 This callback API currently supports default writer options and uncompressed
 output only. Keep-alive payloads, `ends_on_drain`, known-length file writes and
-streaming trailers reset the attempted stream. Request input is still bounded
+trailers attached with `Reply.with_trailers` remain unsupported for callback
+writers. Use `ResponseWriter.finish!` for streamed trailers; unsupported writer
+options reset the attempted stream. Request input is still bounded
 and collected before reads; reading after response commit is unsupported.
-Execution expiry, including a previously registered finite expiry response,
-resets committed streaming output instead of replacing its headers. A callback
-crash resets its stream. Graceful drain keeps the existing process deadline;
-there is no streaming-specific terminal status yet. Explicit finish, integration
-expiry trailers and completion-hook semantics remain the contracts below.
+
+`ResponseWriter.finish!(writer, trailers)` validates and copies bounded fields,
+selects normal completion once, and waits for socket consumption. Invalid fields
+leave the writer open for retry; a second finish or writes after finish fail.
+HTTP/1 returns `Unavailable`. Header names are normalized to lowercase and the
+finite-trailer field/count/byte rules also apply here. Field storage is allocated
+only for registered or selected terminals and charged to the connection/worker
+budgets; idle connections do not reserve a full field table per stream.
+
+`RequestExecution.limit_with_trailers!(duration, trailers)` atomically registers
+expiry fields and tightens the metadata-anchored deadline before initial output.
+It replaces any finite expiry snapshot; a later finite registration replaces it.
+Invalid fields or allocation failure do not alter the previous registration.
+On expiry after headers, Roc work is abandoned while the serialized owner drains
+accepted DATA and submits the copied terminal fields. Before headers, or without
+registered expiry trailers, expiry resets the stream. A finite expiry response
+cannot replace committed streaming headers.
+
+The first accepted finish or expiry selects the terminal. Normal selection stops
+execution expiry, not the response-write timeout. Reset, transport failure and
+forced shutdown prevent further delivery. A callback crash resets its stream.
+Graceful drain permits completion until the process deadline; forced drain exits
+with status 1 and releases process resources without running application cleanup.
+No protocol-specific status is manufactured by the host.
+
+Successful `finish!` permits immediate result handling after terminal consumption,
+but does not establish a new execution lifetime. Further waits can be cancelled
+by normal stream closure; complete required application I/O before calling finish.
+`AfterHandler` middleware still runs before initial output, not at completion.
+Held native permits and writer quota are released once during request cleanup;
+normal callbacks remain alive through terminal consumption, whereas cancellation
+abandons them. Access logging retains the selected timeout/failure outcome.
 
 ## Engine output
 
@@ -85,32 +117,28 @@ response-body buffer and no public configuration change in this slice.
 
 ## Target request-scoped API and duplex coordination
 
-The following Roc signatures specify the target operations; names and module
-placement must be checked with the [public API layout](public-api-layout.md)
+The following signatures specify target incremental-input/duplex operations.
+Names and module placement must be checked with the [public API layout](public-api-layout.md)
 when exposing them. `Reader` and `Writer` are opaque request capabilities,
 never stream IDs or borrowed engine pointers. `Bytes` denotes `List(U8)`.
 
 ```roc
 read! : Reader => Result([Chunk(Bytes), End], StreamErr)
 write! : Writer, Bytes => Result({}, StreamErr)
-finish! : Writer, List(Header) => Result({}, StreamErr)
 try_read! : Reader => Result([Chunk(Bytes), End, Pending], StreamErr)
 try_write! : Writer, Bytes => Result([Accepted, Pending], StreamErr)
 wait! : Reader, Writer, [Read, Write, Both] => Result([Readable, Writable, BothReady], StreamErr)
-limit_with_trailers! : U64, List(Header) => Result({}, LimitErr)
 ```
 
-The last operation belongs to request execution and takes a nanosecond duration
-anchored at initial metadata, matching existing execution limits. It validates
-and copies expiry trailers before committing streaming headers. Capability
-operations distinguish closed/cancelled requests, invalid state, rejected input,
-limit exhaustion and transport failure; Unavailable covers unsupported transports.
+The implemented completion and expiry operations above remain request-scoped.
+The target read/write capabilities distinguish closed/cancelled requests, invalid
+state, rejected input, limit exhaustion and transport failure; Unavailable covers unsupported transports.
 
 Blocking read/write are conveniences over the nonblocking operations and a
 request-scoped wait. A successful write means bounded ownership transfer;
-finish waits through transport consumption of terminal output. A callback
-return does not implicitly select a gRPC status: the integration must finish
-explicitly. Returning with open output is an incomplete response and resets it.
+explicit finish waits through transport consumption of terminal output. The gRPC
+integration must finish explicitly with its status; generic callback return only
+provides an empty terminal section, not a successful gRPC status.
 
 Duplex handlers use a coordination loop: try both interested directions, then
 wait for either to progress. A pending write retains no caller bytes; the loop
@@ -174,20 +202,9 @@ consumed, reset the unfinished request side rather than waiting indefinitely for
 peer EOF. The lease remains reserved until protocol closure. Both orders keep
 their own input/write deadlines.
 
-Before committing headers, the integration registers bounded generic terminal
-fields for execution expiry. The host copies these fields; gRPC owns the status
-choice. Expiry after partial output cancels Roc work, drains accepted DATA and
-submits that terminal once. It never runs abandoned code or replaces headers with
-the finite expiry-response snapshot. The response-write deadline bounds this
-drain; if terminal delivery is impossible, reset, then close the connection if
-the socket cannot deliver control output.
-
-The serialized owner arbitrates races: transport failure, peer reset and forced
-shutdown prevent further output; otherwise the first accepted normal finish or
-execution expiry claims terminal selection. Once expiry wins, a later normal
-finish cannot replace it. Once normal finish wins, expiry cannot enqueue another
-terminal. Write timeout can abort either selection. Graceful shutdown allows
-existing streams to finish only until the process drain deadline.
+The implemented terminal-selection and failure rules above also apply to duplex
+execution. The integration chooses gRPC status fields; the host owns their
+ordered delivery and the response-write deadline.
 
 Response middleware runs before initial headers. Completion hooks, access logs
 and held permits finalize once after terminal consumption or cancellation,

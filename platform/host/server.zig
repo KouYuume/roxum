@@ -487,6 +487,8 @@ fn RequestFiber(comptime Environment: type) type {
                 request.http2_stream_head = null;
                 request.http2_stream_counted = false;
                 request.http2_output_waiting = false;
+                request.http2_completion_waiting = false;
+                request.http2_stream_finished = false;
                 request.http2_body = .{
                     .whole_limit = shared.limits.maximum_body_bytes,
                     .streamed_limit = shared.limits.maximum_streamed_body_bytes,
@@ -527,6 +529,8 @@ fn RequestFiber(comptime Environment: type) type {
         http2_stream_head: ?@import("http2/deferred_response.zig").Response = null,
         http2_stream_counted: bool = false,
         http2_output_waiting: bool = false,
+        http2_completion_waiting: bool = false,
+        http2_stream_finished: bool = false,
         http2_semantics: bridge.ResponseRequestSemantics = bridge.ResponseRequestSemantics.regular,
         http2_body: struct {
             offset: usize = 0,
@@ -622,7 +626,13 @@ fn RequestFiber(comptime Environment: type) type {
             const protocol = item.http2 orelse unreachable;
             const ticket = self.dispatch.http2.?;
             const execution = protocol.execution(ticket) orelse unreachable;
-            execution.waiter = if (parked) .{ .target = target, .serial = target.wait_serial, .body_limit = self.http2_body.waiting_limit, .output = self.http2_output_waiting } else null;
+            execution.waiter = if (parked) .{ .target = target, .serial = target.wait_serial, .body_limit = self.http2_body.waiting_limit, .output = self.http2_output_waiting, .completion = self.http2_completion_waiting } else null;
+            if (self.http2_completion_waiting and execution.finishing and !protocol.failed and !protocol.closed and
+                (execution.response_complete or protocol.terminals[ticket.slot].selection == @import("http2/terminal_fields.zig").Selection.normal))
+            {
+                if (parked and execution.response_complete) fiber_wait.wake(target, target.wait_serial);
+                return;
+            }
             if (protocol.streams.leases.runningStream(ticket) == null) {
                 if (parked) {
                     fiber_wait.wakeStopped(target, target.wait_serial, fiber.Stop.client_gone);
@@ -693,8 +703,8 @@ fn RequestFiber(comptime Environment: type) type {
                 field_count += 1;
             }
             if (bodyless or (status == 503 and !self.http2_stream_counted)) {
-                // Route metadata arrives when rocHandle returns. Keep this finite
-                // head unsubmitted so completion cannot log an unnamed route.
+                // Bodyless and quota replies skip the callback and use the finite
+                // response cleanup path after rocHandle returns.
                 self.http2_stream_head = @import("http2/deferred_response.zig").Response.init(protocol.budget.allocator(), protocol.owner.engine, id, status, if (bodyless) fields[0..field_count] else &.{}, "", &.{}) catch return false;
             } else {
                 protocol.owner.engine.beginStreamingResponse(id, status, fields[0..field_count]) catch return false;
@@ -713,24 +723,28 @@ fn RequestFiber(comptime Environment: type) type {
 
         fn writeHttp2Stream(ptr: *anyopaque, bytes: []const u8) bool {
             const self: *Self = @ptrCast(@alignCast(ptr));
-            if (!self.http2_stream_started) return false;
+            if (!self.http2_stream_started or self.http2_stream_finished) return false;
             const ok = self.writeHttp2Bytes(bytes);
             if (!ok) {
                 self.http2_stream_started = false;
-                const cancelled = blk: {
-                    const item = &self.shared.handoff.connections[self.dispatch.slot];
-                    item.lock.lock();
-                    defer item.lock.unlock();
-                    if (item.generation != self.dispatch.generation) break :blk true;
-                    const protocol = item.http2 orelse break :blk true;
-                    break :blk protocol.failed or protocol.closed or protocol.streams.leases.runningStream(self.dispatch.http2.?) == null;
-                };
-                if (cancelled) {
-                    fiber.current().?.stop.store(fiber.Stop.client_gone, std.builtin.AtomicOrder.release);
-                    fiber_wait.cancelCurrent();
-                }
+                self.stopHttp2IfCancelled();
             }
             return ok;
+        }
+
+        fn stopHttp2IfCancelled(self: *Self) void {
+            const cancelled = blk: {
+                const item = &self.shared.handoff.connections[self.dispatch.slot];
+                item.lock.lock();
+                defer item.lock.unlock();
+                if (item.generation != self.dispatch.generation) break :blk true;
+                const protocol = item.http2 orelse break :blk true;
+                break :blk protocol.failed or protocol.closed or protocol.streams.leases.runningStream(self.dispatch.http2.?) == null;
+            };
+            if (cancelled) {
+                fiber.current().?.stop.store(fiber.Stop.client_gone, std.builtin.AtomicOrder.release);
+                fiber_wait.cancelCurrent();
+            }
         }
 
         fn writeHttp2Bytes(self: *Self, bytes: []const u8) bool {
@@ -781,32 +795,87 @@ fn RequestFiber(comptime Environment: type) type {
             if (protocol.failed or protocol.closed) return false;
             const id = protocol.streams.leases.runningStream(self.dispatch.http2.?) orelse return false;
             head.submit(protocol.owner.engine, id) catch return false;
+            std.debug.assert(protocol.streams.leases.commitResponse(self.dispatch.http2.?));
+            protocol.streams.clearExpiryResponse(self.dispatch.http2.?);
+            protocol.terminals[self.dispatch.http2.?.slot].deinit();
             protocol.owner.runnable = true;
             self.thread.io.driveHttp2Output(self.dispatch);
             return true;
         }
 
+        fn setHttp2Route(ptr: *anyopaque, route: []const u8) void {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            const item = &self.shared.handoff.connections[self.dispatch.slot];
+            item.lock.lock();
+            defer item.lock.unlock();
+            const protocol = item.http2 orelse return;
+            const ticket = self.dispatch.http2.?;
+            if (protocol.streams.leases.runningStream(ticket) == null) return;
+            if (protocol.access[ticket.slot]) |*entry| entry.route.set(route);
+        }
+
         fn finishHttp2Stream(self: *Self) bool {
+            if (self.http2_stream_finished) return true;
+            return finishHttp2Writer(self, &.{}) == 0;
+        }
+
+        fn finishHttp2Writer(ptr: *anyopaque, trailers: []const abi.HttpResponseHeader) u8 {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            const result = self.finishHttp2WriterImpl(trailers);
+            if (result == 3) {
+                self.http2_stream_started = false;
+                self.stopHttp2IfCancelled();
+            }
+            return result;
+        }
+
+        fn finishHttp2WriterImpl(self: *Self, trailers: []const abi.HttpResponseHeader) u8 {
+            if (!self.http2_stream_started or self.http2_stream_finished) return 4;
+            if (trailers.len > 64) return 2;
+            var fields: [64]@import("http2/engine.zig").Header = undefined;
+            for (trailers, 0..) |header, index| fields[index] = .{ .name = header.name.asSlice(), .value = header.value.asSlice() };
+            {
+                const item = &self.shared.handoff.connections[self.dispatch.slot];
+                item.lock.lock();
+                defer item.lock.unlock();
+                const protocol = item.http2 orelse return 3;
+                protocol.expire(net.monotonicNanoseconds() catch return 3);
+                if (protocol.failed or protocol.closed) return 3;
+                var copied = @import("http2/terminal_fields.zig").Fields.init(protocol.budget.allocator(), protocol.owner.engine, fields[0..trailers.len]) catch |err| return switch (err) {
+                    error.InvalidHeaders, error.LimitExceeded => 2,
+                    else => 3,
+                };
+                const selected_at = net.monotonicNanoseconds() catch {
+                    copied.deinit();
+                    return 3;
+                };
+                protocol.expire(selected_at);
+                protocol.selectPreparedCompletion(self.dispatch.http2.?, copied) catch |err| return switch (err) {
+                    error.InvalidHeaders, error.LimitExceeded => 2,
+                    error.InvalidState => 4,
+                    else => 3,
+                };
+                self.thread.io.driveHttp2Output(self.dispatch);
+            }
+            self.http2_completion_waiting = true;
+            defer self.http2_completion_waiting = false;
             while (true) {
-                const finished = blk: {
+                const done = blk: {
                     const item = &self.shared.handoff.connections[self.dispatch.slot];
                     item.lock.lock();
                     defer item.lock.unlock();
-                    const protocol = item.http2 orelse return false;
-                    const ticket = self.dispatch.http2.?;
-                    protocol.expire(net.monotonicNanoseconds() catch return false);
-                    if (protocol.failed or protocol.closed) return false;
-                    const id = protocol.streams.leases.runningStream(ticket) orelse return false;
-                    protocol.owner.engine.finishResponse(id, &.{}) catch |err| switch (err) {
-                        error.InvalidState => break :blk false,
-                        else => return false,
-                    };
-                    protocol.owner.runnable = true;
-                    self.thread.io.driveHttp2Output(self.dispatch);
-                    break :blk true;
+                    const protocol = item.http2 orelse return 3;
+                    const execution = protocol.execution(self.dispatch.http2.?) orelse return 3;
+                    if (execution.response_complete) break :blk true;
+                    if (protocol.failed or protocol.closed or protocol.terminals[self.dispatch.http2.?.slot].selection != @import("http2/terminal_fields.zig").Selection.normal) return 3;
+                    break :blk false;
                 };
-                if (finished) return true;
-                self.waitHttp2Output();
+                if (done) {
+                    self.http2_stream_finished = true;
+                    return 0;
+                }
+                _ = fiber_wait.waitSocket(-1, 0, std.math.maxInt(u64)) orelse unreachable;
+                fiber_wait.stopIfStreamEnds();
             }
         }
 
@@ -825,6 +894,27 @@ fn RequestFiber(comptime Environment: type) type {
             if (self.heap) |*heap| try environment.releaseStream(heap) else try environment.resetRequest();
             self.heap = null;
             self.thread.io.finishHttp2(self.dispatch, if (failed) access_log.Outcome.encode_failed else null);
+        }
+
+        fn requestExecutionTrailers(ptr: *anyopaque, duration: u64, trailers: []const abi.HttpResponseHeader) u8 {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            if (trailers.len > 64) return 2;
+            var fields: [64]@import("http2/engine.zig").Header = undefined;
+            for (trailers, 0..) |header, index| fields[index] = .{ .name = header.name.asSlice(), .value = header.value.asSlice() };
+            const item = &self.shared.handoff.connections[self.dispatch.slot];
+            item.lock.lock();
+            defer item.lock.unlock();
+            const protocol = item.http2 orelse return 3;
+            const ticket = self.dispatch.http2.?;
+            protocol.expire(net.monotonicNanoseconds() catch return 3);
+            if (protocol.failed or protocol.closed) return 3;
+            protocol.registerExpiryTrailers(ticket, duration, fields[0..trailers.len]) catch |err| return switch (err) {
+                error.InvalidHeaders, error.LimitExceeded => 2,
+                error.InvalidState => 4,
+                else => 3,
+            };
+            protocol.expire(net.monotonicNanoseconds() catch return 3);
+            return if (protocol.streams.leases.runningStream(ticket) == null) 3 else 0;
         }
 
         fn requestExecutionResponse(ptr: *anyopaque, duration: u64, response: bridge.HttpResponse, roc_host: *bridge.RocHost) @import("effect/request_execution.zig").Result {
@@ -856,6 +946,7 @@ fn RequestFiber(comptime Environment: type) type {
                 return Result.closed;
             }
             protocol.streams.clearExpiryResponse(ticket);
+            protocol.terminals[ticket.slot].deinit();
             protocol.streams.entries[ticket.slot].expiry_response = copied;
             protocol.expire(net.monotonicNanoseconds() catch diagnostics.fatal("monotonic clock read failed"));
             return if (protocol.streams.leases.runningStream(ticket) == null) Result.closed else Result.installed;
@@ -977,9 +1068,9 @@ fn RequestFiber(comptime Environment: type) type {
             self.http2_semantics = semantics;
             const writer = @import("effect/response_writer.zig");
             const locals = fiber.currentLocals() orelse unreachable;
-            locals.request_execution = .{ .context = self, .apply = requestExecution, .limit_response = requestExecutionResponse };
+            locals.request_execution = .{ .context = self, .apply = requestExecution, .limit_response = requestExecutionResponse, .limit_trailers = requestExecutionTrailers };
             defer locals.request_execution = null;
-            writer.activate(.{ .context = self, .start = startHttp2Stream, .write = writeHttp2Stream, .abort = abortHttp2Stream });
+            writer.activate(.{ .context = self, .start = startHttp2Stream, .write = writeHttp2Stream, .abort = abortHttp2Stream, .finish = finishHttp2Writer, .route = setHttp2Route });
             const answered = bridge.rocHandle(self.shared.model_root.retainForHandle(), request);
             writer.deactivate();
             if (self.http2_stream_attempted) {
@@ -1014,6 +1105,7 @@ fn RequestFiber(comptime Environment: type) type {
                 }
             }
             try protocol.owner.respondOwnedWithDebug(&protocol.streams, ticket, answered.response, &self.roc_host, semantics, true);
+            protocol.terminals[ticket.slot].deinit();
             protocol.deadlines[ticket.slot] = (net.monotonicNanoseconds() catch 0) +| protocol.write_timeout;
             protocol.writing[ticket.slot] = true;
             return false;

@@ -339,7 +339,7 @@ choose_variant! = |root, path, entry, variants, accepted| {
 stream! : Http.Request, Http.Response, U64, U64, Bool => Http.Response
 stream! = |request, response, start, length, gzip| {
 	head = { ..response, body: Http.ResponseBody.Empty }
-	token = HostStream.start!(head, 0, [], Bool.False, if gzip { 18_446_744_073_709_551_615 } else { length }, gzip)
+	token = HostStream.start!(head, 0, [], Bool.False, if gzip { 18_446_744_073_709_551_615 } else { length }, gzip, "")
 	if token != 0 and request.method != Http.Method.HEAD and length != 0 {
 		_ = HostFiles.send!(token, start, length)
 	}

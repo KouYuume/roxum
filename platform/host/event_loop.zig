@@ -1152,6 +1152,7 @@ pub const Loop = struct {
         protocol.expire(self.now);
         if (protocol.failed) return self.close(slot);
         for (0..4) |_| {
+            protocol.advanceTerminals();
             const progress = protocol.owner.step() catch return self.close(slot);
             if (protocol.failed) return self.close(slot);
             protocol.recordCompleted();

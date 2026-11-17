@@ -1,4 +1,5 @@
 import HostStream
+import Http
 
 ## Writes a response body as it goes, for the function given to
 ## `Reply.stream`. The handle is opaque and valid only inside that function.
@@ -38,6 +39,24 @@ ResponseWriter :: U64.{
 			Ok({})
 		} else {
 			Err(StreamClosed)
+		}
+
+	## Completes HTTP/2 output with trailers, after accepted DATA. Waits until
+	## the terminal frame is written to the socket; this is not peer receipt.
+	## A successful finish closes this writer. Repeated finish or later writes
+	## fail. Invalid trailers leave completion available for retry. HTTP/1 is
+	## unavailable. Cancellation stops the request without returning.
+	## Complete required application I/O before finish. Immediate result handling
+	## can run after success, but further waits can be cancelled by normal stream
+	## closure; finish does not extend the request's execution lifetime.
+	finish! : ResponseWriter, List(Http.ResponseHeader) => Try({}, [Unavailable, InvalidState, InvalidTrailers, StreamClosed])
+	finish! = |ResponseWriter.(token), trailers|
+		match HostStream.finish!(token, trailers) {
+			0 => Ok({})
+			1 => Err(Unavailable)
+			2 => Err(InvalidTrailers)
+			3 => Err(StreamClosed)
+			_ => Err(InvalidState)
 		}
 
 	## The writer for a token from `HostStream.start!`. Platform code only.

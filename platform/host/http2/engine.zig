@@ -33,6 +33,7 @@ const Slot = struct {
     headers: usize = 0,
     received: usize = 0,
     rejected: bool = false,
+    peer_reset: bool = false,
     responded: bool = false,
     streaming: bool = false,
     streaming_headers_sent: bool = false,
@@ -59,6 +60,7 @@ pub const Engine = struct {
     failed: bool = false,
     /// Valid during the closed observer callback.
     close_error: u32 = 0,
+    close_peer_reset: bool = false,
 
     pub fn create(allocator: std.mem.Allocator, limits: Limits, observer: Observer) Error!*Engine {
         if (limits.concurrent_streams == 0 or limits.concurrent_streams > 16) return error.LimitExceeded;
@@ -325,7 +327,7 @@ pub const Engine = struct {
         try self.submitTrailers(slot, trailers);
     }
 
-    fn validateTrailers(self: *const Engine, trailers: []const Header) Error!void {
+    pub fn validateTrailers(self: *const Engine, trailers: []const Header) Error!void {
         if (trailers.len > 64) return error.LimitExceeded;
         var total: usize = 0;
         for (trailers) |header| {
@@ -459,6 +461,9 @@ fn dataReceived(_: ?*c.nghttp2_session, _: u8, id: i32, data: [*c]const u8, leng
 }
 fn frameReceived(_: ?*c.nghttp2_session, frame: [*c]const c.nghttp2_frame, user: ?*anyopaque) callconv(std.builtin.CallingConvention.c) c_int {
     const self = engine(user);
+    if (frame.*.hd.type == c.NGHTTP2_RST_STREAM) {
+        if (self.find(frame.*.hd.stream_id)) |slot| slot.peer_reset = true;
+    }
     if (frame.*.hd.type == c.NGHTTP2_HEADERS and frame.*.headers.cat == c.NGHTTP2_HCAT_REQUEST) {
         if (self.observer.headers_finished) |finished| finished(self.observer.context, @fromBackingInt(@intCast(frame.*.hd.stream_id)));
         if (self.find(frame.*.hd.stream_id)) |slot| {
@@ -492,6 +497,7 @@ fn streamClosed(_: ?*c.nghttp2_session, id: i32, error_code: u32, user: ?*anyopa
     const slot = self.find(id) orelse return 0;
     if (slot.response) |bytes| self.memory.release(bytes.ptr);
     if (slot.final_bytes) |bytes| self.memory.allocator().free(bytes);
+    self.close_peer_reset = slot.peer_reset;
     slot.* = .{};
     self.close_error = error_code;
     self.observer.closed(self.observer.context, @fromBackingInt(@intCast(id)));
