@@ -200,7 +200,7 @@ Each way has its own limit in `Server.Limits`:
 | | handler | limit | time limit (`Server.Timeouts.request_body_milliseconds`, 30 s) |
 |---|---|---|---|
 | whole | `Handler.pure`, `stateful`, `effectful`, `static` | `maximum_body_bytes`, 2 MiB | the whole body |
-| in parts | `Handler.streaming` | `maximum_streamed_body_bytes`, `Server.BodyLimit.Unlimited` | each wait for bytes |
+| in parts | `Handler.streaming` | `maximum_streamed_body_bytes`, `Server.BodyLimit.Unlimited` | HTTP/1: each wait for bytes; HTTP/2: entire input from metadata completion |
 
 A body past its limit is answered with `413`; a body whose `Content-Length` is over the limit fails at the first
 read, before `100 Continue`. A streaming handler holds only the part it is given, so an upload of any size takes
@@ -225,11 +225,11 @@ upload = Handler.streaming(Handler.Streaming.{
 - `abort!`, which may be left out, runs when the request ends before `done!`: the client disconnected or sent an invalid body
   (`BadRequest`), the body passed its limit (`TooLarge`), the body timeout passed (`TimedOut`), a host failure
   (`Failed`), or a stage or `chunk!` rejected it (`Rejected`). The platform answers with the matching status. It
-  does not run if the handler crashes.
+  does not run after a handler crash or an HTTP/2 transport reset, timeout or disconnect.
 
 `AfterBody` stages do not run for a streaming handler: there is no whole body to give them.
 
-Unless the client sent `Expect: 100-continue`, the host first reads a `Content-Length` body of up to 64 KiB, or the first
+On HTTP/1, unless the client sent `Expect: 100-continue`, the host first reads a `Content-Length` body of up to 64 KiB, or the first
 64 KiB of a chunked body ([Middleware](middleware.md#the-body)). If the connection is cut during that read, no Roc code
 runs: neither `begin!` nor `abort!` is called.
 

@@ -19,7 +19,7 @@ UTF-8 strings, and native `F32`/`F64` values. Its `read_<type>` and `write_<type
 functions use Protobuf type names (for example `read_sint32`, `write_double`),
 thread the same reader/writer, and do not read or write field tags. The four
 wire-native types continue to use `ProtobufWire` directly. See the generator's
-[scalar representation contract](../../tools/protoc-gen-roc/README.md#scalar-representation)
+[scalar representation contract](../../tools/protoc-gen-roc/CODECS.md#scalar-representation)
 for truncation, UTF-8, signed-zero, and NaN semantics. Message composition,
 presence, enums, repeated fields, maps, and merge rules remain schema-layer work.
 
@@ -53,7 +53,7 @@ loops and an explicit group stack rather than recursive group parsing.
 | `materialized_bytes` | 8 MiB | Cumulative byte payloads returned by `read_bytes`, plus explicit caller reservations |
 
 All limits allow equality and zero. `reserve(reader, entries, materialized_bytes)`
-charges additional logical storage before allocation. A future schema decoder
+charges additional logical storage before allocation. Schema decoders
 must charge collection entries and any storage not already charged by
 `read_bytes`; the raw primitives cannot infer those allocations. Skipping unknown
 bytes and entering messages do not copy or charge their payload as materialized

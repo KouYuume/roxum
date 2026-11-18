@@ -59,13 +59,8 @@ not new complete release-suite runs.
 
 ## Capability boundary
 
-Input is bounded and collected through EOF before body bytes are delivered.
-BeforeBody can run earlier; ordinary body handlers cannot. HTTP/2 response writers,
-file streams, incremental receive credit and full-duplex exchange remain later work.
-The gRPC probe neither generates codecs nor implements grpc-timeout parsing,
-service registration, compression or single-HEADERS trailers-only replies.
-TLS/proxy interoperability belongs to the Unary integration gate, not this gate.
-
-See the [gRPC plan](grpc.md) for codec, generated-service, and Unary acceptance.
-
-Protobuf and gRPC status policy remain outside the host.
+This milestone tested finite input collected through EOF, metadata dispatch before
+EOF and finite output with trailers. Its fixed-byte gRPC probe exercised the wire
+transport. See the [gRPC milestones](grpc.md) for generated services and TLS proxy
+coverage, and [0.3 streaming acceptance](grpc-streaming-0.3.md) for incremental
+credit, writers and full-duplex exchange.
