@@ -2,6 +2,7 @@
 import argparse
 from pathlib import Path
 import sys
+import threading
 
 
 def verify(target, bindings):
@@ -10,7 +11,8 @@ def verify(target, bindings):
     import service_pb2
     import service_pb2_grpc
     with grpc.insecure_channel(target, options=(('grpc.enable_retries', 0), ('grpc.enable_http_proxy', 0))) as channel:
-        call = service_pb2_grpc.GreeterStub(channel).Greet
+        greeter = service_pb2_grpc.GreeterStub(channel)
+        call = greeter.Greet
         response, completed = call.with_call(service_pb2.Greeting(name='Roc'), timeout=5,
                                              metadata=(('request-bin', b'\x00\xff'), ('authorization', 'example-token')))
         assert response.greeting == 'Hello Roc'
@@ -25,10 +27,25 @@ def verify(target, bindings):
         else:
             raise AssertionError('empty name accepted')
         assert call(service_pb2.Greeting(name='again'), timeout=5).greeting == 'Hello again'
-        stream = service_pb2_grpc.GreeterStub(channel).Watch(service_pb2.Greeting(name='Roc'), timeout=5)
+        stream = greeter.Watch(service_pb2.Greeting(name='Roc'), timeout=5)
         assert [reply.greeting for reply in stream] == ['Hello Roc 0', 'Hello Roc 1', 'Hello Roc 2']
         assert stream.code() == grpc.StatusCode.OK
-    print('PASS Hello Roc, metadata, INVALID_ARGUMENT and subsequent call')
+        first_reply = threading.Event()
+        def names():
+            yield service_pb2.Greeting(name='Ada')
+            if first_reply.wait(5):
+                yield service_pb2.Greeting(name='Roc')
+
+        conversation = greeter.Converse(names(), timeout=10)
+        try:
+            assert next(conversation).greeting == 'Hello Ada'
+            first_reply.set()
+            assert [reply.greeting for reply in conversation] == ['Hello Roc']
+            assert conversation.code() == grpc.StatusCode.OK
+        finally:
+            first_reply.set()
+            conversation.cancel()
+    print('PASS generated Unary, server-streaming and bidirectional greetings')
 
 
 if __name__ == '__main__':

@@ -1,9 +1,7 @@
 app [program] { grpc: "../../integrations/roxum-grpc/package/main.roc", pf: platform "../../platform/main.roc", service: "generated/main.roc", wire: "../../libraries/roc-protobuf/package/main.roc" }
 import pf.Config
 import pf.IpAddr
-import pf.MethodRouter
-import grpc.GrpcDuplex
-import grpc.GrpcTimeout
+import service.ExchangeService
 import pf.Router
 import pf.Server
 import pf.RateCounter
@@ -45,57 +43,52 @@ init! = |{}| {
 
 duplex_limits = { ..GrpcServerStream.defaults, messages: 8, payload_bytes: 65544 }
 
-routes = uploads.route(
-	"/streaming.Exchange/Chat",
-	MethodRouter.post(
-		GrpcDuplex.handler(
-			|bytes| Request.decode(bytes, ProtobufWire.default_limits),
-			Update.encode,
-			{
-				begin!: |Model.(model), _metadata| Ok({ state: { gate: model.gate, replies: [], count_reads: Bool.False, ended: Bool.False }, initial: [] }),
-				receive!: |state, input| match input {
-					End => Ok({ ..state, ended: Bool.True })
-					Message(Request.(request)) => {
-						if request.mode == "observe" or request.mode == "deny" {
-							_ = RateCounter.add!(state.gate, "upload", 1).map_err(|_| GrpcUnary.failure(GrpcStatus.Code.Internal, "gate full"))?
-						}
-						if request.mode == "deny" {
-							return Err(GrpcUnary.failure(GrpcStatus.Code.PermissionDenied, "denied"))
-						}
-						if request.mode == "burst" and request.count <= 9 {
-							return Ok({ ..state, replies: state.replies.concat(List.repeat(Update.{ sequence: 0, text: "" }, request.count.to_u64())) })
-						}
-						if request.mode == "sized" and request.count <= 32769 {
-							return Ok({ ..state, replies: state.replies.append(Update.{ sequence: 0, text: Str.repeat("x", request.count.to_u64()) }) })
-						}
-						if state.count_reads {
-							counts = RateCounter.counts!(state.gate, "reads")
-							return Ok({ ..state, replies: state.replies.append(Update.{ sequence: (counts.current + counts.previous).to_u32_wrap(), text: "reads" }), count_reads: Bool.False })
-						}
-						text = if request.mode == "large" {
-							Str.repeat("x", 65536)
-						} else {
-							"ack"
-						}
-						Ok({ ..state, replies: state.replies.append(Update.{ sequence: request.count, text }), count_reads: request.mode == "count-reads" })
-					}
-				},
-				next!: |state| match state.replies.first() {
-					Ok(message) => Ok(Send(message, { ..state, replies: state.replies.drop_first(1) }))
-					Err(_) => if state.ended {
-						Ok(Finish([]))
-					} else {
-						if state.count_reads {
-							_ = RateCounter.add!(state.gate, "reads", 1).map_err(|_| GrpcUnary.failure(GrpcStatus.Code.Internal, "gate full"))?
-						}
-						Ok(Read)
-					}
-				},
-			},
-			duplex_limits,
-		),
-	).layer(GrpcTimeout.streaming_layer(duplex_limits)),
-)
+routes = ExchangeService.register(uploads, { duplex_chat: chat }, duplex_limits, ProtobufWire.default_limits)
+
+chat = {
+	begin!: |Model.(model), _metadata| Ok({ state: { gate: model.gate, replies: [], count_reads: Bool.False, ended: Bool.False }, initial: [] }),
+	receive!: |state, input| match input {
+		End => Ok({ ..state, ended: Bool.True })
+		Message(Request.(request)) => {
+			if request.mode == "finish" {
+				return Ok({ ..state, ended: Bool.True })
+			}
+			if request.mode == "observe" or request.mode == "deny" {
+				_ = RateCounter.add!(state.gate, "upload", 1).map_err(|_| GrpcUnary.failure(GrpcStatus.Code.Internal, "gate full"))?
+			}
+			if request.mode == "deny" {
+				return Err(GrpcUnary.failure(GrpcStatus.Code.PermissionDenied, "denied"))
+			}
+			if request.mode == "burst" and request.count <= 9 {
+				return Ok({ ..state, replies: state.replies.concat(List.repeat(Update.{ sequence: 0, text: "" }, request.count.to_u64())) })
+			}
+			if request.mode == "sized" and request.count <= 32769 {
+				return Ok({ ..state, replies: state.replies.append(Update.{ sequence: 0, text: Str.repeat("x", request.count.to_u64()) }) })
+			}
+			if state.count_reads {
+				counts = RateCounter.counts!(state.gate, "reads")
+				return Ok({ ..state, replies: state.replies.append(Update.{ sequence: (counts.current + counts.previous).to_u32_wrap(), text: "reads" }), count_reads: Bool.False })
+			}
+			text = if request.mode == "large" {
+				Str.repeat("x", 65536)
+			} else {
+				"ack"
+			}
+			Ok({ ..state, replies: state.replies.append(Update.{ sequence: request.count, text }), count_reads: request.mode == "count-reads" })
+		}
+	},
+	next!: |state| match state.replies.first() {
+		Ok(message) => Ok(Send(message, { ..state, replies: state.replies.drop_first(1) }))
+		Err(_) => if state.ended {
+			Ok(Finish([]))
+		} else {
+			if state.count_reads {
+				_ = RateCounter.add!(state.gate, "reads", 1).map_err(|_| GrpcUnary.failure(GrpcStatus.Code.Internal, "gate full"))?
+			}
+			Ok(Read)
+		}
+	},
+}
 
 uploads = UploadsService.register(base_routes, { call_submit!: submit! }, { ..GrpcServerStream.defaults, messages: 4, request_bytes: 32, payload_bytes: 40 }, ProtobufWire.default_limits)
 

@@ -1,1 +1,1 @@
-package [Request, Update, UpdatesService, UploadsService] { grpc: "../../../integrations/roxum-grpc/package/main.roc", pf: platform "../../../platform/main.roc", wire: "../../../libraries/roc-protobuf/package/main.roc" }
+package [ExchangeService, Request, Update, UpdatesService, UploadsService] { grpc: "../../../integrations/roxum-grpc/package/main.roc", pf: platform "../../../platform/main.roc", wire: "../../../libraries/roc-protobuf/package/main.roc" }

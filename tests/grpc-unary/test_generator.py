@@ -69,8 +69,10 @@ class Services(unittest.TestCase):
             method.client_streaming, method.server_streaming = client, server
             result = generate.generate(req)
             if client and server:
-                self.assertIn('unsupported', result.error)
-                self.assertFalse(result.file)
+                self.assertFalse(result.error)
+                binding = next(f.content for f in result.file if f.name == 'ExampleService.roc')
+                self.assertIn('duplex_call : GrpcDuplex.Callbacks(model, state_call, Input, Output)', binding)
+                self.assertIn('GrpcDuplex.handler(', binding)
             elif client:
                 self.assertFalse(result.error)
                 self.assertIn("GrpcClientStream.Consumer(Input, Output)", next(f.content for f in result.file if f.name == "ExampleService.roc"))
@@ -86,6 +88,55 @@ class Services(unittest.TestCase):
                 binding = next(f.content for f in mixed.file if f.name == 'ExampleService.roc')
                 self.assertIn('limits.streaming', binding)
                 self.assertIn('limits.unary', binding)
+
+    def test_method_collisions_follow_rpc_names_and_handler_fields(self):
+        req = request()
+        methods = req.proto_file[0].service[0].method
+        duplex = methods.add(name='CALL', input_type='.test.Input', output_type='.test.Output',
+                             client_streaming=True, server_streaming=True)
+        result = generate.generate(req)
+        self.assertFalse(result.error)
+        binding = next(f.content for f in result.file if f.name == 'ExampleService.roc')
+        self.assertIn('"/test.Example/Call", MethodRouter.post(GrpcUnary.handler', binding)
+        self.assertIn('"/test.Example/CALL", MethodRouter.post(GrpcDuplex.handler', binding)
+        self.assertIn('handlers.call_call!', binding)
+        self.assertIn('handlers.duplex_call', binding)
+
+        # Reject duplicate routes even in a hand-built descriptor.
+        duplex.name = 'Call'
+        result = generate.generate(req)
+        self.assertIn('method binding name collision', result.error)
+        self.assertFalse(result.file)
+
+        # Distinct routes still cannot share a generated duplex callback field.
+        duplex.name = 'CALL'
+        methods[0].client_streaming = methods[0].server_streaming = True
+        result = generate.generate(req)
+        self.assertIn('method binding name collision', result.error)
+        self.assertFalse(result.file)
+
+    def test_bidirectional_methods_have_independent_state(self):
+        req = request()
+        file = req.proto_file[0]
+        methods = file.service[0].method
+        for name in ('Chat', 'Subscribe'):
+            methods.add(name=name, input_type='.test.Input', output_type='.test.Output',
+                        client_streaming=True, server_streaming=True)
+        result = generate.generate(req)
+        self.assertFalse(result.error)
+        binding = next(f.content for f in result.file if f.name == 'ExampleService.roc')
+        self.assertIn('Handlers(model, state_chat, state_subscribe)', binding)
+        for name in ('chat', 'subscribe'):
+            self.assertIn(f'duplex_{name} : GrpcDuplex.Callbacks(model, state_{name}, Input, Output)', binding)
+        self.assertEqual(binding.count('GrpcTimeout.streaming_layer(limits.streaming)'), 2)
+        self.assertIn('GrpcTimeout.layer(limits.unary.metadata)', binding)
+
+        file.message_type.add(name='GrpcDuplex')
+        result = generate.generate(req)
+        self.assertIn('conflicts with a service binding import', result.error)
+        self.assertFalse(result.file)
+        req.parameter = 'wire=wire/main.roc'
+        self.assertFalse(generate.generate(req).error)
 
     def test_rejected_descriptors_are_atomic(self):
         mutations = [

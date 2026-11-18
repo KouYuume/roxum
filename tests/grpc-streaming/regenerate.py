@@ -28,7 +28,7 @@ def main():
             assert {f.name for f in files} == {f.name for f in (FIXTURE / 'generated').glob('*.roc')}
             for file in files:
                 assert file.read_bytes() == (FIXTURE / 'generated' / file.name).read_bytes(), file.name + ': regenerate with --write'
-    print('PASS reproducible server-streaming service generation')
+    print('PASS reproducible streaming service generation')
 
 
 if __name__ == '__main__':

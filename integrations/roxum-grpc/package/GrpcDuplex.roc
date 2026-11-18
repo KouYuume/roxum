@@ -13,7 +13,7 @@ import GrpcUnary
 import GrpcWire
 import StreamFrame
 
-## Incremental bidirectional framing for a manually registered HTTP/2 route.
+## Incremental bidirectional framing for typed HTTP/2 streaming routes.
 GrpcDuplex := [].{
 	Callbacks(model, state, input, output) : {
 		begin! : model, List(GrpcMetadata.Entry) => Try({ state : state, initial : List(GrpcMetadata.Entry) }, GrpcUnary.Failure),

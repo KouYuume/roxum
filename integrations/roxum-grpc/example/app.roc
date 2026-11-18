@@ -29,7 +29,7 @@ init! = |{}| Ok({
 	},
 })
 
-routes = GreeterService.register(Router.new, { call_greet!: greet!, call_watch!: watch! }, { unary: { request_bytes: 1024, response_bytes: 1024, status_bytes: 128, metadata: GrpcMetadata.defaults }, streaming: GrpcServerStream.defaults }, ProtobufWire.default_limits)
+routes = GreeterService.register(Router.new, { call_greet!: greet!, call_watch!: watch!, duplex_converse: converse }, { unary: { request_bytes: 1024, response_bytes: 1024, status_bytes: 128, metadata: GrpcMetadata.defaults }, streaming: GrpcServerStream.defaults }, ProtobufWire.default_limits)
 
 greet! = |_model, Greeting.(input), metadata| {
 	Log.info!("Greeting RPC received")
@@ -67,4 +67,25 @@ watch! = |_model, Greeting.(input), _metadata| {
 			},
 		),
 	)
+}
+
+converse = {
+	begin!: |_model, _metadata| Ok({ state: { pending: [], ended: Bool.False }, initial: [] }),
+	receive!: |state, input| match input {
+		End => Ok({ ..state, ended: Bool.True })
+		Message(Greeting.(greeting)) => {
+			if state.pending.len() >= 8 {
+				return Err(GrpcUnary.failure(GrpcStatus.Code.ResourceExhausted, "too many pending greetings"))
+			}
+			Ok({ ..state, pending: state.pending.append(ReplyText.{ greeting: "Hello ${greeting.name}" }) })
+		}
+	},
+	next!: |state| match state.pending.first() {
+		Ok(reply) => Ok(Send(reply, { ..state, pending: state.pending.drop_first(1) }))
+		Err(_) => if state.ended {
+			Ok(Finish([]))
+		} else {
+			Ok(Read)
+		}
+	},
 }
