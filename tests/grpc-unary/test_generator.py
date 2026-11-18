@@ -62,15 +62,18 @@ class Services(unittest.TestCase):
 
     def test_streaming_forms_and_mixed_limits(self):
         # Unary-only remains unchanged; server-only and mixed services select
-        # typed output producers. Client and bidi input stay unsupported.
+        # typed output producers. Client input uses a typed consumer.
         for client, server in ((False, True), (True, False), (True, True)):
             req = request()
             method = req.proto_file[0].service[0].method[0]
             method.client_streaming, method.server_streaming = client, server
             result = generate.generate(req)
-            if client:
+            if client and server:
                 self.assertIn('unsupported', result.error)
                 self.assertFalse(result.file)
+            elif client:
+                self.assertFalse(result.error)
+                self.assertIn("GrpcClientStream.Consumer(Input, Output)", next(f.content for f in result.file if f.name == "ExampleService.roc"))
             else:
                 self.assertFalse(result.error)
                 binding = next(f.content for f in result.file if f.name == 'ExampleService.roc')
@@ -86,7 +89,6 @@ class Services(unittest.TestCase):
 
     def test_rejected_descriptors_are_atomic(self):
         mutations = [
-            lambda f: setattr(f.service[0].method[0], 'client_streaming', True),
             lambda f: setattr(f.service[0].method[0], 'input_type', '.test.Missing'),
             lambda f: setattr(f.service[0].method[0], 'output_type', '.test.Missing'),
             lambda f: f.message_type.add(name='ExampleService'),

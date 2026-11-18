@@ -290,9 +290,10 @@
         "tests/grpc-streaming/generated/Request.roc",
         "tests/grpc-streaming/generated/Update.roc",
         "tests/grpc-streaming/generated/UpdatesService.roc",
+        "tests/grpc-streaming/generated/UploadsService.roc",
         "tests/grpc-streaming/pressure.py"
       ],
-      "compatibility_sha256": "6f82887cc5dc2aaf25997580c1d8d8d51638310a0cf896bae7d29ad534350ef0",
+      "compatibility_sha256": "673168a5489eb8b426c1504f3ce782653a110c3b18b4f423c9cd56f357bebb5e",
       "max_unpacked_bytes": 65536
     }
   ]

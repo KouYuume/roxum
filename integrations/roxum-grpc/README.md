@@ -1,9 +1,8 @@
 # gRPC integration
 
-This package provides Unary and server-streaming typed handlers with opt-in
-generated service bindings using roxum's HTTP/2 capabilities. Server-streaming
-is part of the unreleased 0.3 work; client-streaming and bidirectional RPC remain
-unsupported. Generated routes
+This package provides typed Unary, server-streaming and client-streaming handlers with opt-in
+generated service bindings using roxum's HTTP/2 capabilities. Both streaming forms are part of the unreleased 0.3 work.
+Bidirectional RPC is still unsupported. Generated routes
 install deadlines before waiting for request bodies and register a final gRPC
 status response on expiry. Independent generated clients and raw HTTP/2 checks
 cover direct TCP/Unix listeners and nginx TLS termination; see
@@ -33,7 +32,7 @@ Registration adds exact POST routes using the original fully qualified service
 and method names. Callback field names use `call_` plus the lowercase method
 name and `!`; collisions are rejected. Existing router fallbacks continue to
 handle unknown routes (the default HTTP 404 is mapped by gRPC clients to
-UNIMPLEMENTED). Service and method options, client-streaming/bidirectional RPCs, missing or invisible
+UNIMPLEMENTED). Service and method options, bidirectional RPCs, missing or invisible
 message types, and module/binding name collisions fail generation atomically.
 This includes `Handlers`, the generated callback record type.
 Codec-only generation retains its platform-free package and ignores services.
@@ -49,6 +48,26 @@ These handlers run after finite body assembly. Generated registration installs
 `GrpcTimeout.layer` before body reception. Manual `GrpcUnary.handler` users must
 attach that layer themselves; the handler alone does not install deadlines.
 Start with the [greeting example](example/README.md) for registration and handlers.
+
+## Typed client-streaming services
+
+For `Submit(stream Input) returns (Output)`, the generated callback receives
+the model and request metadata. Return `Ok(GrpcClientStream.consume(initial_state,
+step!, finish!))` to accept input, or a `GrpcUnary.Failure` to reject the call.
+Each complete message invokes `step!(state, input)`, which returns the next
+state or an application failure. Clean end of input invokes `finish!(state)`
+once, including for an empty stream. Return a `GrpcUnary.Response` from that
+callback to send one message and final status.
+
+Streaming registration uses `GrpcServerStream.Limits` for both directions.
+On a client-streaming route, `messages` and `payload_bytes` bound the request
+sequence, `request_bytes` bounds each input, and `response_bytes` bounds the
+single output. The HTTP streamed-body limit counts all bytes including envelope
+prefixes and can reject a request first. The body timeout is also absolute from
+initial metadata. The integration checks declared lengths before buffering payloads.
+Partial envelopes at EOF and invalid Protobuf messages yield INVALID_ARGUMENT.
+Application state can retain input explicitly. The [upload fixture](../../tests/grpc-streaming/app.roc)
+shows a running sum that only retains a counter.
 
 ## Typed server-streaming services
 
