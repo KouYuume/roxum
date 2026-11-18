@@ -43,9 +43,15 @@ The [gRPC roadmap](grpc.md) records responsibilities and excluded features.
 
 **Open allocation limit.** The target is an 8 MiB allocation budget per decoded
 message, including nested values and temporary copies, with retained decoder
-storage charged against the shared worker ceiling. Generated codecs currently
-bound logical work. Request memory accounting informs admission but does not
-enforce this allocation limit. This release criterion remains open.
+storage charged against the shared worker ceiling. The
+[decoder heap](../../platform/host/http2/decode_heap.zig) charges value buffers
+and their allocation headers to both ceilings. The fixed heap descriptor counts
+only toward the worker ceiling. Its tests cover allocation
+headers, overlapping buffers during growth, competition with transport storage
+and request cleanup. Generated service decoders still allocate on the ordinary
+request heap and enforce logical work limits. Routing decode allocations and
+their subsequent frees to the owning heap, handling exhaustion on the RPC path
+and verifying the distributed service remain open release criteria.
 
 0.3 is ready for release preparation only when all four RPC forms meet these
 acceptance gates, unsupported features are explicit, and migration/compatibility
