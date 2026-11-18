@@ -293,7 +293,7 @@
         "tests/grpc-streaming/generated/UploadsService.roc",
         "tests/grpc-streaming/pressure.py"
       ],
-      "compatibility_sha256": "673168a5489eb8b426c1504f3ce782653a110c3b18b4f423c9cd56f357bebb5e",
+      "compatibility_sha256": "bde61d9b73d0d90f79ae4889d3c97db2dedd56351f00dab5352620a01c763dfc",
       "max_unpacked_bytes": 65536
     }
   ]

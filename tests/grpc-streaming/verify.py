@@ -7,6 +7,8 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 
 import grpc
 from h2.config import H2Configuration
@@ -21,6 +23,113 @@ sys.path.insert(0, str(ROOT / 'tests/support'))
 from roxum_process import stop
 sys.path.insert(0, str(ROOT / "tests/grpc-unary"))
 import proxy
+
+
+def verify_duplex(channel):
+    chat = channel.stream_stream('/streaming.Exchange/Chat',
+        request_serializer=messages.Request.SerializeToString, response_deserializer=messages.Update.FromString)
+    release = threading.Event()
+
+    def requests():
+        yield messages.Request(count=1, mode="count-reads")
+        if release.wait(5):
+            # Larger than the host's 16 KiB read chunk on every transport.
+            yield messages.Request(mode='x' * 32768)
+
+    call = chat(requests(), timeout=10)
+    try:
+        assert next(call) == messages.Update(sequence=1, text='ack')
+        release.set()
+        assert list(call) == [messages.Update(sequence=1, text='reads')]
+        assert call.code() == grpc.StatusCode.OK
+    finally:
+        release.set()
+        call.cancel()
+
+    # One small request drives output count across the eight-message boundary.
+    # Two small requests drive encoded output to 65543, 65544, or 65545 bytes.
+    for mode, values, accepted, code in (
+        ('burst', [7], 7, grpc.StatusCode.OK),
+        ('burst', [8], 8, grpc.StatusCode.OK),
+        ('burst', [9], 8, grpc.StatusCode.RESOURCE_EXHAUSTED),
+        ('sized', [32768, 32767], 2, grpc.StatusCode.OK),
+        ('sized', [32768, 32768], 2, grpc.StatusCode.OK),
+        ('sized', [32768, 32769], 1, grpc.StatusCode.RESOURCE_EXHAUSTED),
+    ):
+        call = chat((messages.Request(mode=mode, count=n) for n in values), timeout=5)
+        received = []
+        try:
+            received.extend(call)
+        except grpc.RpcError:
+            pass
+        assert call.code() == code and len(received) == accepted, (mode, values, call.code(), received)
+        if mode == 'sized':
+            assert [m.ByteSize() for m in received] == [n + 4 for n in values[:accepted]]
+
+    # A valid gRPC envelope can still contain an invalid Protobuf payload.
+    raw = channel.stream_stream('/streaming.Exchange/Chat', response_deserializer=messages.Update.FromString)
+    call = raw(iter([messages.Request(count=3).SerializeToString(), b'\xff']), timeout=5)
+    try:
+        list(call)
+    except grpc.RpcError as exc:
+        assert exc.code() == grpc.StatusCode.INVALID_ARGUMENT, exc
+    else:
+        raise AssertionError('duplex accepted invalid protobuf')
+
+
+def verify_duplex_pressure(channel, address, unix):
+    from pressure import Peer
+    stub = services.UpdatesStub(channel)
+    def observed():
+        return stub.Echo(messages.Request(mode='observed'), timeout=3).sequence
+
+    # A direct peer controls the production listener's stream window.
+    for cancel in (False, True):
+        before = observed()
+        with socket.socket(socket.AF_UNIX if unix else socket.AF_INET) as sock:
+            sock.settimeout(5)
+            sock.connect(address)
+            peer = Peer(sock, False)
+            peer.h2.send_headers(1, [(':method', 'POST'), (':scheme', 'http'), (':authority', 'localhost'),
+                (':path', '/streaming.Exchange/Chat'), ('content-type', 'application/grpc'), ('te', 'trailers')])
+            def send(mode, end_stream=False):
+                payload = messages.Request(count=7, mode=mode).SerializeToString()
+                peer.h2.send_data(1, b'\0' + len(payload).to_bytes(4, 'big') + payload, end_stream=end_stream)
+                peer.flush()
+            send('large')
+            data = bytearray()
+            while len(data) < 8192:
+                for event in peer.receive():
+                    if isinstance(event, DataReceived):
+                        data.extend(event.data)
+            assert len(data) == 8192
+            send('observe' if cancel else 'deny', end_stream=not cancel)
+            deadline = time.monotonic() + 5
+            while observed() == before:
+                assert time.monotonic() < deadline, 'duplex input stalled behind output'
+            if cancel:
+                peer.h2.reset_stream(1)
+                peer.flush()
+                peer.echo()
+                continue
+            # Fail input halfway through an outgoing envelope. Its remaining
+            # bytes must precede the error trailers once credit becomes available.
+            peer.h2.increment_flow_control_window(131072, stream_id=1)
+            peer.flush()
+            statuses = []
+            ended = False
+            while not ended:
+                for event in peer.receive():
+                    if isinstance(event, DataReceived):
+                        data.extend(event.data)
+                    elif isinstance(event, TrailersReceived):
+                        statuses.append(dict(event.headers)['grpc-status'])
+                    elif isinstance(event, StreamEnded):
+                        ended = True
+            expected = messages.Update(sequence=7, text='x' * 65536).SerializeToString()
+            assert data == b'\0' + len(expected).to_bytes(4, 'big') + expected
+            assert statuses == ['7']
+            peer.echo()
 
 
 def verify_upload(channel, address, unix, tls_context):
@@ -124,6 +233,9 @@ def verify(executable, unix, proxied=False):
                     return grpc.secure_channel(target, credentials, options=options) if proxied else grpc.insecure_channel(target, options=options)
                 with channel_for_target() as channel:
                     grpc.channel_ready_future(channel).result(timeout=10)
+                    verify_duplex(channel)
+                    if not proxied:
+                        verify_duplex_pressure(channel, address, unix)
                     verify_upload(channel, address, unix, tls_context)
                     stub = services.UpdatesStub(channel)
                     def stream(count, mode='', metadata=()):

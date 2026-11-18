@@ -2,7 +2,7 @@
 
 This package provides typed Unary, server-streaming and client-streaming handlers with opt-in
 generated service bindings using roxum's HTTP/2 capabilities. Both streaming forms are part of the unreleased 0.3 work.
-Bidirectional RPC is still unsupported. Generated routes
+Bidirectional framing is available for manually registered routes. Generated routes
 install deadlines before waiting for request bodies and register a final gRPC
 status response on expiry. Independent generated clients and raw HTTP/2 checks
 cover direct TCP/Unix listeners and nginx TLS termination; see
@@ -48,6 +48,29 @@ These handlers run after finite body assembly. Generated registration installs
 `GrpcTimeout.layer` before body reception. Manual `GrpcUnary.handler` users must
 attach that layer themselves; the handler alone does not install deadlines.
 Start with the [greeting example](example/README.md) for registration and handlers.
+
+## Manual bidirectional routes
+
+Register `GrpcDuplex.handler(decode, encode, callbacks, limits)` on a POST route
+with `GrpcTimeout.streaming_layer(limits)`. Generated bidirectional bindings are
+planned for 0.3. The handler accepts the same limits as server-streaming, with
+independent message and payload budgets in each direction.
+
+- `begin!(model, metadata)` returns the initial application state and response metadata.
+- `receive!(state, input)` receives each decoded `Message(value)` and clean `End`,
+  even while output is stalled. Return the updated state or a gRPC failure.
+- `next!(state)` selects `Read`, `Send(value, next_state)`, or `Finish(trailing)`.
+  After `Read`, the next output decision waits for a decoded message or clean EOF.
+  After input ends, send remaining messages or finish. The integration keeps one
+  encoded reply pending and requests another decision after accepting it.
+  Application-owned queues must be bounded by the service.
+
+Input errors after headers produce a terminal status. If part of an envelope has
+already been accepted, the handler finishes that envelope before sending the
+error trailers. On execution expiry the host abandons the handler and drains
+already accepted DATA before sending deadline trailers if delivery is possible.
+A message whose remaining bytes were still in the handler can therefore end
+mid-envelope. Transport cancellation can also prevent trailer delivery.
 
 ## Typed client-streaming services
 
