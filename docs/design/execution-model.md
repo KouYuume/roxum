@@ -10,6 +10,13 @@ Never implement Roc reference counts by hand. Contract tests check zero, one, an
 
 Persistent allocations outlive requests; request allocations last until their values are released or the request is cleaned up. The allocation prefix stores size and domain/generation metadata immediately before the user pointer. Its size is `max(alignment, 2 * sizeof(usize))`; padding precedes the metadata at larger alignments.
 
+For a bounded decoder allocation, the size word also marks the block as
+decoder-owned and the metadata word points to the message heap, which carries
+the request generation. At a given alignment, ordinary and decoder-owned blocks have
+the same prefix size. A request fiber retains its message heaps across suspension. Closing
+a decode scope releases an empty heap immediately. Otherwise its last free
+releases the heap, and request teardown reclaims any remaining heaps.
+
 Only allocation chooses a domain from the active context. Reallocation and deallocation use the pointer's recorded domain, never the current execution phase. Reallocation preserves domain and generation. A stale request generation detects use after reset. Contract tests exercise power-of-two alignments 1, 2, 4, 8, 16, and 32.
 
 The production request allocator reuses freed capacity. Small values up to 1 KiB with alignment at most 16 use slabs; empty slabs return their pages to the block cache. Larger allocations use page-rounded blocks. Blocks above the cache size or alignment limits return directly to the backing allocator. Reset releases remaining live allocations and advances the generation; deinit releases caches as well. A cloned worker starts with an independent empty cache.

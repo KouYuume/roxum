@@ -21,6 +21,7 @@ pub fn tryAlloc(
     alignment: usize,
 ) ?*anyopaque {
     const context = currentAllocatorContext();
+    if (context.decoder) |owner| return host_allocator.HostAllocator.allocDecoded(owner, length, alignment);
     return context.host_allocator.alloc(
         context.domain,
         context.generation,
@@ -227,4 +228,76 @@ test "roc allocator callbacks use current TLS context" {
         @as(usize, 0),
         request_fba.end_index,
     );
+}
+
+test "retained decoder allocations use their owner across scopes and fiber suspension" {
+    const fiber = @import("fiber.zig");
+    const Probe = struct {
+        result: anyerror!void = error.DidNotRun,
+
+        fn start(target: *fiber.Fiber) void {
+            const self: *@This() = @ptrCast(@alignCast(target.userdata.?));
+            self.result = exercise(target);
+        }
+
+        fn exercise(target: *fiber.Fiber) !void {
+            var memory = host_allocator.HostAllocator{
+                .request_allocator = std.testing.allocator,
+                .persistent_allocator = std.testing.allocator,
+            };
+            allocator_context.setCurrent(.{ .host_allocator = &memory, .domain = host_allocator.Domain.request, .generation = 7 });
+            defer allocator_context.clearCurrent();
+            const ordinary = rocAlloc(32, 16);
+
+            try allocator_context.beginDecode();
+            try std.testing.expectError(error.AlreadyDecoding, allocator_context.beginDecode());
+            const first = target.locals.decoders.active.?;
+            const data = rocAlloc(16, 32);
+            @memset(@as([*]u8, @ptrCast(data))[0..16], 42);
+            // An ordinary request block can die during decode.
+            rocDealloc(ordinary, 16);
+            try std.testing.expect(tryAlloc(8 * 1024 * 1024, 8) == null);
+            allocator_context.endDecode();
+            fiber.suspendCurrent();
+            try allocator_context.beginDecode();
+            const second = target.locals.decoders.active.?;
+            const kept = rocAlloc(8, 8);
+            const second_charge = second.heap.live_bytes;
+            const grown = rocRealloc(data, 64, 32);
+            try std.testing.expectEqual(@as(usize, 0), @intFromPtr(grown) % 32);
+            try std.testing.expectEqualSlices(u8, &@as([16]u8, @splat(42)), @as([*]u8, @ptrCast(grown))[0..16]);
+            try std.testing.expectEqual(host_allocator.AllocationMetadata{ .domain = host_allocator.Domain.request, .generation = 7 }, host_allocator.allocationMetadata(grown));
+            try std.testing.expect(first.heap.live_bytes > 0);
+            try std.testing.expectEqual(second_charge, second.heap.live_bytes);
+            rocDealloc(grown, 32);
+            try std.testing.expectEqual(&second.node, target.locals.decoders.heaps.last.?);
+            allocator_context.endDecode();
+            rocDealloc(kept, 8);
+            try std.testing.expect(target.locals.decoders.heaps.first == null);
+
+            // Cancellation can leave both a retained message and an active one.
+            try allocator_context.beginDecode();
+            _ = rocAlloc(8, 8);
+            allocator_context.endDecode();
+            try allocator_context.beginDecode();
+            _ = rocAlloc(8, 8);
+            fiber_wait.abandonCurrent();
+        }
+    };
+
+    const worker = &@import("allocator/http2_memory.zig").shared;
+    const before = worker.used.load(std.builtin.AtomicOrder.monotonic);
+    var probe = Probe{};
+    const target = try fiber.Fiber.create();
+    defer target.destroy();
+    target.prepare(Probe.start, &probe);
+    fiber.resumeFiber(target);
+    try std.testing.expect(!target.finished);
+    try std.testing.expectError(error.NoRequest, allocator_context.beginDecode());
+    fiber.resumeFiber(target);
+    if (!target.crashed) try probe.result;
+    try std.testing.expect(target.crashed);
+    try std.testing.expect(worker.used.load(std.builtin.AtomicOrder.monotonic) > before);
+    target.locals.decoders.deinit();
+    try std.testing.expectEqual(before, worker.used.load(std.builtin.AtomicOrder.monotonic));
 }

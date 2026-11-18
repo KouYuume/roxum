@@ -10,7 +10,7 @@ const fiber = @import("../fiber.zig");
 const terminal = @import("terminal_fields.zig");
 const fiber_wait = @import("../fiber_wait.zig");
 
-const worker_memory = &@import("worker_memory.zig").shared;
+const worker_memory = &@import("../allocator/http2_memory.zig").shared;
 
 pub const Execution = struct {
     ticket: ?streams.Ticket = null,
