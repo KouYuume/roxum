@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const Meta = @import("meta.zig").Meta;
+const DecodeHeap = @import("decode_heap.zig").DecodeHeap;
 const Prefix = @import("prefix.zig").Prefix;
 
 pub const Domain = @import("domain.zig").Domain;
@@ -15,11 +16,17 @@ pub const AllocationMetadata = struct {
 pub fn allocationMetadata(
     pointer: *const anyopaque,
 ) AllocationMetadata {
+    if (decodeOwner(pointer)) |owner| return .{ .domain = Domain.request, .generation = owner.generation };
     const meta = Prefix.storedMeta(pointer);
     return .{
         .domain = Meta.domainOf(meta),
         .generation = Meta.generationOf(meta),
     };
+}
+
+fn decodeOwner(ptr: *const anyopaque) ?*DecodeHeap {
+    if (!Prefix.isDecoded(ptr)) return null;
+    return @ptrFromInt(Prefix.storedMeta(ptr));
 }
 
 pub const HostAllocator = struct {
@@ -33,14 +40,20 @@ pub const HostAllocator = struct {
         length: usize,
         alignment: usize,
     ) ?*anyopaque {
+        return allocate(self.allocatorFor(domain), Meta.pack(domain, generation), 0, length, alignment);
+    }
+
+    pub fn allocDecoded(owner: *DecodeHeap, length: usize, alignment: usize) ?*anyopaque {
+        return allocate(owner.allocator(), @intFromPtr(owner), Prefix.decoder_flag, length, alignment);
+    }
+
+    fn allocate(backing: std.mem.Allocator, meta: usize, flag: usize, length: usize, alignment: usize) ?*anyopaque {
         if (!isValidAlignment(alignment)) return null;
 
         const total_size = checkedTotalSize(
             length,
             alignment,
         ) orelse return null;
-
-        const backing = self.allocatorFor(domain);
 
         const base = backing.rawAlloc(
             total_size,
@@ -51,8 +64,8 @@ pub const HostAllocator = struct {
         return Prefix.write(
             base,
             alignment,
-            total_size,
-            Meta.pack(domain, generation),
+            total_size | flag,
+            meta,
         );
     }
 
@@ -64,15 +77,16 @@ pub const HostAllocator = struct {
         std.debug.assert(isValidAlignment(alignment));
 
         const meta = Prefix.storedMeta(ptr);
-        const domain = Meta.domainOf(meta);
+        const owner = decodeOwner(ptr);
         const total_size = Prefix.storedTotalSize(ptr);
-        const backing = self.allocatorFor(domain);
+        const backing = if (owner) |message| message.allocator() else self.allocatorFor(Meta.domainOf(meta));
 
         backing.rawFree(
             Prefix.basePtr(ptr, alignment)[0..total_size],
             Prefix.backingAlignment(alignment),
             @returnAddress(),
         );
+        if (owner) |message| message.releaseIfEmpty();
     }
 
     pub fn realloc(
@@ -89,11 +103,11 @@ pub const HostAllocator = struct {
         ) orelse return null;
 
         const old_meta = Prefix.storedMeta(ptr);
-        const domain = Meta.domainOf(old_meta);
-        const generation = Meta.generationOf(old_meta);
+        const owner = decodeOwner(ptr);
+        const size_word = if (owner != null) new_total_size | Prefix.decoder_flag else new_total_size;
         const old_total_size = Prefix.storedTotalSize(ptr);
         const old_base = Prefix.basePtr(ptr, alignment);
-        const backing = self.allocatorFor(domain);
+        const backing = if (owner) |message| message.allocator() else self.allocatorFor(Meta.domainOf(old_meta));
 
         // Growing or shrinking in place keeps the data where it is; only the
         // stored size changes.
@@ -103,7 +117,7 @@ pub const HostAllocator = struct {
             new_total_size,
             @returnAddress(),
         )) {
-            return Prefix.write(old_base, alignment, new_total_size, old_meta);
+            return Prefix.write(old_base, alignment, size_word, old_meta);
         }
 
         const new_base = backing.rawAlloc(
@@ -124,8 +138,8 @@ pub const HostAllocator = struct {
         const new_ptr = Prefix.write(
             new_base,
             alignment,
-            new_total_size,
-            Meta.pack(domain, generation),
+            size_word,
+            old_meta,
         );
 
         backing.rawFree(
@@ -142,7 +156,7 @@ pub const HostAllocator = struct {
         alignment: usize,
     ) ?usize {
         const prefix_length = Prefix.byteLength(alignment);
-        if (length > std.math.maxInt(usize) - prefix_length) return null;
+        if (prefix_length >= Prefix.decoder_flag or length >= Prefix.decoder_flag - prefix_length) return null;
         return prefix_length + length;
     }
 
@@ -183,18 +197,19 @@ test "isValidAlignment enforces positive powers of two" {
 test "checkedTotalSize handles length and overflow boundaries" {
     const alignment: usize = 16;
     const prefix = Prefix.byteLength(alignment);
-    const max_length = std.math.maxInt(usize) - prefix;
+    const max_size = Prefix.decoder_flag - 1;
+    const max_length = max_size - prefix;
 
     try std.testing.expectEqual(
         @as(?usize, prefix),
         HostAllocator.checkedTotalSize(0, alignment),
     );
     try std.testing.expectEqual(
-        @as(?usize, std.math.maxInt(usize) - 1),
+        @as(?usize, max_size - 1),
         HostAllocator.checkedTotalSize(max_length - 1, alignment),
     );
     try std.testing.expectEqual(
-        @as(?usize, std.math.maxInt(usize)),
+        @as(?usize, max_size),
         HostAllocator.checkedTotalSize(max_length, alignment),
     );
     try std.testing.expectEqual(

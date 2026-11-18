@@ -14,5 +14,5 @@ test {
     _ = requests;
     _ = input;
     _ = streams;
-    _ = @import("http2/decode_heap.zig");
+    _ = @import("allocator/decode_heap.zig");
 }

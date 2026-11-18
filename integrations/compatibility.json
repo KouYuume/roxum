@@ -11,11 +11,11 @@
       "tools/nghttp2-build.zig",
       "platform/NGHTTP2-LICENSE"
     ],
-    "source_sha256": "f5e3997dc70a70430fbee52d796de8d707e24f689c91ef4326de677e34cf0321",
+    "source_sha256": "c6c17b534ba7ecdc3362b05338593ce94b3a76e3c75a6a0749cf9047805924e3",
     "artifact": {
       "kind": "local",
       "location": "platform/main.roc",
-      "content_sha256": "f5e3997dc70a70430fbee52d796de8d707e24f689c91ef4326de677e34cf0321"
+      "content_sha256": "c6c17b534ba7ecdc3362b05338593ce94b3a76e3c75a6a0749cf9047805924e3"
     }
   },
   "integrations": [
@@ -27,12 +27,12 @@
         "tests/platform-package/app.roc"
       ],
       "platform_versions": "^0.3",
-      "requires_platform_sha256": "f5e3997dc70a70430fbee52d796de8d707e24f689c91ef4326de677e34cf0321",
+      "requires_platform_sha256": "c6c17b534ba7ecdc3362b05338593ce94b3a76e3c75a6a0749cf9047805924e3",
       "compatibility_files": [
         "tests/platform-package/run.sh",
         "tests/platform-package/verify.py"
       ],
-      "compatibility_sha256": "5cee6ba901aba1347a663610b059868fffadf574758853da59778a044f2b03d1",
+      "compatibility_sha256": "896c377cf072fb3b6b6aae93e9636382c7850e47aee51f6a475c03235a6564a3",
       "max_unpacked_bytes": 65536
     },
     {
@@ -43,14 +43,14 @@
         "integrations/roxum-sse/example/app.roc"
       ],
       "platform_versions": "^0.3",
-      "requires_platform_sha256": "f5e3997dc70a70430fbee52d796de8d707e24f689c91ef4326de677e34cf0321",
+      "requires_platform_sha256": "c6c17b534ba7ecdc3362b05338593ce94b3a76e3c75a6a0749cf9047805924e3",
       "compatibility_files": [
         "integrations/roxum-sse/example/unsafe-event.roc",
         "integrations/roxum-sse/example/run.sh",
         "integrations/roxum-sse/example/verify.py",
         "tests/support/roxum_process.py"
       ],
-      "compatibility_sha256": "deb673d22a71afd114f2f8e4b83d9c078d1faf82d0fd20c6f59c7d61571061e3",
+      "compatibility_sha256": "0f5659a6b13fdcaf8464f39ca9392c15e6b7dedb10ee4d2d5708ffd70cee3ded",
       "max_unpacked_bytes": 65536
     },
     {
@@ -61,13 +61,13 @@
         "integrations/roxum-set-header/example/app.roc"
       ],
       "platform_versions": "^0.3",
-      "requires_platform_sha256": "f5e3997dc70a70430fbee52d796de8d707e24f689c91ef4326de677e34cf0321",
+      "requires_platform_sha256": "c6c17b534ba7ecdc3362b05338593ce94b3a76e3c75a6a0749cf9047805924e3",
       "compatibility_files": [
         "integrations/roxum-set-header/example/run.sh",
         "integrations/roxum-set-header/example/verify.py",
         "tests/support/roxum_process.py"
       ],
-      "compatibility_sha256": "a4e1a5352ed9b9944e843a731cbf5c68103b08b9cf0ed514882845c9b979136a",
+      "compatibility_sha256": "35cddac086652036491c69ae16b9952e11b3900a211def635b51213bd6a8ed3f",
       "max_unpacked_bytes": 65536
     },
     {
@@ -78,13 +78,13 @@
         "integrations/roxum-trace/example/app.roc"
       ],
       "platform_versions": "^0.3",
-      "requires_platform_sha256": "f5e3997dc70a70430fbee52d796de8d707e24f689c91ef4326de677e34cf0321",
+      "requires_platform_sha256": "c6c17b534ba7ecdc3362b05338593ce94b3a76e3c75a6a0749cf9047805924e3",
       "compatibility_files": [
         "integrations/roxum-trace/example/run.sh",
         "integrations/roxum-trace/example/verify.py",
         "tests/support/roxum_process.py"
       ],
-      "compatibility_sha256": "cc8dd050044fa4f61894fb4bb8ebd8383c07c21902ddc2330d72f0edae7259c1",
+      "compatibility_sha256": "018a95ac362be5c193c45dd16a6659405d98fd128dddec9dbe17b1b77e8cf39c",
       "max_unpacked_bytes": 65536
     },
     {
@@ -95,13 +95,13 @@
         "integrations/roxum-normalize-path/example/app.roc"
       ],
       "platform_versions": "^0.3",
-      "requires_platform_sha256": "f5e3997dc70a70430fbee52d796de8d707e24f689c91ef4326de677e34cf0321",
+      "requires_platform_sha256": "c6c17b534ba7ecdc3362b05338593ce94b3a76e3c75a6a0749cf9047805924e3",
       "compatibility_files": [
         "integrations/roxum-normalize-path/example/run.sh",
         "integrations/roxum-normalize-path/example/verify.py",
         "tests/support/roxum_process.py"
       ],
-      "compatibility_sha256": "35adff56e7de0919e2a4ad70a4fa8832dd48f0d9d1d3e5d139ccc58ed4ca945f",
+      "compatibility_sha256": "2b10855e05a17ed1936eeede15a093adbcc15fe6dd7e8f53b26b6e2edb138e15",
       "max_unpacked_bytes": 65536
     },
     {
@@ -112,13 +112,13 @@
         "integrations/roxum-cors/example/app.roc"
       ],
       "platform_versions": "^0.3",
-      "requires_platform_sha256": "f5e3997dc70a70430fbee52d796de8d707e24f689c91ef4326de677e34cf0321",
+      "requires_platform_sha256": "c6c17b534ba7ecdc3362b05338593ce94b3a76e3c75a6a0749cf9047805924e3",
       "compatibility_files": [
         "integrations/roxum-cors/example/run.sh",
         "integrations/roxum-cors/example/verify.py",
         "tests/support/roxum_process.py"
       ],
-      "compatibility_sha256": "2ea7e8889ddb961f53999ccb98f9a115f5dccb851d36c6feb2f3a8ce5b358412",
+      "compatibility_sha256": "6eee4421820811e6c64fc27a5929909205e5bf447faaf8d85527583cd999bbb9",
       "max_unpacked_bytes": 65536
     },
     {
@@ -130,13 +130,13 @@
         "integrations/roxum-proxy-headers/example/untrusted-app.roc"
       ],
       "platform_versions": "^0.3",
-      "requires_platform_sha256": "f5e3997dc70a70430fbee52d796de8d707e24f689c91ef4326de677e34cf0321",
+      "requires_platform_sha256": "c6c17b534ba7ecdc3362b05338593ce94b3a76e3c75a6a0749cf9047805924e3",
       "compatibility_files": [
         "integrations/roxum-proxy-headers/example/run.sh",
         "integrations/roxum-proxy-headers/example/verify.py",
         "tests/support/roxum_process.py"
       ],
-      "compatibility_sha256": "3d1bb850009784b6a03c8aa89ea2fee908a18e3497dbe1ae101f8cab7ba7384e",
+      "compatibility_sha256": "ddfd3016114469e619154fa5120cd6ed41d500115dd56c12e70ad2356a4df484",
       "max_unpacked_bytes": 65536
     },
     {
@@ -148,7 +148,7 @@
         "integrations/roxum-postgres/tests/protocol.roc"
       ],
       "platform_versions": "^0.3",
-      "requires_platform_sha256": "f5e3997dc70a70430fbee52d796de8d707e24f689c91ef4326de677e34cf0321",
+      "requires_platform_sha256": "c6c17b534ba7ecdc3362b05338593ce94b3a76e3c75a6a0749cf9047805924e3",
       "compatibility_files": [
         "integrations/roxum-postgres/example/run.sh",
         "integrations/roxum-postgres/example/run.py",
@@ -157,7 +157,7 @@
         "tests/support/roxum_process.py",
         "integrations/roxum-postgres/tests/protocol.py"
       ],
-      "compatibility_sha256": "58497fa5cbb2356adfef6737a58539a789c75455cfa677629edbddff7cc9ecce",
+      "compatibility_sha256": "ccf227e0c9e5496d050188c3237f57b4a0a87b5340782bbed438fc9081e6d942",
       "max_unpacked_bytes": 131072
     },
     {
@@ -168,13 +168,13 @@
         "tests/http-client/app.roc"
       ],
       "platform_versions": "^0.3",
-      "requires_platform_sha256": "f5e3997dc70a70430fbee52d796de8d707e24f689c91ef4326de677e34cf0321",
+      "requires_platform_sha256": "c6c17b534ba7ecdc3362b05338593ce94b3a76e3c75a6a0749cf9047805924e3",
       "compatibility_files": [
         "tests/http-client/run.sh",
         "tests/http-client/verify.py",
         "tests/support/roxum_process.py"
       ],
-      "compatibility_sha256": "02d46f5acc5ece3479441533ce452a0772da6f6dfa6233ffb53b4a063b7c92f0",
+      "compatibility_sha256": "a34f9eeca1661f17182869b8ba4512ff902cf95691fbfb995479dfa1d1e5ceca",
       "max_unpacked_bytes": 131072
     },
     {
@@ -185,13 +185,13 @@
         "integrations/roxum-cookie/example/app.roc"
       ],
       "platform_versions": "^0.3",
-      "requires_platform_sha256": "f5e3997dc70a70430fbee52d796de8d707e24f689c91ef4326de677e34cf0321",
+      "requires_platform_sha256": "c6c17b534ba7ecdc3362b05338593ce94b3a76e3c75a6a0749cf9047805924e3",
       "compatibility_files": [
         "integrations/roxum-cookie/example/run.sh",
         "integrations/roxum-cookie/example/verify.py",
         "tests/support/roxum_process.py"
       ],
-      "compatibility_sha256": "85e25435d023e41da88ae547447ed2a30f1b8db954bbf38041d41559d750eb0a",
+      "compatibility_sha256": "9398fd005d87916c1d117065921857f80796b31b2850ba994879e4cf559242f5",
       "max_unpacked_bytes": 65536
     },
     {
@@ -202,13 +202,13 @@
         "integrations/roxum-rate-limit/example/app.roc"
       ],
       "platform_versions": "^0.3",
-      "requires_platform_sha256": "f5e3997dc70a70430fbee52d796de8d707e24f689c91ef4326de677e34cf0321",
+      "requires_platform_sha256": "c6c17b534ba7ecdc3362b05338593ce94b3a76e3c75a6a0749cf9047805924e3",
       "compatibility_files": [
         "integrations/roxum-rate-limit/example/run.sh",
         "integrations/roxum-rate-limit/example/verify.py",
         "tests/support/roxum_process.py"
       ],
-      "compatibility_sha256": "e219bffbaa72a4715fa5fcb1f4bbe5e24a96b2eb9d466f17fca5bf0b600e66b6",
+      "compatibility_sha256": "8777c1723e88f78544eee31e278de8e4d31487297b4bd79bd71691dee62a066f",
       "max_unpacked_bytes": 65536
     },
     {
@@ -219,13 +219,13 @@
         "integrations/roxum-concurrency-limit/example/app.roc"
       ],
       "platform_versions": "^0.3",
-      "requires_platform_sha256": "f5e3997dc70a70430fbee52d796de8d707e24f689c91ef4326de677e34cf0321",
+      "requires_platform_sha256": "c6c17b534ba7ecdc3362b05338593ce94b3a76e3c75a6a0749cf9047805924e3",
       "compatibility_files": [
         "integrations/roxum-concurrency-limit/example/run.sh",
         "integrations/roxum-concurrency-limit/example/verify.py",
         "tests/support/roxum_process.py"
       ],
-      "compatibility_sha256": "7f4caaff4e5ea321599b3ca7fd9471f27fd02878aa2985827f666376eb1188fe",
+      "compatibility_sha256": "afe77e32839e48a0fa01813be717a5134f855aa0226e4773486b060ed5b8393a",
       "max_unpacked_bytes": 65536
     },
     {
@@ -240,7 +240,7 @@
         "tests/grpc-streaming/acceptance.roc"
       ],
       "platform_versions": "^0.3",
-      "requires_platform_sha256": "f5e3997dc70a70430fbee52d796de8d707e24f689c91ef4326de677e34cf0321",
+      "requires_platform_sha256": "c6c17b534ba7ecdc3362b05338593ce94b3a76e3c75a6a0749cf9047805924e3",
       "compatibility_files": [
         "tests/grpc-wire/checks.sh",
         "tests/grpc-wire/verify.py",
@@ -295,7 +295,7 @@
         "tests/grpc-streaming/input_lifecycle.py",
         "tests/grpc-streaming/pressure.py"
       ],
-      "compatibility_sha256": "f410092442c4ec95f91f7d273f0da0de85da2f1aff4e56bef9eabe328d90931b",
+      "compatibility_sha256": "0b587d4aa041408b79d044d4908fa1362b65ccb51c3bf3635f2bbef14b52a734",
       "max_unpacked_bytes": 65536
     }
   ]

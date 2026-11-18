@@ -1,11 +1,44 @@
 //! One message owns its heap until its last decoded value is released or the
 //! request is abandoned. The worker budget outlives every message.
 const std = @import("std");
-const worker_memory = @import("worker_memory.zig");
-const RequestHeap = @import("../allocator/request_heap.zig").RequestHeap;
+const worker_memory = @import("http2_memory.zig");
+const RequestHeap = @import("request_heap.zig").RequestHeap;
+
+/// Stable for the lifetime of the request, including while its fiber is suspended.
+pub const DecodeScope = struct {
+    heaps: std.DoublyLinkedList = .{},
+    active: ?*DecodeHeap = null,
+
+    pub fn begin(self: *DecodeScope, generation: usize) error{ AlreadyDecoding, OutOfMemory }!*DecodeHeap {
+        if (self.active != null) return error.AlreadyDecoding;
+        const message = try DecodeHeap.create();
+        message.scope = self;
+        message.generation = generation;
+        self.heaps.prepend(&message.node);
+        self.active = message;
+        return message;
+    }
+
+    pub fn finish(self: *DecodeScope) void {
+        const message = self.active.?;
+        self.active = null;
+        message.releaseIfEmpty();
+    }
+
+    pub fn deinit(self: *DecodeScope) void {
+        self.active = null;
+        while (self.heaps.popFirst()) |node| {
+            const message: *DecodeHeap = @fieldParentPtr("node", node);
+            message.destroy();
+        }
+    }
+};
 
 pub const DecodeHeap = struct {
     const message_limit = 8 * 1024 * 1024;
+    generation: usize = 0,
+    scope: ?*DecodeScope = null,
+    node: std.DoublyLinkedList.Node = .{},
     budget: worker_memory.Budget,
     heap: RequestHeap,
 
@@ -16,7 +49,7 @@ pub const DecodeHeap = struct {
     fn createWithBudget(worker: *worker_memory.Budget, limit: usize) !*DecodeHeap {
         const backing = worker.allocator();
         const self = try backing.create(DecodeHeap);
-        self.budget = .{ .backing = backing, .limit = limit };
+        self.* = .{ .budget = .{ .backing = backing, .limit = limit }, .heap = undefined };
         // The uncached heap returns its full allocation, including metadata,
         // to both budgets on free. No cached pages can cross budget domains.
         self.heap = RequestHeap.init(self.budget.allocator());
@@ -25,6 +58,13 @@ pub const DecodeHeap = struct {
 
     pub fn allocator(self: *DecodeHeap) std.mem.Allocator {
         return self.heap.allocator();
+    }
+
+    pub fn releaseIfEmpty(self: *DecodeHeap) void {
+        const scope = self.scope orelse return;
+        if (self.heap.live_bytes != 0 or scope.active == self) return;
+        scope.heaps.remove(&self.node);
+        self.destroy();
     }
 
     pub fn destroy(self: *DecodeHeap) void {
@@ -63,7 +103,7 @@ test "retained decoded values and transport allocations compete for one worker b
 }
 
 test "Roc realloc charges both buffers and preserves the old value on refusal" {
-    const host = @import("../allocator/host_allocator.zig");
+    const host = @import("host_allocator.zig");
     var worker = worker_memory.Budget{ .backing = std.testing.allocator, .limit = 4096 };
     // Measure the heap and ABI headers using the same layout as the runtime.
     const probe = try DecodeHeap.createWithBudget(&worker, 512);

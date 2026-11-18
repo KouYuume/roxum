@@ -9,6 +9,7 @@ pub const Context = struct {
     host_allocator: *HostAllocator,
     domain: Domain,
     generation: usize,
+    decoder: ?*@import("decode_heap.zig").DecodeHeap = null,
 };
 
 /// The context of code off a fiber (`init!`, stream steps), which never
@@ -25,6 +26,22 @@ pub fn setCurrent(context: Context) void {
     const place = slot();
     std.debug.assert(place.* == null);
     place.* = context;
+}
+
+/// The pure decoder runs between these calls. Values it returns can be freed
+/// by subsequent callbacks or by the request's final cleanup.
+pub fn beginDecode() !void {
+    const locals = fiber.currentLocals() orelse return error.NoRequest;
+    const ctx = locals.allocator orelse return error.NoRequest;
+    if (ctx.domain != Domain.request) return error.NoRequest;
+    locals.allocator.?.decoder = try locals.decoders.begin(ctx.generation);
+}
+
+pub fn endDecode() void {
+    const locals = fiber.currentLocals().?;
+    std.debug.assert(locals.allocator.?.decoder == locals.decoders.active and locals.decoders.active != null);
+    locals.allocator.?.decoder = null;
+    locals.decoders.finish();
 }
 
 pub fn clearCurrent() void {

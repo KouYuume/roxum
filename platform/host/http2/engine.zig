@@ -1580,7 +1580,7 @@ test "padding credit is returned by nghttp2 exactly once independently of unread
 
 test "stalled input does not stop peer progress and aggregate budget failure is stream local" {
     var context: u8 = 0;
-    var worker = @import("worker_memory.zig").Budget{ .backing = std.testing.allocator, .limit = 32768 + 32 };
+    var worker = @import("../allocator/http2_memory.zig").Budget{ .backing = std.testing.allocator, .limit = 32768 + 32 };
     var input_memory = Memory{ .backing = worker.allocator(), .limit = 32768 + 32 };
     const self = try Engine.createIncremental(std.testing.allocator, .{}, TestObserver.observer(&context), &input_memory);
     defer self.destroy();

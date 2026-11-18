@@ -356,23 +356,8 @@ fn runRequest(comptime Request: type, thread: *Request.Thread, target: *fiber.Fi
     request.thread = thread;
     if (request.dispatch.http2 != null) request.setHttp2Wait(target, false);
     fiber.resumeFiber(target);
-    if (target.crashed or target.cancelled) {
-        // Its Roc code crashed, or it stopped at a wait while it wrote its
-        // body: only this request stops.
-        tcp_effect.closeHeldBy(target);
-        files_effect.closeHeldBy(target);
-        concurrency_effect.releaseHeldBy(target);
-        try request.abandon(if (target.cancelled) target.stop.load(std.builtin.AtomicOrder.acquire) else fiber.Stop.none);
-        _ = request.shared.handoff.in_progress.fetchSub(1, std.builtin.AtomicOrder.release);
-        thread.pool.release(request);
-        thread.fibers.release(target);
-        return;
-    }
     if (target.finished) {
-        files_effect.closeHeldBy(target);
-        concurrency_effect.releaseHeldBy(target);
-        _ = request.shared.handoff.in_progress.fetchSub(1, std.builtin.AtomicOrder.release);
-        if (request.failure) |err| return err;
+        try finishRequest(request, target);
         thread.pool.release(request);
         thread.fibers.release(target);
         return;
@@ -382,6 +367,58 @@ fn runRequest(comptime Request: type, thread: *Request.Thread, target: *fiber.Fi
     // Registered only now that the fiber has suspended: whichever thread
     // the wait ends on may resume it at once.
     try thread.waits.addWaiting(target);
+}
+
+/// Drop decoder heaps after request-owned values and before the fiber can be reused.
+fn finishRequest(request: anytype, target: *fiber.Fiber) !void {
+    defer target.locals.decoders.deinit();
+    const abandoned = target.crashed or target.cancelled;
+    if (abandoned) tcp_effect.closeHeldBy(target);
+    files_effect.closeHeldBy(target);
+    concurrency_effect.releaseHeldBy(target);
+    if (abandoned) try request.abandon(if (target.cancelled) target.stop.load(std.builtin.AtomicOrder.acquire) else fiber.Stop.none);
+    _ = request.shared.handoff.in_progress.fetchSub(1, std.builtin.AtomicOrder.release);
+    if (!abandoned) {
+        if (request.failure) |err| return err;
+    }
+}
+
+test "request completion releases retained and active decoder heaps on every terminal path" {
+    const Request = struct {
+        failure: ?error{RequestFailed} = null,
+        shared: struct { handoff: struct { in_progress: std.atomic.Value(usize) } },
+        fail_abandon: bool = false,
+
+        fn abandon(self: *@This(), _: fiber.Stop) !void {
+            if (self.fail_abandon) return error.AbandonFailed;
+        }
+    };
+    const Exit = enum { completed, failed, crashed, cancelled, abandon_failed };
+    const worker = &@import("allocator/http2_memory.zig").shared;
+    const baseline = worker.used.load(std.builtin.AtomicOrder.monotonic);
+    const target = try fiber.Fiber.create();
+    defer target.destroy();
+    for ([_]Exit{ Exit.completed, Exit.failed, Exit.crashed, Exit.cancelled, Exit.abandon_failed }) |exit| {
+        var request = Request{ .shared = .{ .handoff = .{ .in_progress = std.atomic.Value(usize).init(1) } } };
+        target.crashed = exit == Exit.crashed or exit == Exit.abandon_failed;
+        target.cancelled = exit == Exit.cancelled;
+        const retained = try target.locals.decoders.begin(1);
+        _ = try retained.allocator().alloc(u8, 16);
+        target.locals.decoders.finish();
+        if (target.crashed or target.cancelled) {
+            const active = try target.locals.decoders.begin(1);
+            _ = try active.allocator().alloc(u8, 16);
+        }
+        if (exit == Exit.failed) request.failure = error.RequestFailed;
+        request.fail_abandon = exit == Exit.abandon_failed;
+        const result = finishRequest(&request, target);
+        switch (exit) {
+            Exit.failed => try std.testing.expectError(error.RequestFailed, result),
+            Exit.abandon_failed => try std.testing.expectError(error.AbandonFailed, result),
+            else => try result,
+        }
+        try std.testing.expectEqual(baseline, worker.used.load(std.builtin.AtomicOrder.monotonic));
+    }
 }
 
 /// Poller token of the wake that a new job, or a wake from another thread,
