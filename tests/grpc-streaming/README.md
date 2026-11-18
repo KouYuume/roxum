@@ -8,6 +8,8 @@ against production TCP and Unix listeners. Regenerate the committed service with
 
 The upload fixture checks empty and multiple input messages, fragmented and coalesced envelopes, truncated input, and rejection before client half-close.
 
+The manual duplex route receives a second request after its first acknowledgement, before request EOF. A direct HTTP/2 peer withholds stream credit after 8 KiB of a large reply. An independent observation confirms that a second request is processed while output is blocked. The peer then resets the stream or restores credit and checks the completed envelope and error trailers.
+
 The server-streaming fixture covers ordered output, zero-message success, initial/trailing metadata,
 application failure before and after output, invalid success-as-failure status,
 message encoding/count/payload bounds, execution expiry after a message, and Unary
@@ -49,5 +51,5 @@ not a general throughput measurement or proof about application-retained history
 Existing allocator and HTTP/2 engine tests cover allocation faults and ownership;
 the production fixture adds generated-message and cancellation coverage.
 
-Bidirectional RPC remains outside these fixtures. Linux architecture execution is recorded by the CI matrix;
+Linux architecture execution is recorded by the CI matrix;
 a local arm64 run does not establish x86_64 runtime acceptance.

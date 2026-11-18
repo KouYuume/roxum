@@ -60,7 +60,7 @@ for production ingress.
 
 Release 0.2 provides finite, uncompressed Unary RPC. The unreleased 0.3 source
 example additionally includes server-streaming; use it only with matching
-platform, integration and generator artifacts. The source acceptance suite also covers client-streaming. Bidirectional streaming,
+platform, integration and generator artifacts. The source acceptance suite also covers client-streaming. Generated bidirectional bindings,
 reflection, gRPC-Web and compressed messages are not provided. The
 [schema contract](../../libraries/roc-protobuf/DISTRIBUTION.md#compatibility) applies
 to generated messages; supplying `grpc` and `pf` explicitly enables typed service

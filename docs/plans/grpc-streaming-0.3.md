@@ -28,8 +28,7 @@ The [gRPC roadmap](grpc.md) records completed finite HTTP/2 and Unary gates.
 The host provides bounded incremental input and output with explicit receive
 credit and request-scoped cancellation. `Handler.streaming` receives input,
 `Reply.stream` produces output, and `Handler.duplex` coordinates both directions
-with scoped callbacks and explicit readiness interests. Generated client-streaming bindings use incremental input. Bidirectional
-gRPC services still need framing and generated bindings.
+with scoped callbacks and explicit readiness interests. Generated client-streaming bindings use incremental input. Manual duplex gRPC routes share the incremental decoder. Bidirectional services still need generated bindings.
 
 | Layer | Required work |
 |---|---|
@@ -138,7 +137,8 @@ EOF on real Roc fibers; ordinary handlers still receive complete bodies.
 Phase 9 adds streamed-response half-close cleanup and `Handler.duplex` with
 independent input/output waits, middleware checks and nonblocking writes.
 Phase 10 connects incremental reads to generated client-streaming handlers.
-The next gates are duplex gRPC framing and generated bidirectional service APIs (phases 11–12).
+Phase 11 adds duplex framing and terminal status handling on manually registered routes.
+The next gate is generated bidirectional service APIs and runnable examples (phase 12).
 
 ## Shared acceptance matrix
 
