@@ -713,7 +713,7 @@ pub fn build(b: *std.Build) void {
     const run_grpc_probe = b.addSystemCommand(&.{ "python3", "tools/check.py", "--only", "test-grpc-probe" });
     test_grpc_probe.dependOn(&run_grpc_probe.step);
 
-    const test_grpc_example = b.step("test-grpc-example", "Verify the runnable typed Unary service example");
+    const test_grpc_example = b.step("test-grpc-example", "Verify the runnable example across all four gRPC forms");
     const run_grpc_example = b.addSystemCommand(&.{ "python3", "tools/check.py", "--only", "test-grpc-example" });
     test_grpc_example.dependOn(&run_grpc_example.step);
     const test_grpc_wire = b.step("test-grpc-wire", "Verify finite gRPC framing, metadata and status integration");

@@ -8,6 +8,7 @@ import service.GreeterService
 import service.Greeting
 import service.ReplyText
 import wire.ProtobufWire
+import grpc.GrpcClientStream
 import grpc.GrpcServerStream
 import grpc.GrpcUnary
 import grpc.GrpcMetadata
@@ -29,7 +30,7 @@ init! = |{}| Ok({
 	},
 })
 
-routes = GreeterService.register(Router.new, { call_greet!: greet!, call_watch!: watch!, duplex_converse: converse }, { unary: { request_bytes: 1024, response_bytes: 1024, status_bytes: 128, metadata: GrpcMetadata.defaults }, streaming: GrpcServerStream.defaults }, ProtobufWire.default_limits)
+routes = GreeterService.register(Router.new, { call_greet!: greet!, call_watch!: watch!, call_countgreetings!: count_greetings!, duplex_converse: converse }, { unary: { request_bytes: 1024, response_bytes: 1024, status_bytes: 128, metadata: GrpcMetadata.defaults }, streaming: GrpcServerStream.defaults }, ProtobufWire.default_limits)
 
 greet! = |_model, Greeting.(input), metadata| {
 	Log.info!("Greeting RPC received")
@@ -68,6 +69,14 @@ watch! = |_model, Greeting.(input), _metadata| {
 		),
 	)
 }
+
+count_greetings! = |_model, _metadata| Ok(
+	GrpcClientStream.consume(
+		0.U64,
+		|count, _greeting| Ok(count + 1),
+		|count| Ok(GrpcUnary.response(ReplyText.{ greeting: count.to_str() })),
+	),
+)
 
 converse = {
 	begin!: |_model, _metadata| Ok({ state: { pending: [], ended: Bool.False }, initial: [] }),

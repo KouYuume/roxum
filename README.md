@@ -52,7 +52,7 @@ Next: [getting started](docs/guides/getting-started.md) · [hello](examples/hell
 
 | Area | Packages |
 |---|---|
-| RPC | [Unary gRPC](integrations/roxum-grpc/README.md) · [example](integrations/roxum-grpc/example/README.md) |
+| RPC | [gRPC](integrations/roxum-grpc/README.md) · [example](integrations/roxum-grpc/example/README.md) |
 | Data and external APIs | [PostgreSQL](integrations/roxum-postgres/README.md), [HTTP client](integrations/roxum-http-client/README.md) |
 | Browser clients | [CORS](integrations/roxum-cors/README.md), [cookies](integrations/roxum-cookie/README.md), [server-sent events](integrations/roxum-sse/README.md) |
 | Traffic control | [Rate limits](integrations/roxum-rate-limit/README.md), [concurrency limits](integrations/roxum-concurrency-limit/README.md) |
@@ -62,7 +62,7 @@ Core and integrations are versioned independently. See [versioning](docs/design/
 
 ## Limitations
 
-- IPv4/IPv6 TCP and filesystem Unix sockets; HTTP/1.1 by default. [Opt-in cleartext HTTP/2](docs/guides/deployment.md#opt-in-http2) supports finite responses, trailers, and uncompressed Unary gRPC. Default, uncompressed `Reply.stream` responses also support incremental output; streaming RPCs remain unsupported.
+- IPv4/IPv6 TCP and filesystem Unix sockets; HTTP/1.1 by default. [Opt-in cleartext HTTP/2](docs/guides/deployment.md#opt-in-http2) supports incremental input and output, trailers, and all four uncompressed gRPC forms.
 - Terminate inbound TLS and HTTP/3 at a [reverse proxy](docs/guides/reverse-proxy.md). WebSocket and HTTP/1 trailers are unsupported; CONNECT, TRACE, and arbitrary extension methods are [non-goals](docs/design/non-goals.md).
 - Timeouts cannot forcibly interrupt arbitrary Roc computation.
 - Runtime compression is gzip; precompressed Brotli is supported, multipart byte ranges are not.
@@ -71,16 +71,10 @@ Core and integrations are versioned independently. See [versioning](docs/design/
 
 ## Contributing and support
 
-Open an issue with a minimal reproducer, toolchain revisions, OS, command, and output. Remove credentials before sharing logs. Before contributing, read [project rules](AGENTS.md) and [Roc coding rules](roc_coding_rules.md); include relevant tests and documentation, and keep both READMEs in sync.
-
-```sh
-zig build test
-zig build test-e2e
-zig build test-e2e -Dcontract-alloc=true
-zig build test-contract
-```
-
-The full checks cover `speed`, `dev`, and `interpreter`; run them before pushing, as described in [contributing](docs/contributing.md). Release checks: `tools/release-check.sh`; Linux: `tools/linux/run-tests.sh`; fuzzing: `zig build fuzz` then `tools/fuzz.sh 10000`.
+For a bug report, include a minimal reproducer, toolchain revisions, OS, command
+and output. Remove credentials from logs. For changes, follow the
+[project rules](AGENTS.md), [Roc coding rules](roc_coding_rules.md) and
+[local verification and PR workflow](docs/contributing.md).
 
 ## License
 

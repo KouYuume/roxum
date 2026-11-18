@@ -1,8 +1,10 @@
 # Typed gRPC greeting service
 
-This example registers typed `unary.Greeter/Greet`, `Watch` and `Converse` methods from
+This example registers typed `unary.Greeter/Greet`, `Watch`, `CountGreetings` and `Converse` methods from
 `service.proto`. `Watch` produces three ordered greetings incrementally and
-finishes with status OK. `Converse` accepts a stream of names and replies to each before or after request EOF. Streaming requires the unreleased 0.3 sources.
+finishes with status OK. `CountGreetings` consumes names until EOF and returns
+one count, including zero for an empty stream. `Converse` replies to names
+while the request stream is open.
 `Greet` returns a greeting, initial `service` metadata, and the request's `request-bin`
 metadata as trailers. An empty name returns `INVALID_ARGUMENT`. The generated
 route installs `grpc-timeout` before body reception. Message and body limits are
@@ -25,7 +27,7 @@ zig-out/grpc-example/venv/bin/python integrations/roxum-grpc/example/client.py 1
 ```
 
 The client checks a successful greeting, initial and binary trailing metadata,
-the empty-name error, another successful call, the three streamed greetings, and an exchange of names and replies
+the empty-name error, another successful call, the three streamed greetings, upload counts, and an exchange of names and replies
 with final status on the same channel. No
 reflection service or handwritten Protobuf bytes are required. Stop the server
 with Ctrl-C.

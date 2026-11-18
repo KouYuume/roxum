@@ -1,6 +1,6 @@
 # Using the gRPC distribution
 
-A release containing typed Unary support supplies three Roc bundles: the roxum
+A release containing the gRPC integration supplies three Roc bundles: the roxum
 platform, `roxum-grpc`, and `roc-protobuf`. `release.json` names their URLs and
 SHA-256 hashes. Its `protobuf.source` entry identifies the source archive containing
 the matching `protoc-gen-roc` generator and pinned setup tools. Use the platform
@@ -58,9 +58,8 @@ for production ingress.
 
 ## Supported scope and release evidence
 
-Release 0.2 provides finite, uncompressed Unary RPC. The unreleased 0.3 source
-example additionally includes server-streaming and bidirectional RPC; use it only with matching
-platform, integration and generator artifacts. The source acceptance suite also covers client-streaming. Server reflection, gRPC-Web and compressed messages are not provided. The
+The 0.3 example exercises Unary, server-streaming, client-streaming and
+bidirectional RPC. The 0.2 release supports Unary only. Server reflection, gRPC-Web and compressed messages are not provided. The
 [schema contract](../../libraries/roc-protobuf/DISTRIBUTION.md#compatibility) applies
 to generated messages; supplying `grpc` and `pf` explicitly enables typed service
 registration. Codec-only generation continues to ignore services.

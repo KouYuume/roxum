@@ -5,5 +5,6 @@ message ReplyText { string greeting = 1; }
 service Greeter {
   rpc Greet(Greeting) returns (ReplyText);
   rpc Watch(Greeting) returns (stream ReplyText);
+  rpc CountGreetings(stream Greeting) returns (ReplyText);
   rpc Converse(stream Greeting) returns (stream ReplyText);
 }

@@ -4,6 +4,20 @@ Changes to the roxum platform and its integrations, newest first. The platform a
 
 ## Unreleased
 
+## 0.3.0
+
+### Breaking changes
+
+- `Handler` gains a `Duplex` variant. Update exhaustive matches on handler variants.
+- HTTP/2 streaming handlers receive body chunks before EOF. Streamed input now uses its own limit (unlimited by default) and can exceed `maximum_body_bytes`. The request-body deadline spans reception from the initial metadata, including callback time. A reset, timeout or disconnect can abandon a suspended handler. A response producer returning `Err(StreamClosed)` now aborts unfinished output. See [migrating from 0.2](docs/guides/migrating-to-0.3.md).
+- roxum-grpc: 0.2.0 targets core `^0.3`. Rebuild with matching platform and integration bundles and regenerate service bindings when updating the Protobuf tools.
+
+### Added
+
+- HTTP/2 supports incremental request and response bodies, explicit response trailers, deadline trailers and independent input/output readiness through `Handler.duplex`.
+- roxum-grpc: generated server-streaming, client-streaming and bidirectional services alongside Unary. The greeting example exercises all four forms with the distributed packages.
+- roc-protobuf: matched 0.1.1 generator and wire library. Service generation supports all four RPC shapes. Codec-only generation remains platform-independent.
+
 ## 0.2.0
 
 ### Breaking changes

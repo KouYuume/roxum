@@ -30,6 +30,11 @@ def verify(target, bindings):
         stream = greeter.Watch(service_pb2.Greeting(name='Roc'), timeout=5)
         assert [reply.greeting for reply in stream] == ['Hello Roc 0', 'Hello Roc 1', 'Hello Roc 2']
         assert stream.code() == grpc.StatusCode.OK
+        for names_to_count in ((), ('Ada', 'Roc')):
+            greetings = (service_pb2.Greeting(name=name) for name in names_to_count)
+            reply, completed = greeter.CountGreetings.with_call(greetings, timeout=5)
+            assert reply.greeting == str(len(names_to_count))
+            assert completed.code() == grpc.StatusCode.OK
         first_reply = threading.Event()
         def names():
             yield service_pb2.Greeting(name='Ada')
@@ -45,7 +50,7 @@ def verify(target, bindings):
         finally:
             first_reply.set()
             conversation.cancel()
-    print('PASS generated Unary, server-streaming and bidirectional greetings')
+    print('PASS generated greetings across all four RPC forms')
 
 
 if __name__ == '__main__':

@@ -122,10 +122,9 @@ Retries are disabled because RPCs may mutate application state. Match proxy body
 limits and I/O timeouts to the service; they are separate from `grpc-timeout` and
 may terminate a call before its application deadline. Do not translate HTTP 200
 into RPC success: clients must consume the final `grpc-status`.
-The [Unary acceptance fixture](../../tests/grpc-unary/README.md) exercises this
-configuration with a generated client, verified TLS, TCP/Unix upstreams,
-empty error responses, deadlines, and client cancellation. Its evidence is
-specific to the pinned nginx version; other proxies require equivalent checks.
+The [Unary](../../tests/grpc-unary/README.md) and
+[streaming](../../tests/grpc-streaming/README.md) fixtures exercise the pinned
+nginx configuration with verified TLS and TCP/Unix upstreams.
 
 ## Server behavior
 

@@ -6,6 +6,7 @@ import grpc.GrpcTimeout
 import grpc.GrpcMetadata
 import wire.ProtobufWire
 import grpc.GrpcServerStream
+import grpc.GrpcClientStream
 import grpc.GrpcDuplex
 import Greeting
 import ReplyText
@@ -14,6 +15,7 @@ GreeterService := [].{
 	Handlers(model, state_converse) : {
 		call_greet! : model, Greeting, List(GrpcMetadata.Entry) => Try(GrpcUnary.Response(ReplyText), GrpcUnary.Failure),
 		call_watch! : model, Greeting, List(GrpcMetadata.Entry) => Try(GrpcServerStream.Response(ReplyText), GrpcUnary.Failure),
+		call_countgreetings! : model, List(GrpcMetadata.Entry) => Try(GrpcClientStream.Consumer(Greeting, ReplyText), GrpcUnary.Failure),
 		duplex_converse : GrpcDuplex.Callbacks(model, state_converse, Greeting, ReplyText),
 	}
 	register : Router(model, tag, provided), GreeterService.Handlers(model, state_converse), { unary : GrpcUnary.Limits, streaming : GrpcServerStream.Limits }, ProtobufWire.Limits -> Router(model, tag, provided)
@@ -21,6 +23,7 @@ GreeterService := [].{
 		var $router = router
 		$router = $router.route("/unary.Greeter/Greet", MethodRouter.post(GrpcUnary.handler(|bytes| Greeting.decode(bytes, codec_limits), ReplyText.encode, handlers.call_greet!, limits.unary)).layer(GrpcTimeout.layer(limits.unary.metadata)))
 		$router = $router.route("/unary.Greeter/Watch", MethodRouter.post(GrpcServerStream.handler(|bytes| Greeting.decode(bytes, codec_limits), ReplyText.encode, handlers.call_watch!, limits.streaming)).layer(GrpcTimeout.streaming_layer(limits.streaming)))
+		$router = $router.route("/unary.Greeter/CountGreetings", MethodRouter.post(GrpcClientStream.handler(|bytes| Greeting.decode(bytes, codec_limits), ReplyText.encode, handlers.call_countgreetings!, limits.streaming)).layer(GrpcTimeout.streaming_layer(limits.streaming)))
 		$router = $router.route("/unary.Greeter/Converse", MethodRouter.post(GrpcDuplex.handler(|bytes| Greeting.decode(bytes, codec_limits), ReplyText.encode, handlers.duplex_converse, limits.streaming)).layer(GrpcTimeout.streaming_layer(limits.streaming)))
 		$router
 	}

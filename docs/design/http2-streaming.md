@@ -1,9 +1,8 @@
 # HTTP/2 streaming contract
 
-Status: production `Reply.stream` output, explicit terminal metadata and execution
-expiry trailers, production incremental input and streamed-response half-close
-cleanup and request-scoped duplex coordination are implemented. Generated client-streaming uses the incremental input path.
-Generated bidirectional bindings use the same duplex handler as manually registered routes in [0.3](../plans/grpc-streaming-0.3.md).
+This contract covers incremental input, streamed output and request-scoped
+duplex execution on the production HTTP/2 listener. For application code, see
+the [streaming guide](../guides/streaming.md).
 
 ## Production callback writer
 
@@ -247,45 +246,15 @@ view survives suspension. EOF is reported once by the pipeline and does not
 complete output. Request handles cannot extend the callback/request lifetime.
 No general task spawning or mandatory read/write alternation is introduced.
 
-## Target input and limits
+## Integration limits
 
-The host delivers owned byte chunks, not gRPC messages. Copying into the receive
-queue does not return receive credit. Taking a chunk releases queue storage and
-returns its connection and stream credit once. Discarded bytes return connection
-credit; stream credit is restored only while that stream remains open. Padding
-must also be accounted for. Reset must not starve another stream's connection
-window. No borrowed callback buffer survives a callback or yield.
-
-| Input state | Event | Result |
-|---|---|---|
-| Open | DATA | Queue within byte budgets, signal readable |
-| Open | END_STREAM | Drain queued bytes, then End |
-| End | Read | End, without completing response output |
-| Open / End | Reset, rejected input, cancellation | Release queue; fail waits |
-| Integration decoder at envelope boundary | End | Clean message EOF |
-| Integration decoder inside envelope/body | End | Truncated-message error |
-
-The initial target defaults are explicit, independently configurable streaming
-limits; they do not reinterpret the finite server body limit:
-
-| Bound | Default and enforcement |
-|---|---|
-| Host output chunk / input queue per stream | 16 KiB each; pause producer/receive credit |
-| Connection storage | Existing 16 MiB input/conversion and 16 MiB session/output ceilings |
-| Worker storage | Existing shared 128 MiB ceiling, including queued bytes |
-| gRPC encoded message payload | 2 MiB, excluding the five-byte envelope; reject before allocating advertised length |
-| Decoded message storage | 8 MiB charged allocation budget, including nested objects and temporary copies |
-| Messages / cumulative payload per direction | 65,536 messages / 64 MiB; reject before accepting the first excess message |
-| Streaming execution duration | 5 minutes from initial metadata by default; explicit route override may shorten or extend it, subject to a stricter server limit |
-
-Expose per-message, cumulative and duration choices through the streaming
-integration configuration; expose transport queue sizes only if production
-evidence requires tuning. Generated decoding must support allocation accounting
-before streaming APIs are released. A consumed framework-owned message and its
-decoder scratch are released before advancing; application-retained history is
-outside that retention guarantee. The integration must also charge retained
-message storage against the worker budget. A single request must not allocate
-its advertised decoded bound outside the aggregate ceiling.
+The engine bounds transport storage as described under [engine input](#engine-input)
+and [engine output](#engine-output). Above HTTP/2, the integration detects a
+truncated gRPC envelope at EOF and enforces per-message, cumulative payload,
+message-count and duration limits. Generated codecs also bound traversal and
+materialization. These are logical work limits; applications must bound any
+message history they retain. See [gRPC service limits](../../integrations/roxum-grpc/README.md#typed-server-streaming-services)
+and [codec limits](../../tools/protoc-gen-roc/CODECS.md#generated-api-and-limits).
 
 ## Completion, failure and middleware
 

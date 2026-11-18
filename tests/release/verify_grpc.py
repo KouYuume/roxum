@@ -1,4 +1,4 @@
-"""Generate and run a Unary service outside the checkout using release artifacts."""
+"""Generate and run all four RPC forms outside the checkout using release artifacts."""
 import hashlib
 import io
 import json
@@ -85,7 +85,7 @@ def verify(url, http_log):
                 status = stop(process)
                 process.stdout.close()
             assert status == 0
-            print(f'PASS distributed Unary {backend}: generated service, three URL packages, metadata and status')
+            print(f'PASS distributed gRPC (all four forms) {backend}: generated service, three URL packages, metadata and status')
 
 
 if __name__ == '__main__':

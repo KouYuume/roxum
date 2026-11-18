@@ -2,10 +2,10 @@
 
 ## Using roxum
 
-- [Getting started](guides/getting-started.md), [toolchain setup](toolchain.md), and [migrating from 0.1 to 0.2](guides/migrating-to-0.2.md)
+- [Getting started](guides/getting-started.md), [toolchain setup](toolchain.md), and migration guides for [0.2](guides/migrating-to-0.2.md) and [0.3](guides/migrating-to-0.3.md)
 - [Routing](guides/routing.md), [extractors](guides/extractors.md), [responses](guides/responses.md), and [middleware](guides/middleware.md)
 - [Streaming](guides/streaming.md), [files and compression](guides/files.md), and [static pages](guides/static-pages.md)
-- [Unary gRPC](../integrations/roxum-grpc/README.md), [runnable service](../integrations/roxum-grpc/example/README.md), and [distribution](../integrations/roxum-grpc/DISTRIBUTION.md)
+- [Unary and streaming gRPC](../integrations/roxum-grpc/README.md), [runnable service](../integrations/roxum-grpc/example/README.md), and [distribution](../integrations/roxum-grpc/DISTRIBUTION.md)
 - [Database](guides/database.md) and [HTTP client](guides/http-client.md)
 - [Deployment](guides/deployment.md), [reverse proxies](guides/reverse-proxy.md), and [observability](guides/observability.md)
 
@@ -17,7 +17,7 @@ These documents describe the current implementation, its invariants, and the pro
 - [Scope and non-goals](design/non-goals.md): backend focus, platform suggestions by use case, and responsibilities delegated to libraries and integrations
 - [Public API layout](design/public-api-layout.md) and [request representation](design/request-repr.md)
 - [Execution and ownership](design/execution-model.md) and [I/O scheduling](design/io-execution.md)
-- [Internal HTTP/2 engine](design/http2-engine.md): dependency, ownership, limits, and finite production listener integration
+- [Internal HTTP/2 engine](design/http2-engine.md): ownership, limits, production listeners, and [finite adapters](design/http2-finite.md)
 - [HTTP/2 streaming](design/http2-streaming.md): incremental input/output, duplex coordination and 0.3 lifecycle contracts
 - [Streaming lifecycle](design/streaming.md) and [HTTP field lists](design/http-field-lists.md)
 - [Independent Protobuf distribution](../libraries/roc-protobuf/DISTRIBUTION.md): codec/tool compatibility, standalone setup, and artifact metadata
@@ -29,9 +29,9 @@ These documents describe the current implementation, its invariants, and the pro
 These documents describe implementation plans, acceptance evidence, and remaining
 gates. Completed evidence is distinguished from proposed capabilities.
 
-- [gRPC server support](plans/grpc.md): host/integration boundaries, completed Unary gates, and planned streaming scope
-- [0.3 gRPC streaming](plans/grpc-streaming-0.3.md): server/client/bidirectional scope, PR sequence and acceptance gates
-- [Protobuf codec and generator assessment](plans/protobuf-codegen.md): reuse inventory, schema target, decoder bounds, and milestone 2 implementation slices
+- [gRPC server support](plans/grpc.md): host/integration boundaries, transport, codec, and service milestones
+- [0.3 gRPC streaming](plans/grpc-streaming-0.3.md): production acceptance, distribution, and release gates
+- [Protobuf codec and generator assessment](plans/protobuf-codegen.md): reuse inventory, design decision, and codec acceptance evidence
 - [Finite HTTP/2 acceptance](plans/http2-finite-acceptance.md): milestone 1 transport evidence and limits
 - [HTTP/2 transport decision](plans/http2-transport.md): engine choice, isolated spike evidence, and links to implemented contracts
 

@@ -53,7 +53,7 @@ codec fixtures additionally check shared decoding budgets, duplicate-message
 merges, map and oneof semantics, bounded encoding, and independent wire
 interoperability. They distinguish `Absent` from a present empty child.
 Recursive equality is not generated because the pinned compiler cannot derive
-it for these records; see the [generator contract](../../tools/protoc-gen-roc/README.md#recursive-messages-and-encoder-limits).
+it for these records; see the [generator contract](../../tools/protoc-gen-roc/CODECS.md#recursive-messages-and-encoder-limits).
 
 ## Open enum candidate
 

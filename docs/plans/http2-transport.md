@@ -3,7 +3,7 @@
 Status: milestone 0 experiment completed; finite production HTTP/2 and Unary gRPC
 are implemented. This record preserves the engine decision and isolated spike
 evidence. Current behavior and lifetime contracts live in the
-[engine design](../design/http2-engine.md); acceptance and future streaming gates
+[engine design](../design/http2-engine.md); transport and streaming acceptance gates
 are tracked in the [gRPC plan](grpc.md).
 
 ## Engine choice

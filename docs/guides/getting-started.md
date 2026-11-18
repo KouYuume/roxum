@@ -140,4 +140,4 @@ There is no general environment or process access: the platform only exposes wha
 - [Deployment](deployment.md): Linux builds, settings files, worker processes, reverse proxies, timeouts, logs, and
   debug mode
 - [Observability](observability.md): request IDs, the access log, metrics, health checks
-- [What roxum leaves out on purpose](../../README.md#limitations): HTTP/2, inbound TLS, WebSocket, and others
+- [What roxum leaves out on purpose](../../README.md#limitations): inbound TLS, WebSocket, and others
