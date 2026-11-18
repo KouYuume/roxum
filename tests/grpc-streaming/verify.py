@@ -26,8 +26,7 @@ import proxy
 
 
 def verify_duplex(channel):
-    chat = channel.stream_stream('/streaming.Exchange/Chat',
-        request_serializer=messages.Request.SerializeToString, response_deserializer=messages.Update.FromString)
+    chat = services.ExchangeStub(channel).Chat
     release = threading.Event()
 
     def requests():
@@ -45,6 +44,17 @@ def verify_duplex(channel):
     finally:
         release.set()
         call.cancel()
+
+    # The server completes successfully while the request generator is still open.
+    stop_sending = threading.Event()
+    def open_request():
+        yield messages.Request(mode='finish')
+        stop_sending.wait()
+    try:
+        early = chat(open_request(), timeout=5)
+        assert list(early) == [] and early.code() == grpc.StatusCode.OK
+    finally:
+        stop_sending.set()
 
     # One small request drives output count across the eight-message boundary.
     # Two small requests drive encoded output to 65543, 65544, or 65545 bytes.

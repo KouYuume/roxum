@@ -59,9 +59,8 @@ for production ingress.
 ## Supported scope and release evidence
 
 Release 0.2 provides finite, uncompressed Unary RPC. The unreleased 0.3 source
-example additionally includes server-streaming; use it only with matching
-platform, integration and generator artifacts. The source acceptance suite also covers client-streaming. Generated bidirectional bindings,
-reflection, gRPC-Web and compressed messages are not provided. The
+example additionally includes server-streaming and bidirectional RPC; use it only with matching
+platform, integration and generator artifacts. The source acceptance suite also covers client-streaming. Server reflection, gRPC-Web and compressed messages are not provided. The
 [schema contract](../../libraries/roc-protobuf/DISTRIBUTION.md#compatibility) applies
 to generated messages; supplying `grpc` and `pf` explicitly enables typed service
 registration. Codec-only generation continues to ignore services.
@@ -72,5 +71,4 @@ outside the checkout, and runs its client against all three compiler backends.
 Each build uses fresh caches and must fetch platform, gRPC and wire bundles by
 URL. `test-grpc-example` verifies the source example across both allocators;
 `test-grpc-unary` and `test-grpc-streaming` cover direct and TLS-proxied protocol
-behavior. The current source example verifies both Unary and server-streaming; publishing and release version selection
-remain maintainer operations.
+behavior. Publishing and release version selection remain maintainer operations.

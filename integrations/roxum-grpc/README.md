@@ -1,13 +1,12 @@
 # gRPC integration
 
-This package provides typed Unary, server-streaming and client-streaming handlers with opt-in
-generated service bindings using roxum's HTTP/2 capabilities. Both streaming forms are part of the unreleased 0.3 work.
-Bidirectional framing is available for manually registered routes. Generated routes
+This package provides typed Unary, client-streaming, server-streaming and bidirectional
+gRPC handlers over HTTP/2. Generated streaming bindings require the unreleased 0.3 sources. Generated routes
 install deadlines before waiting for request bodies and register a final gRPC
 status response on expiry. Independent generated clients and raw HTTP/2 checks
 cover direct TCP/Unix listeners and nginx TLS termination; see
 [Unary acceptance](../../tests/grpc-unary/README.md) and
-[server-streaming acceptance](../../tests/grpc-streaming/README.md). A
+[streaming acceptance](../../tests/grpc-streaming/README.md). A
 [runnable greeting service](example/README.md) and
 [distribution guide](DISTRIBUTION.md) cover generated clients and verified
 release-artifact use outside the checkout. The byte-oriented wire helpers do
@@ -29,10 +28,10 @@ and `GrpcUnary.failure(code, message)` construct the common cases; response
 records also support initial and trailing metadata.
 
 Registration adds exact POST routes using the original fully qualified service
-and method names. Callback field names use `call_` plus the lowercase method
+and method names. Unary and one-directional callback field names use `call_` plus the lowercase method
 name and `!`; collisions are rejected. Existing router fallbacks continue to
 handle unknown routes (the default HTTP 404 is mapped by gRPC clients to
-UNIMPLEMENTED). Service and method options, bidirectional RPCs, missing or invisible
+UNIMPLEMENTED). Service and method options, missing or invisible
 message types, and module/binding name collisions fail generation atomically.
 This includes `Handlers`, the generated callback record type.
 Codec-only generation retains its platform-free package and ignores services.
@@ -49,11 +48,12 @@ These handlers run after finite body assembly. Generated registration installs
 attach that layer themselves; the handler alone does not install deadlines.
 Start with the [greeting example](example/README.md) for registration and handlers.
 
-## Manual bidirectional routes
+## Typed bidirectional services
 
-Register `GrpcDuplex.handler(decode, encode, callbacks, limits)` on a POST route
-with `GrpcTimeout.streaming_layer(limits)`. Generated bidirectional bindings are
-planned for 0.3. The handler accepts the same limits as server-streaming, with
+For `Converse(stream Greeting) returns (stream ReplyText)`, supply a
+`duplex_converse` record to the generated service registration. Each bidirectional
+method has its own application state type, inferred from its callbacks. Registration
+installs the streaming deadline layer and uses the same limits as server-streaming, with
 independent message and payload budgets in each direction.
 
 - `begin!(model, metadata)` returns the initial application state and response metadata.
@@ -145,8 +145,8 @@ not after the terminal status.
 
 [Production fixtures](../../tests/grpc-streaming/README.md) cover generated
 clients, raw framing, TLS proxies, stalled readers, repeated cancellation and
-bounded memory. The [example](example/README.md) exercises both Unary and
-server-streaming, including from extracted distribution artifacts.
+bounded memory. The [example](example/README.md) exercises Unary, server-streaming and
+bidirectional RPC, including from extracted distribution artifacts.
 
 ## Timeout and cancellation
 `GrpcTimeout.parse` accepts one to eight ASCII digits and the case-sensitive

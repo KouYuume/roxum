@@ -3,7 +3,7 @@
 Status: production `Reply.stream` output, explicit terminal metadata and execution
 expiry trailers, production incremental input and streamed-response half-close
 cleanup and request-scoped duplex coordination are implemented. Generated client-streaming uses the incremental input path.
-The gRPC integration also supports manual duplex routes. Generated bidirectional bindings remain a target for [0.3](../plans/grpc-streaming-0.3.md).
+Generated bidirectional bindings use the same duplex handler as manually registered routes in [0.3](../plans/grpc-streaming-0.3.md).
 
 ## Production callback writer
 

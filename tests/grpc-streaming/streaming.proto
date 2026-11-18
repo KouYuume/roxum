@@ -7,3 +7,4 @@ service Updates {
   rpc Watch(Request) returns (stream Update);
 }
 service Uploads { rpc Submit(stream Request) returns (Update); }
+service Exchange { rpc Chat(stream Request) returns (stream Update); }
