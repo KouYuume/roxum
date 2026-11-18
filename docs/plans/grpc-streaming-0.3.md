@@ -86,7 +86,7 @@ and explicit completion/expiry trailers. Generated server-streaming integration
 and its production acceptance fixtures are implemented. Incremental production
 input, streamed-response half-close cleanup and request-scoped duplex coordination
 are also implemented.
-[Server-streaming acceptance](../../tests/grpc-streaming/README.md) records
+[Streaming acceptance](../../tests/grpc-streaming/README.md) records
 the proxy, cancellation, fixed-budget and memory-sampling workloads; the generated
 example also runs from extracted artifacts. Platform-specific results still belong
 to the corresponding local/CI verification runs.
@@ -139,7 +139,10 @@ independent input/output waits, middleware checks and nonblocking writes.
 Phase 10 connects incremental reads to generated client-streaming handlers.
 Phase 11 adds duplex framing and terminal status handling on manually registered routes.
 Phase 12 connects schema-defined bidirectional methods to typed callbacks and the runnable greeting example.
-The next gate is cross-mode failure, resource and regression acceptance (phase 13).
+Phase 13 exercises long generated input and output streams, writer recovery after
+interruption, expiry during partial input/output, and active duplex calls during
+graceful and forced drain. Phase 14 covers distribution, migration and release
+preparation.
 
 ## Shared acceptance matrix
 

@@ -23,33 +23,26 @@ The same assertions run through a hash-pinned nginx TLS proxy with both TCP and
 Unix HTTP/2 upstreams. The example under `integrations/roxum-grpc/example` also
 exercises streaming from extracted artifacts through the release verification.
 
-`acceptance.roc` uses a separate limit profile: one concurrent writer, an 8 MiB
-request-memory budget, 8 KiB messages and a two-minute duration cap. The raw
-client withholds stream credit after exactly 8 KiB while returning connection
-credit, and requires a Unary RPC on the same connection to complete. It repeats
-16 blocked-output resets and 16 producer-wait resets, then restores credit on
-another stalled stream and consumes 8,192 ordered
-4 KiB messages with a 64 KiB receive window on direct listeners. The TLS-proxy
-case sends 256 messages within the same 30-second absolute write deadline; it
-checks proxy behavior rather than memory growth. Successful completion and a subsequent
-Unary RPC check progress beyond the request-memory budget. A fresh connection
-also completes a Unary RPC at every memory checkpoint while the stream remains
-alive, so request cleanup cannot mask retained history. Four blocked connection
-disconnects are followed by a successful stream. The worker PID set must remain
-unchanged, so supervisor restarts cannot hide cleanup crashes. A new stream may
-receive 503 until asynchronous cleanup releases the writer slot; the client drains
-that rejection and retries within one five-second deadline. Other statuses/resets
-fail immediately, and a slot leak still fails when the deadline expires.
+## Resource and lifecycle acceptance
 
-On direct listeners, server-process-tree RSS is sampled after 1,024, 4,096 and 8,192 messages. After the
-4 MiB warmup, compiled-backend samples must stay within 8 MiB of the first; this
-allows bounded runtime/cache overhead while rejecting retention of the subsequent
-28 MiB. Samples are printed in the check log. Interpreter RSS is recorded without that
-threshold because it includes the compiler/runtime heap; its request-memory
-budget and concurrent admission checks still apply. This is a bounded acceptance workload,
-not a general throughput measurement or proof about application-retained history.
-Existing allocator and HTTP/2 engine tests cover allocation faults and ownership;
-the production fixture adds generated-message and cancellation coverage.
+`acceptance.roc` runs with two concurrent requests, one writer and an 8 MiB per-request
+memory budget. Direct TCP and Unix listeners exercise these workloads:
 
-Linux architecture execution is recorded by the CI matrix;
-a local arm64 run does not establish x86_64 runtime acceptance.
+| RPC | Workload and observable result |
+|---|---|
+| Server-streaming | Withhold credit after 8 KiB, complete a Unary RPC on the same connection, then restore credit and receive 8,192 ordered 4 KiB messages. Repeat resets during blocked output and producer waits, and disconnect blocked clients. |
+| Client-streaming and bidirectional | Send 2,048 ordered 16 KiB payloads per call. Pause the request iterator at 4, 16 and 32 MiB. A concurrent Unary probe confirms application consumption before each RSS sample. Submit returns the final count; Chat acknowledges each checkpoint before more input is sent. |
+| Interrupted input | Reset the stream or close the connection with a partial envelope after an application-observed marker. After a reset, start a new Submit on the same connection. After disconnect, use a new connection. Hold Submit open while a Unary probe confirms its marker, accounting for both request slots. A subsequent Watch must also acquire the sole writer and finish while the probe connection stays open. |
+| Deadline expiry | Withhold credit partway through a duplex response. A later client-streaming deadline expires on incomplete input. Restore duplex credit and check both calls' wire status (`DEADLINE_EXCEEDED`) and the incomplete response prefix. |
+| Shutdown | Signal the server after a duplex acknowledgement. On TCP, half-close after GOAWAY and require final OK and a clean exit. On Unix, keep the request open past the drain timeout and require a forced exit and a diagnostic for the cut connection. |
+
+The server-streaming workload samples server-process-tree RSS at the same payload
+sizes as the input workloads. After the 4 MiB warmup, compiled-backend samples
+must stay within 8 MiB of the first sample. Interpreter RSS includes its compiler
+heap and is recorded for observation. All backends enforce the request budget
+and check the worker PID set before shutdown. Writer recovery allows up to five
+seconds for asynchronous release, retrying only an admission rejection (503).
+
+The TLS-proxy pressure workload uses 256 output messages within the 30-second
+write deadline. Memory checks use direct listeners. The allocator and HTTP/2
+engine suites exercise allocation faults and ownership separately.
