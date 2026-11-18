@@ -14,6 +14,7 @@ from h2.events import DataReceived, ResponseReceived, StreamEnded, StreamReset, 
 from h2.settings import SettingCodes
 
 from roxum_process import ready_workers, stop
+import input_lifecycle
 import proxy
 import streaming_pb2 as messages
 
@@ -203,6 +204,16 @@ def verify(executable, unix=False, proxied=False, backend="speed"):
                 sock.settimeout(10)
                 sock.connect(address)
                 return sock
+            def verify_recovery():
+                with connect() as probe:
+                    Peer(probe, proxied).consume(1, lambda _: None)
+
+            if not proxied:
+                target = 'unix:' + path if unix else '127.0.0.1:' + port
+                input_lifecycle.long_inputs(target, lambda: rss_tree(process.pid), backend)
+                input_lifecycle.interrupted_inputs(connect, target, verify_recovery)
+                input_lifecycle.deadlines(connect)
+                verify_recovery()
             with connect() as sock:
                 peer = Peer(sock, proxied)
                 # Repeated zero-credit resets must release the single writer slot.
@@ -236,15 +247,19 @@ def verify(executable, unix=False, proxied=False, backend="speed"):
             for _ in range(4):
                 with connect() as sock:
                     Peer(sock, proxied).stall()
-            with connect() as sock:
-                Peer(sock, proxied).consume(1, lambda _: None)
+            verify_recovery()
             # A replacement worker can serve new connections after a cleanup
             # crash; successful RPCs alone must not hide that failure.
             assert set(ready_workers(process)) == workers, "worker restarted during acceptance"
-            assert stop(process) == 0
+            if proxied:
+                assert stop(process) == 0
+            else:
+                input_lifecycle.drain(process, connect, forced=unix)
             errors.seek(0)
             diagnostic = errors.read()
             assert 'panic' not in diagnostic.lower(), diagnostic
+            if unix and not proxied:
+                assert 'the drain timeout passed; 1 connections were cut' in diagnostic, diagnostic
         except BaseException:
             stop(process)
             errors.seek(0)
