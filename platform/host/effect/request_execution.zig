@@ -28,6 +28,38 @@ fn apply(current: Active, duration: ?u64) u64 {
     fiber_wait.cancelCurrent();
 }
 
+pub fn hostedBeginDecode(bytes: abi.RocListWith(u8, false)) callconv(std.builtin.CallingConvention.c) abi.HostRequestExecutionDecodeInput {
+    const allocator_context = @import("../allocator/context.zig");
+    const runtime = @import("../runtime.zig");
+    const context = allocator_context.current() orelse @panic("allocator context is not set");
+    var host = runtime.makeRocHost(@ptrCast(context.host_allocator));
+    defer bytes.decref(&host);
+    var result = std.mem.zeroes(abi.HostRequestExecutionDecodeInput);
+    result.tag = abi.HostRequestExecutionDecodeInputTag.Unavailable;
+    if (active() == null) return result;
+    allocator_context.beginDecode() catch |err| {
+        if (err == error.OutOfMemory) result.tag = abi.HostRequestExecutionDecodeInputTag.Exhausted;
+        return result;
+    };
+    // A decoder may return its input or a slice of it without allocating.
+    const copy = @import("../bridge/request.zig").rocByteListFromSliceChecked(bytes.items(), .{
+        .roc_host = &host,
+        .try_alloc = runtime.tryAllocWithHost,
+    }) catch {
+        allocator_context.endDecode();
+        result.tag = abi.HostRequestExecutionDecodeInputTag.Exhausted;
+        return result;
+    };
+    result.tag = abi.HostRequestExecutionDecodeInputTag.Input;
+    const payload: *abi.RocListWith(u8, false) = @ptrCast(@alignCast(&result.payload));
+    payload.* = copy;
+    return result;
+}
+
+pub fn hostedEndDecode() callconv(std.builtin.CallingConvention.c) void {
+    @import("../allocator/context.zig").endDecode();
+}
+
 pub fn hostedElapsed() callconv(std.builtin.CallingConvention.c) abi.HostRequestExecutionElapsed {
     var result = std.mem.zeroes(abi.HostRequestExecutionElapsed);
     const current = active() orelse {

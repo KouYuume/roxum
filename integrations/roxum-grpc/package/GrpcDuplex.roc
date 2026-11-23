@@ -4,6 +4,7 @@ import pf.Reply
 import pf.RequestExecution
 import pf.ResponseHeader
 import pf.ResponseWriter
+import GrpcDecode
 import GrpcServerStream
 import GrpcFrame
 import GrpcMetadata
@@ -139,7 +140,7 @@ receive! = |state, input, decode, step!, maximum| {
 				match StreamFrame.read($frame, $chunk, maximum).map_err(|(code, msg)| GrpcUnary.failure(code, msg))? {
 					Partial(frame) => return Ok({ ..state, service: $service, frame, waiting_for_input: $waiting })
 					Message(bytes, frame, rest) => {
-						value = decode(bytes).map_err(|_| GrpcUnary.failure(GrpcStatus.Code.InvalidArgument, "invalid Protobuf message"))?
+						value = GrpcDecode.message!(bytes, decode).map_err(|(code, message)| GrpcUnary.failure(code, message))?
 						$service = step!($service, Message(value))?
 						$waiting = Bool.False
 						$frame = frame

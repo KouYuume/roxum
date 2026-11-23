@@ -5,6 +5,7 @@ import pf.RequestBody
 import pf.RequestExecution
 import pf.ResponseHeader
 import pf.ResponseWriter
+import GrpcDecode
 import GrpcFrame
 import GrpcMetadata
 import GrpcStatus
@@ -37,7 +38,7 @@ GrpcServerStream := [].{
 				_ => []
 			}
 			payload = GrpcFrame.decode_unary(bytes, limits.request_bytes).map_err(GrpcWire.reject_frame)?
-			input = decode(payload).map_err(|_| error_reply(GrpcStatus.Code.InvalidArgument, "invalid Protobuf message"))?
+			input = GrpcDecode.message!(payload, decode).map_err(|(code, message)| error_reply(code, message))?
 			GrpcServerStream.Response.(prepared) = call!(model, input, metadata).map_err(|GrpcUnary.Failure.(problem)| GrpcWire.failure(problem.code, problem.message, problem.trailing, { status_bytes: limits.status_bytes, metadata: limits.metadata }) ?? error_reply(GrpcStatus.Code.Internal, "invalid application status"))?
 			headers = GrpcWire.initial_fields(prepared.initial, limits.metadata).map_err(|_| error_reply(GrpcStatus.Code.Internal, "invalid response metadata"))?
 			expiry = GrpcWire.terminal_fields(GrpcStatus.Code.DeadlineExceeded, "deadline exceeded", [], { status_bytes: 128, metadata: GrpcMetadata.defaults }).map_err(|_| Reply.status(500))?

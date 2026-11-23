@@ -25,6 +25,21 @@ sys.path.insert(0, str(ROOT / "tests/grpc-unary"))
 import proxy
 
 
+def verify_decoder_exhaustion(channel):
+    submit = channel.stream_unary('/heap/streaming.Uploads/Submit',
+                                  request_serializer=messages.Request.SerializeToString,
+                                  response_deserializer=messages.Update.FromString)
+    # The frame fits the route limit. Copying its payload exceeds the decoder heap.
+    try:
+        submit(iter([messages.Request(mode='x' * (8 * 1024 * 1024))]), timeout=30)
+    except grpc.RpcError as exc:
+        assert exc.code() == grpc.StatusCode.RESOURCE_EXHAUSTED and exc.details() == 'message allocation limit', exc
+    else:
+        raise AssertionError('decoder accepted an oversized input copy')
+    result = submit(iter([messages.Request(count=1)]), timeout=5)
+    assert result == messages.Update(sequence=1, text='total')
+
+
 def verify_duplex(channel):
     chat = services.ExchangeStub(channel).Chat
     release = threading.Event()
@@ -243,6 +258,8 @@ def verify(executable, unix, proxied=False):
                     return grpc.secure_channel(target, credentials, options=options) if proxied else grpc.insecure_channel(target, options=options)
                 with channel_for_target() as channel:
                     grpc.channel_ready_future(channel).result(timeout=10)
+                    if not proxied and not unix:
+                        verify_decoder_exhaustion(channel)
                     verify_duplex(channel)
                     if not proxied:
                         verify_duplex_pressure(channel, address, unix)

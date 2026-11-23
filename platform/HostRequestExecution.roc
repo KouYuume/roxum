@@ -1,6 +1,9 @@
 import Http
 
 HostRequestExecution := [].{
+	DecodeInput := [Input(List(U8)), Unavailable, Exhausted]
+	begin_decode! : List(U8) => HostRequestExecution.DecodeInput
+	end_decode! : {} => {}
 	Elapsed := [Elapsed(U64), Unavailable]
 	elapsed_nanoseconds! : {} => HostRequestExecution.Elapsed
 	limit_nanoseconds! : U64 => Bool

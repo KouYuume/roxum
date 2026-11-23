@@ -22,6 +22,8 @@ Changes to the roxum platform and its integrations, newest first. The platform a
 
 ### Added
 
+- `RequestExecution.decode_bytes!` runs a pure HTTP/2 request decoder with an owned input copy. roxum-grpc uses it for all four RPC forms; failure to allocate the heap or copy the input returns `RESOURCE_EXHAUSTED`.
+
 - A `Handler.typed` field that holds the reply of a field that failed can be typed `Try(_, Reply)`, so `?` sends that reply. `[Ok(_), Err(Reply)]` still works.
 - HTTP/2 supports incremental request and response bodies, explicit response trailers, deadline trailers and independent input/output readiness through `Handler.duplex`.
 - roxum-grpc: generated server-streaming, client-streaming and bidirectional services alongside Unary. The greeting example exercises all four forms with the distributed packages.

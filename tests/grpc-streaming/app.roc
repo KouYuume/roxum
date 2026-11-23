@@ -43,7 +43,9 @@ init! = |{}| {
 
 duplex_limits = { ..GrpcServerStream.defaults, messages: 8, payload_bytes: 65544 }
 
-routes = ExchangeService.register(uploads, { duplex_chat: chat }, duplex_limits, ProtobufWire.default_limits)
+heap_uploads = UploadsService.register(Router.new, { call_submit!: submit! }, { ..GrpcServerStream.defaults, request_bytes: 9 * 1024 * 1024 }, ProtobufWire.default_limits)
+
+routes = ExchangeService.register(uploads, { duplex_chat: chat }, duplex_limits, ProtobufWire.default_limits).nest("/heap", heap_uploads)
 
 chat = {
 	begin!: |Model.(model), _metadata| Ok({ state: { gate: model.gate, replies: [], count_reads: Bool.False, ended: Bool.False }, initial: [] }),

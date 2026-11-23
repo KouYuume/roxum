@@ -1,6 +1,7 @@
 import pf.Reply
 import pf.Handler
 import pf.RequestBody
+import GrpcDecode
 import GrpcFrame
 import GrpcMetadata
 import GrpcStatus
@@ -26,7 +27,7 @@ GrpcUnary := [].{
 				_ => []
 			}
 			payload = GrpcFrame.decode_unary(bytes, limits.request_bytes).map_err(GrpcWire.reject_frame)?
-			input = decode(payload).map_err(|_| error_reply(GrpcStatus.Code.InvalidArgument, "invalid Protobuf message"))?
+			input = GrpcDecode.message!(payload, decode).map_err(|(code, message)| error_reply(code, message))?
 			match call!(model, input, metadata) {
 				Ok(GrpcUnary.Response.(result)) => {
 					output = encode(result.message, limits.response_bytes).map_err(|_| error_reply(GrpcStatus.Code.Internal, "response encoding failed"))?
