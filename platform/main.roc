@@ -124,11 +124,11 @@ platform "roxum"
 			output: Exe,
 		},
 		arm64musl: {
-			inputs: ["crt1.o", "libhost.a", app, "libc.a"],
+			inputs: ["rcrt1.o", "libhost.a", app, "libc.a"],
 			output: Exe,
 		},
 		x64musl: {
-			inputs: ["crt1.o", "libhost.a", app, "libc.a"],
+			inputs: ["rcrt1.o", "libhost.a", app, "libc.a"],
 			output: Exe,
 		},
 	}

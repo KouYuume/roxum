@@ -14,6 +14,7 @@ Model := { db : Postgres.Pool }
 
 program = { init!, routes: Router.build(routes, {}) }
 
+init! : {} => Try({ model : Model, listen : Server.ListenOptions }, [StartupErr(Str)])
 init! = |{}| {
 	settings : { port : U16, password : Bool }
 	settings = Config.load!("port = 1\npassword = false").map_err(|_| StartupErr("config"))?

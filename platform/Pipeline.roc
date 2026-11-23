@@ -359,7 +359,7 @@ within_streamed_limit = |bytes, limit|
 read_failure = |read|
 	match read {
 		HostBody.RequestRead.TooLarge => { end: Handler.StreamEnd.TooLarge, reply: too_large }
-		HostBody.RequestRead.TimedOut => { end: Handler.StreamEnd.TimedOut, reply: Reply.error(HttpError.make(408, "request body timed out")) }
+		HostBody.RequestRead.TimedOut => { end: Handler.StreamEnd.TimedOut, reply: Reply.error(HttpError.{ status: 408, message: "request body timed out" }) }
 		HostBody.RequestRead.Closed => { end: Handler.StreamEnd.BadRequest, reply: Reply.error(HttpError.bad_request("request body stream is closed")) }
 		HostBody.RequestRead.BadRequest => { end: Handler.StreamEnd.BadRequest, reply: Reply.error(HttpError.bad_request("invalid request body")) }
 		HostBody.RequestRead.Failed => { end: Handler.StreamEnd.Failed, reply: Reply.error(HttpError.internal("request body read failed")) }
@@ -367,7 +367,7 @@ read_failure = |read|
 		HostBody.RequestRead.Chunk(_) | HostBody.RequestRead.End => { end: Handler.StreamEnd.Failed, reply: Reply.error(HttpError.internal("request body read failed")) }
 	}
 
-too_large = Reply.error(HttpError.make(413, "request body too large"))
+too_large = Reply.error(HttpError.{ status: 413, message: "request body too large" })
 
 ## The most the host returns in one read.
 part_bytes = 16 * 1024
@@ -398,11 +398,11 @@ expect {
 
 # A present check must still transform every chunk and finish with its state.
 expect {
-	check = Middleware.ChunkCheck.new(
-		0.U64,
-		|count, bytes| Ok({ state: count + List.len(bytes).to_u64(), bytes: List.map(bytes, |_byte| 7.U8) }),
-		|count| if count == (part_bytes + 1).to_u64() { Ok({}) } else { Err(too_large) },
-	)
+	check = Middleware.ChunkCheck.new({
+		initial: 0.U64,
+		step: |count, bytes| Ok({ state: count + List.len(bytes).to_u64(), bytes: List.map(bytes, |_byte| 7.U8) }),
+		finish: |count| if count == (part_bytes + 1).to_u64() { Ok({}) } else { Err(too_large) },
+	})
 	layers : List(List(Middleware.Stage({}, [], {})))
 	layers = [[Middleware.Stage.OnChunk(check)]]
 	match pass_parts(layers, List.repeat(42.U8, part_bytes + 1)) {
@@ -413,7 +413,7 @@ expect {
 
 # Even an empty body must call finish when a check exists.
 expect {
-	check = Middleware.ChunkCheck.new({}, |state, bytes| Ok({ state, bytes }), |_state| Err(too_large))
+	check = Middleware.ChunkCheck.new({ initial: {}, step: |state, bytes| Ok({ state, bytes }), finish: |_state| Err(too_large) })
 	layers : List(List(Middleware.Stage({}, [], {})))
 	layers = [[Middleware.Stage.OnChunk(check)]]
 	match pass_parts(layers, []) {

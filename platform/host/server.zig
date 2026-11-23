@@ -27,7 +27,7 @@ const files_effect = @import("effect/files.zig");
 const concurrency_effect = @import("effect/concurrency.zig");
 const worker_count = @import("worker_count.zig");
 const memory_budget = @import("memory_budget.zig");
-const boxy = @import("boxy.zig");
+const single_thread_runtime = @import("single_thread_runtime.zig");
 const request_memory = @import("allocator/request_memory.zig");
 const access_log = @import("access_log.zig");
 const metrics = @import("metrics.zig");
@@ -1314,7 +1314,7 @@ const Settings = struct {
 };
 
 fn applyListenOptions(base: connection.Limits, options: bridge.ListenOptions) error{StartupFailed}!Settings {
-    const threads = try threadCount(options.threads, boxy.linked());
+    const threads = try threadCount(options.threads, single_thread_runtime.presence());
     try checkProcesses(options.processes);
     try checkDrainTimeout(options.drain_timeout_milliseconds);
     var limits = try applyLimits(try applyTimeouts(base, options.timeouts), options.limits, threads);
@@ -1323,14 +1323,23 @@ fn applyListenOptions(base: connection.Limits, options: bridge.ListenOptions) er
     return .{ .limits = limits, .threads = threads };
 }
 
-/// The process's threads. An app that links Roc's erased-callable runtime
-/// runs on one: `Auto` falls back to it, and a fixed count above
-/// it stops startup rather than run fewer threads than asked.
-fn threadCount(threads: bridge.ListenThreads, boxy_linked: bool) error{StartupFailed}!usize {
+/// The process's threads. An app whose Roc code needs one thread (see
+/// `single_thread_runtime`) runs on one: `Auto` falls back to it, and a fixed
+/// count above it stops startup rather than run fewer threads than asked.
+/// `Auto` warns only for the erased-callable runtime, which an optimized build
+/// can link; an interpreter build is for development, and its one thread is
+/// documented rather than reported at every start.
+fn threadCount(threads: bridge.ListenThreads, presence: single_thread_runtime.Presence) error{StartupFailed}!usize {
+    const messages: ?OneThreadMessages = switch (presence) {
+        single_thread_runtime.Presence.absent => null,
+        single_thread_runtime.Presence.interpreter => oneThreadMessages("the app is built with --opt=interpreter, whose Roc interpreter keeps each call on the thread that started it"),
+        single_thread_runtime.Presence.boxy => oneThreadMessages("the app puts a function in a Box, whose Roc runtime is not yet safe on several threads"),
+        single_thread_runtime.Presence.unknown => oneThreadMessages("the executable has no readable symbol table, so the app may use a Roc runtime that is not yet safe on several threads"),
+    };
     switch (threads) {
         bridge.ListenThreads.auto => {
-            if (!boxy_linked) return worker_count.automatic();
-            diagnostics.warning("the app puts a function in a Box, whose Roc runtime is not yet safe on several threads; it runs on one thread per process (raise Server.ListenOptions.processes to use more CPUs)");
+            const one_thread = messages orelse return worker_count.automatic();
+            if (presence != single_thread_runtime.Presence.interpreter) diagnostics.warning(one_thread.auto);
             return 1;
         },
         bridge.ListenThreads.fixed => |count| {
@@ -1338,13 +1347,24 @@ fn threadCount(threads: bridge.ListenThreads, boxy_linked: bool) error{StartupFa
                 diagnostics.startupFailed("Server.Threads.Fixed takes 1 to 256 threads");
                 return error.StartupFailed;
             }
-            if (boxy_linked and count > 1) {
-                diagnostics.startupFailed("the app puts a function in a Box, whose Roc runtime is not yet safe on several threads: Server.Threads.Fixed must be 1 (raise Server.ListenOptions.processes to use more CPUs)");
-                return error.StartupFailed;
+            if (messages) |one_thread| {
+                if (count > 1) {
+                    diagnostics.startupFailed(one_thread.fixed);
+                    return error.StartupFailed;
+                }
             }
             return count;
         },
     }
+}
+
+const OneThreadMessages = struct { auto: []const u8, fixed: []const u8 };
+
+fn oneThreadMessages(comptime reason: []const u8) OneThreadMessages {
+    return .{
+        .auto = reason ++ "; it runs on one thread per process (raise Server.ListenOptions.processes to use more CPUs)",
+        .fixed = reason ++ ": Server.Threads.Fixed must be 1 (raise Server.ListenOptions.processes to use more CPUs)",
+    };
 }
 
 fn checkProcesses(processes: u16) error{StartupFailed}!void {
@@ -1483,7 +1503,7 @@ fn initializeApplication(
         bridge.InitResultTag.Err => {
             const message = result.payload_err();
             diagnostics.startupFailed(message.asSlice());
-            result.decref(roc_host);
+            message.decref(roc_host);
             return error.StartupFailed;
         },
     };
@@ -1594,19 +1614,25 @@ test "Auto limits give each thread the per-thread defaults" {
 }
 
 test "threads take 1 to 256 and processes 1 to 64" {
-    _ = try threadCount(bridge.ListenThreads.auto, false);
-    for ([_]u16{ 1, 2, 255, 256 }) |count| try std.testing.expectEqual(@as(usize, count), try threadCount(.{ .fixed = count }, false));
+    _ = try threadCount(bridge.ListenThreads.auto, single_thread_runtime.Presence.absent);
+    for ([_]u16{ 1, 2, 255, 256 }) |count| try std.testing.expectEqual(@as(usize, count), try threadCount(.{ .fixed = count }, single_thread_runtime.Presence.absent));
     for ([_]u16{ 0, 257, std.math.maxInt(u16) }) |count| {
-        try std.testing.expectError(error.StartupFailed, threadCount(.{ .fixed = count }, false));
+        try std.testing.expectError(error.StartupFailed, threadCount(.{ .fixed = count }, single_thread_runtime.Presence.absent));
     }
     for ([_]u16{ 1, 64 }) |count| try checkProcesses(count);
     for ([_]u16{ 0, 65 }) |count| try std.testing.expectError(error.StartupFailed, checkProcesses(count));
 }
 
-test "an app that links boxy runs on one thread" {
-    try std.testing.expectEqual(@as(usize, 1), try threadCount(bridge.ListenThreads.auto, true));
-    try std.testing.expectEqual(@as(usize, 1), try threadCount(.{ .fixed = 1 }, true));
-    try std.testing.expectError(error.StartupFailed, threadCount(.{ .fixed = 2 }, true));
+test "an app on a runtime that needs one thread runs on one" {
+    for ([_]single_thread_runtime.Presence{
+        single_thread_runtime.Presence.interpreter,
+        single_thread_runtime.Presence.boxy,
+        single_thread_runtime.Presence.unknown,
+    }) |presence| {
+        try std.testing.expectEqual(@as(usize, 1), try threadCount(bridge.ListenThreads.auto, presence));
+        try std.testing.expectEqual(@as(usize, 1), try threadCount(.{ .fixed = 1 }, presence));
+        try std.testing.expectError(error.StartupFailed, threadCount(.{ .fixed = 2 }, presence));
+    }
 }
 
 test "drain timeouts from 1 ms to one hour are accepted" {

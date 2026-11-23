@@ -27,13 +27,13 @@ jobs:
         with:
           repository: roc-lang/roc
           # Keep this ref in sync with .roc-revision; check-roc-toolchain.sh enforces it.
-          ref: 9e85de7aba79eaeb8ca589ab6a1ea581274c8930
+          ref: 15177e91f62cafddf5336c455e00e9f05427ac16
           path: .roc-src
-      - name: Install the pinned Roc nightly
-        # Use the nightly built from the pinned revision;
+      - name: Install the pinned Roc compiler
+        # Use the compiler built from the pinned revision;
         # the source above is for the checks.
         run: |
-          tools/install-roc-nightly.sh "$GITHUB_WORKSPACE/.roc-bin"
+          tools/install-roc.sh "$GITHUB_WORKSPACE/.roc-bin"
           echo "$GITHUB_WORKSPACE/.roc-bin" >> "$GITHUB_PATH"
       - name: Verify Roc compiler and source revision
         env:
@@ -262,13 +262,13 @@ jobs:
         with:
           repository: roc-lang/roc
           # Keep this ref in sync with .roc-revision; check-roc-toolchain.sh enforces it.
-          ref: 9e85de7aba79eaeb8ca589ab6a1ea581274c8930
+          ref: 15177e91f62cafddf5336c455e00e9f05427ac16
           path: .roc-src
-      - name: Install the pinned Roc nightly
-        # Use the nightly built from the pinned revision;
+      - name: Install the pinned Roc compiler
+        # Use the compiler built from the pinned revision;
         # the source above is for the checks.
         run: |
-          tools/install-roc-nightly.sh "$GITHUB_WORKSPACE/.roc-bin"
+          tools/install-roc.sh "$GITHUB_WORKSPACE/.roc-bin"
           echo "$GITHUB_WORKSPACE/.roc-bin" >> "$GITHUB_PATH"
       - name: Verify Roc compiler and source revision
         env:

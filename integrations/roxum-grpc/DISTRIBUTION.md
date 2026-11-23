@@ -7,12 +7,13 @@ the matching `protoc-gen-roc` generator and pinned setup tools. Use the platform
 URL from that same release everywhere: the application, integration and generated
 service package must agree on platform identity.
 
-Install the Roc compiler pinned by the release's `protobuf.roc_revision`. Download
-release metadata from the trusted release location, verify artifact SHA-256 hashes
-before extraction, and use the generator and wire library from the same release.
-The integration's version and `platform_versions` are recorded in `release.json`;
-compiler identity is stricter than the version range. Existing releases without
-these artifacts do not acquire Unary support from this guide.
+Install the Roc compiler named by the release's `protobuf.roc_release` (built from
+`protobuf.roc_revision`). Download release metadata from the trusted release
+location, verify artifact SHA-256 hashes before extraction, and use the generator
+and wire library from the same release. The integration's version and
+`platform_versions` are recorded in `release.json`; compiler identity is stricter
+than the version range. Existing releases without these artifacts do not acquire
+Unary support from this guide.
 
 ## Build a service outside the checkout
 

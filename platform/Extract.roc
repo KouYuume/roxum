@@ -19,7 +19,7 @@ import UrlEncoded
 ## ```
 ##
 ## A field that cannot be read answers as its extractor in `Extract` does, and
-## the handler does not run. A field typed `[Ok(Extract.JsonBody(Item)), Err(Reply)]`
+## the handler does not run. A field typed `Try(Extract.JsonBody(Item), Reply)`
 ## holds that answer instead, and the handler decides what to do with it. Reading
 ## has no effects: the body has been received.
 ## A value that needs effects, such as a user from a database, comes from a
@@ -78,7 +78,7 @@ Extract :: [].{
 
 	## A JSON body (`Extract.json`).
 	JsonBody(value) := value.{
-		parser_for : Extract.Parser(Extract.JsonBody(value), provided) where [value.Json.Parseable([InvalidJson(Str), ..errs])]
+		parser_for : Extract.Parser(Extract.JsonBody(value), provided) where [value.Json.Parseable([InvalidJson(Str)])]
 		parser_for = |_encoding| Extract.reading(
 			|context|
 				match Extract.json_value(context) {
@@ -90,7 +90,7 @@ Extract :: [].{
 
 	## The request headers (`Extract.typed_headers`).
 	Headers(value) := value.{
-		parser_for : Extract.Parser(Extract.Headers(value), provided) where [value.Encoding.HttpHeader.Parseable([BadHeader, ..errs])]
+		parser_for : Extract.Parser(Extract.Headers(value), provided) where [value.Encoding.HttpHeader.Parseable([BadHeader, MissingHeader(Str)])]
 		parser_for = |_encoding| Extract.reading(
 			|context|
 				match Extract.headers_value(context) {
@@ -270,14 +270,14 @@ Extract :: [].{
 	## Content-Type (parameters allowed), or answers 415; the body has been received
 	## by then, so add `require_json` to refuse before it is. Answers 400 for invalid
 	## JSON or a value of another type: Roc's parser does not tell them apart.
-	json : {} -> Extractor(a, provided) where [a.Json.Parseable([InvalidJson(Str), ..errs])]
+	json : {} -> Extractor(a, provided) where [a.Json.Parseable([InvalidJson(Str)])]
 	json = |{}| Extractor.{ run!: |context| Extract.json_value(context) }
 
 	## What `json` reads, for `Extract.JsonBody`.
-	json_value : RouteContext(provided) -> Try(a, Reply) where [a.Json.Parseable([InvalidJson(Str), ..errs])]
+	json_value : RouteContext(provided) -> Try(a, Reply) where [a.Json.Parseable([InvalidJson(Str)])]
 	json_value = |context| {
 		if !json_content_type(context.request.headers) {
-			return Err(Reply.error(HttpError.make(415, "expected a JSON Content-Type")))
+			return Err(Reply.error(HttpError.{ status: 415, message: "expected a JSON Content-Type" }))
 		}
 		body_text = text_of(context.request.body)?
 		match Json.parse(body_text) {
@@ -312,13 +312,13 @@ Extract :: [].{
 	form_value : RouteContext(provided) -> Try(a, Reply) where [a.UrlEncoded.Parseable([TooManyBytes, TooManyFields, BadValue, MissingRequiredField(Str), ..errs])]
 	form_value = |context| {
 		if !form_content_type(context.request.headers) {
-			return Err(Reply.error(HttpError.make(415, "expected a form Content-Type")))
+			return Err(Reply.error(HttpError.{ status: 415, message: "expected a form Content-Type" }))
 		}
 		body_bytes = received_body(context.request.body)?
 		match UrlEncoded.parse(body_bytes, form_limits) {
 			Ok(value) => Ok(value)
-			Err(TooManyBytes) | Err(TooManyFields) => Err(Reply.error(HttpError.make(413, "form too large")))
-			Err(_) => Err(Reply.error(HttpError.make(422, "the form does not match the target type")))
+			Err(TooManyBytes) | Err(TooManyFields) => Err(Reply.error(HttpError.{ status: 413, message: "form too large" }))
+			Err(_) => Err(Reply.error(HttpError.{ status: 422, message: "the form does not match the target type" }))
 		}
 	}
 
@@ -357,7 +357,7 @@ Extract :: [].{
 				if json_content_type(head.headers) {
 					Ok(head)
 				} else {
-					Err(Reply.error(HttpError.make(415, "expected a JSON Content-Type")))
+					Err(Reply.error(HttpError.{ status: 415, message: "expected a JSON Content-Type" }))
 				},
 		),
 	]
@@ -376,14 +376,14 @@ Extract :: [].{
 	multipart_value = |context| {
 		boundary = match multipart_boundary(context.request.headers) {
 			Ok(found) => found
-			Err(NotMultipart) => return Err(Reply.error(HttpError.make(415, "expected a multipart/form-data Content-Type")))
+			Err(NotMultipart) => return Err(Reply.error(HttpError.{ status: 415, message: "expected a multipart/form-data Content-Type" }))
 		}
 		body_bytes = received_body(context.request.body)?
 		match MultipartBody.parse(body_bytes, boundary, MultipartBody.Limits.{}) {
 			Ok(value) => Ok(value)
 			Err(Invalid) => Err(Reply.error(HttpError.bad_request("invalid multipart body")))
-			Err(TooLarge) => Err(Reply.error(HttpError.make(413, "multipart body too large")))
-			Err(_) => Err(Reply.error(HttpError.make(422, "the form does not match the target type")))
+			Err(TooLarge) => Err(Reply.error(HttpError.{ status: 413, message: "multipart body too large" }))
+			Err(_) => Err(Reply.error(HttpError.{ status: 422, message: "the form does not match the target type" }))
 		}
 	}
 
@@ -394,7 +394,7 @@ Extract :: [].{
 			|_model, head|
 				match multipart_boundary(head.headers) {
 					Ok(_) => Ok(head)
-					Err(NotMultipart) => Err(Reply.error(HttpError.make(415, "expected a multipart/form-data Content-Type")))
+					Err(NotMultipart) => Err(Reply.error(HttpError.{ status: 415, message: "expected a multipart/form-data Content-Type" }))
 				},
 		),
 	]
@@ -407,18 +407,18 @@ Extract :: [].{
 				if form_content_type(head.headers) {
 					Ok(head)
 				} else {
-					Err(Reply.error(HttpError.make(415, "expected a form Content-Type")))
+					Err(Reply.error(HttpError.{ status: 415, message: "expected a form Content-Type" }))
 				},
 		),
 	]
 
 	## The request headers, into the type the caller's annotation names. Fails with
 	## 400 if a header value is not valid UTF-8 or the headers do not match the type.
-	typed_headers : {} -> Extractor(a, provided) where [a.Encoding.HttpHeader.Parseable([BadHeader, ..errs])]
+	typed_headers : {} -> Extractor(a, provided) where [a.Encoding.HttpHeader.Parseable([BadHeader, MissingHeader(Str)])]
 	typed_headers = |{}| Extractor.{ run!: |context| Extract.headers_value(context) }
 
 	## What `typed_headers` reads, for `Extract.Headers`.
-	headers_value : RouteContext(provided) -> Try(a, Reply) where [a.Encoding.HttpHeader.Parseable([BadHeader, ..errs])]
+	headers_value : RouteContext(provided) -> Try(a, Reply) where [a.Encoding.HttpHeader.Parseable([BadHeader, MissingHeader(Str)])]
 	headers_value = |context| {
 		raw = headers_to_str(context.request.headers)?
 		match (Encoding.HttpHeader.parser_for())(raw) {

@@ -26,7 +26,7 @@ class Compatibility(unittest.TestCase):
             manifest.parent.mkdir(parents=True)
             (root / '.roc-revision').write_text(original['roc_revision'])
             for field, value in [('schema_version', 2), ('version', 'invalid'),
-                                 ('generator_version', '0.2.0'), ('roc_revision', 'old'),
+                                 ('generator_version', '0.2.0'), ('roc_revision', 'old'), ('roc_release', ''),
                                  ('schema_subset', 'proto2'), ('max_unpacked_bytes', 0),
                                  ('max_unpacked_bytes', -1), ('max_unpacked_bytes', True)]:
                 manifest.write_text(json.dumps({**original, field: value}))

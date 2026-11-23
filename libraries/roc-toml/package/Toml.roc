@@ -80,16 +80,16 @@ Toml := [].{
 	merge = |base, override| TomlValue.merge(base, override)
 
 	## Decodes a tree into the type the caller asks for.
-	decode : TomlValue -> Try(a, [TomlDecode(Str), ..errs])
+	decode : TomlValue -> Try(a, [TomlDecode(Str), MissingRequiredField(Str)])
 		where [
-			a.parser_for : TomlDecode -> (TomlDecode.State -> Try({ value : a, rest : TomlDecode.State }, [TomlDecode(Str), ..errs])),
+			a.parser_for : TomlDecode -> (TomlDecode.State -> Try({ value : a, rest : TomlDecode.State }, [TomlDecode(Str), MissingRequiredField(Str)])),
 		]
 	decode = |value| TomlDecode.decode(value)
 
 	## Parses and decodes in one step.
-	decode_str : Str -> Try(a, [TomlSyntax(Str), TomlDecode(Str), ..errs])
+	decode_str : Str -> Try(a, [TomlSyntax(Str), TomlDecode(Str), MissingRequiredField(Str)])
 		where [
-			a.parser_for : TomlDecode -> (TomlDecode.State -> Try({ value : a, rest : TomlDecode.State }, [TomlSyntax(Str), TomlDecode(Str), ..errs])),
+			a.parser_for : TomlDecode -> (TomlDecode.State -> Try({ value : a, rest : TomlDecode.State }, [TomlDecode(Str), MissingRequiredField(Str)])),
 		]
 	decode_str = |text| {
 		value = TomlParse.parse(text)?

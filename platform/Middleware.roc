@@ -54,13 +54,17 @@ Middleware :: [].{
 		## and the next part, and returns the new state and the bytes to pass on
 		## (the part itself, or a transformed part). `finish` runs after the last
 		## part. Either returns a reply to stop the request.
-		new : state, (state, List(U8) -> Try({ state : state, bytes : List(U8) }, Reply)), (state -> Try({}, Reply)) -> Middleware.ChunkCheck
-		new = |initial, step, finish| Middleware.ChunkCheck.({
+		new : {
+			initial : state,
+			step : (state, List(U8) -> Try({ state : state, bytes : List(U8) }, Reply)),
+			finish : (state -> Try({}, Reply)),
+		} -> Middleware.ChunkCheck
+		new = |spec| Middleware.ChunkCheck.({
 			step: |bytes| {
-				done = step(initial, bytes)?
-				Ok({ next: Middleware.ChunkCheck.new(done.state, step, finish), bytes: done.bytes })
+				done = (spec.step)(spec.initial, bytes)?
+				Ok({ next: Middleware.ChunkCheck.new({ ..spec, initial: done.state }), bytes: done.bytes })
 			},
-			finish: |{}| finish(initial),
+			finish: |{}| (spec.finish)(spec.initial),
 		})
 
 		## Passes `bytes` through the check, returning the check for the next part.

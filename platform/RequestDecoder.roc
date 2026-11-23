@@ -18,7 +18,7 @@ RequestDecoder :: [].{
 	}
 
 	## How far reading the record has gone, and the reply of a field that failed
-	## for the `Err` of a field typed `[Ok(_), Err(Reply)]`.
+	## for the `Err` of a field typed `Try(_, Reply)`.
 	State(provided) := { context : RouteContext(provided), index : U64, field : Str, rejection : Reply }.{
 		rejection : RequestDecoder.State(provided) -> Reply
 		rejection = |state| state.rejection
@@ -27,10 +27,9 @@ RequestDecoder :: [].{
 	## The format that reads every field of the record from the request.
 	Request := [Default].{
 
-		## A field typed `[Ok(a), Err(Reply)]` reads `a`, and when that fails holds
-		## what would have answered, so the handler runs and decides. Roc derives a
-		## `Try` only as an optional field, so this is not `Try(a, Reply)`.
-		parse_tag_union : RequestDecoder.Request, Encoding.ParseTagUnionSpec(a), RequestDecoder.State(provided) -> Try({ value : a, rest : RequestDecoder.State(provided) }, [Rejected(Reply)])
+		## A field typed `Try(a, Reply)` reads `a`, and when that fails holds what
+		## would have answered, so the handler runs and decides.
+		parse_tag_union : RequestDecoder.Request, Encoding.ParseTagUnionSpec(a, RequestDecoder.Request, RequestDecoder.State(provided), [Rejected(Reply)]), RequestDecoder.State(provided) -> Try({ value : a, rest : RequestDecoder.State(provided) }, [Rejected(Reply)])
 		parse_tag_union = |encoding, spec, state| {
 			read_tag = |tag, current|
 				Encoding.ParseTagUnionSpec.parse(
@@ -85,5 +84,8 @@ RequestDecoder :: [].{
 
 		skip_record_field : RequestDecoder.Request, RequestDecoder.State(provided) -> Try(RequestDecoder.State(provided), [Rejected(Reply)])
 		skip_record_field = |_, state| Ok(state)
+
+		missing_field : RequestDecoder.Request, Str -> [Rejected(Reply)]
+		missing_field = |_, _| Rejected(Reply.status(500))
 	}
 }

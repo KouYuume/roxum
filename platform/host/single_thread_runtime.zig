@@ -1,42 +1,51 @@
-//! Whether the app links Roc's erased-callable runtime ("boxy").
+//! Whether the app's Roc code runs on a runtime that one thread at a time
+//! must run, so the process runs one thread.
 //!
-//! The runtime keeps one state per process and updates it without a lock:
-//! each erased callable an app builds (a `Box`ed function, such as a stream
-//! producer) is registered in a shared table (roc-lang/roc#12267, and the
-//! registration in Roc's `src/eval/boxy_abi.zig`). An app that links the
-//! runtime is safe only while one thread runs its Roc code. The host's own
-//! entry passes no function value, so an app links the runtime only when it
-//! builds erased callables itself.
+//! - Roc's erased-callable runtime ("boxy") keeps one state per process and
+//!   updates it without a lock: each erased callable an app builds (a `Box`ed
+//!   function, such as a stream producer) is registered in a shared table
+//!   (roc-lang/roc#12267, and the registration in Roc's
+//!   `src/eval/boxy_abi.zig`). The host's own entry passes no function value,
+//!   so an app links it only when it builds erased callables itself.
+//! - Roc's interpreter (`--opt=interpreter`) ties a call to the OS thread
+//!   that entered it (`Retained.enter` and `leave` in Roc's
+//!   `src/eval/interpreter.zig` compare thread ids). A fiber resumed on another
+//!   thread breaks that: debug builds of Roc fail an assertion, and release
+//!   builds can wait forever on the call's own lock.
 //!
 //! The host reads its own executable's symbol table once, at startup: a weak
-//! reference to the runtime would be simpler, but Zig does not mark one weak
-//! in Mach-O, so an app without the runtime would not link. An executable
-//! without a symbol table (stripped) counts as linking the runtime, so a
-//! doubt costs threads, never safety.
+//! reference to either runtime would be simpler, but Zig does not mark one
+//! weak in Mach-O, so an app without it would not link. An executable without
+//! a symbol table (stripped) counts as needing one thread, so a doubt costs
+//! threads, never safety.
 const std = @import("std");
 const builtin = @import("builtin");
 
-/// What the symbol table says about the runtime's initializer, which
-/// generated code calls before anything else when the app uses the runtime.
+/// What the symbol table says about the runtimes that need one thread.
 pub const Presence = enum {
-    present,
+    /// The interpreter's entry: the app was built with `--opt=interpreter`.
+    interpreter,
+    /// The erased-callable runtime's initializer, which generated code calls
+    /// before anything else when the app uses it.
+    boxy,
+    /// Neither is defined.
     absent,
     /// No symbol table, or one this code cannot read.
     unknown,
 };
 
-const symbol = "roc_boxy_init_embedded";
+const interpreter_symbol = "roc_entrypoint_from_image";
+const boxy_symbol = "roc_boxy_init_embedded";
 
 var cached: ?Presence = null;
 
-/// True unless the executable's symbol table shows the runtime is absent.
-pub fn linked() bool {
-    const presence = cached orelse blk: {
+/// What this executable's symbol table says, read once.
+pub fn presence() Presence {
+    return cached orelse blk: {
         const found = scanSelf();
         cached = found;
         break :blk found;
     };
-    return presence != Presence.absent;
 }
 
 fn scanSelf() Presence {
@@ -76,8 +85,9 @@ fn selfPath(buffer: *[std.c.PATH_MAX]u8) ?[*:0]const u8 {
     }
 }
 
-/// Looks for the runtime's initializer among the defined symbols of a
-/// 64-bit little-endian Mach-O or ELF image.
+/// Looks for the runtimes among the defined symbols of a 64-bit
+/// little-endian Mach-O or ELF image. The interpreter wins when both are
+/// defined.
 pub fn scan(bytes: []const u8) Presence {
     if (bytes.len < 4) return Presence.unknown;
     if (read(u32, bytes, 0) == 0xfeedfacf) return scanMachO(bytes);
@@ -112,6 +122,7 @@ fn scanMachO(bytes: []const u8) Presence {
             const strings_size = read(u32, bytes, offset + 20) orelse return Presence.unknown;
             if (@as(usize, strings_at) + strings_size > bytes.len) return Presence.unknown;
             const strings = bytes[strings_at..][0..strings_size];
+            var found = Presence.absent;
             for (0..count) |index| {
                 const entry = @as(usize, symbols_at) + index * 16;
                 const name_at = read(u32, bytes, entry) orelse return Presence.unknown;
@@ -119,9 +130,10 @@ fn scanMachO(bytes: []const u8) Presence {
                 // Not a debugging entry, and defined (N_TYPE is not N_UNDF).
                 if (kind & 0xe0 != 0 or kind & 0x0e == 0) continue;
                 const name = nameAt(strings, name_at) orelse continue;
-                if (name.len == symbol.len + 1 and name[0] == '_' and std.mem.eql(u8, name[1..], symbol)) return Presence.present;
+                if (name.len < 1 or name[0] != '_') continue;
+                found = merge(found, classify(name[1..]));
             }
-            return Presence.absent;
+            return found;
         }
         offset += size;
     }
@@ -136,6 +148,7 @@ fn scanElf(bytes: []const u8) Presence {
     const section_count = read(u16, bytes, 0x3c) orelse return Presence.unknown;
     if (section_size < 0x40) return Presence.unknown;
     var found_table = false;
+    var found = Presence.absent;
     for (0..section_count) |index| {
         const header = sections_at + index * section_size;
         const kind = read(u32, bytes, header + 4) orelse return Presence.unknown;
@@ -157,10 +170,22 @@ fn scanElf(bytes: []const u8) Presence {
             const section = read(u16, bytes, entry + 6) orelse return Presence.unknown;
             if (section == 0) continue; // SHN_UNDEF
             const name = nameAt(strings, name_at) orelse continue;
-            if (std.mem.eql(u8, name, symbol)) return Presence.present;
+            found = merge(found, classify(name));
         }
     }
-    return if (found_table) Presence.absent else Presence.unknown;
+    return if (found_table) found else Presence.unknown;
+}
+
+fn classify(name: []const u8) Presence {
+    if (std.mem.eql(u8, name, interpreter_symbol)) return Presence.interpreter;
+    if (std.mem.eql(u8, name, boxy_symbol)) return Presence.boxy;
+    return Presence.absent;
+}
+
+fn merge(current: Presence, next: Presence) Presence {
+    if (current == Presence.interpreter or next == Presence.interpreter) return Presence.interpreter;
+    if (current == Presence.boxy or next == Presence.boxy) return Presence.boxy;
+    return Presence.absent;
 }
 
 const testing = std.testing;
@@ -191,10 +216,14 @@ fn machOImage(buffer: []u8, symbols: []const struct { name: []const u8, defined:
     return buffer[0 .. strings_at + string_length];
 }
 
-test "a Mach-O image with the runtime defined, only referenced, or absent" {
+test "a Mach-O image with a runtime defined, only referenced, or absent" {
     var buffer: [512]u8 = undefined;
-    try testing.expectEqual(Presence.present, scan(machOImage(&buffer, &.{ .{ .name = "_main", .defined = true }, .{ .name = "_roc_boxy_init_embedded", .defined = true } })));
+    try testing.expectEqual(Presence.boxy, scan(machOImage(&buffer, &.{ .{ .name = "_main", .defined = true }, .{ .name = "_roc_boxy_init_embedded", .defined = true } })));
+    try testing.expectEqual(Presence.interpreter, scan(machOImage(&buffer, &.{ .{ .name = "_main", .defined = true }, .{ .name = "_roc_entrypoint_from_image", .defined = true } })));
+    try testing.expectEqual(Presence.interpreter, scan(machOImage(&buffer, &.{ .{ .name = "_roc_boxy_init_embedded", .defined = true }, .{ .name = "_roc_entrypoint_from_image", .defined = true } })));
+    try testing.expectEqual(Presence.interpreter, scan(machOImage(&buffer, &.{ .{ .name = "_roc_entrypoint_from_image", .defined = true }, .{ .name = "_roc_boxy_init_embedded", .defined = true } })));
     try testing.expectEqual(Presence.absent, scan(machOImage(&buffer, &.{.{ .name = "_roc_boxy_init_embedded", .defined = false }})));
+    try testing.expectEqual(Presence.absent, scan(machOImage(&buffer, &.{.{ .name = "_roc_entrypoint_from_image", .defined = false }})));
     try testing.expectEqual(Presence.absent, scan(machOImage(&buffer, &.{.{ .name = "_roc_boxy_init_embeddedX", .defined = true }})));
     try testing.expectEqual(Presence.absent, scan(machOImage(&buffer, &.{})));
 }
@@ -229,19 +258,19 @@ test "an ELF image with a symbol table, and one without" {
     std.mem.writeInt(u32, strtab[4..8], 3, std.builtin.Endian.little);
     std.mem.writeInt(u64, strtab[0x18..0x20], 0x380, std.builtin.Endian.little);
     std.mem.writeInt(u64, strtab[0x20..0x28], 64, std.builtin.Endian.little);
-    @memcpy(buffer[0x381..][0..symbol.len], symbol);
+    @memcpy(buffer[0x381..][0..boxy_symbol.len], boxy_symbol);
     // Entry 0 is the null symbol; entry 1 names the runtime, undefined.
     std.mem.writeInt(u32, buffer[0x318..0x31c], 1, std.builtin.Endian.little);
     try testing.expectEqual(Presence.absent, scan(&buffer));
     // Defined in section 5.
     std.mem.writeInt(u16, buffer[0x31e..0x320], 5, std.builtin.Endian.little);
-    try testing.expectEqual(Presence.present, scan(&buffer));
+    try testing.expectEqual(Presence.boxy, scan(&buffer));
     // Without the symbol table section: stripped.
     std.mem.writeInt(u32, symtab[4..8], 1, std.builtin.Endian.little);
     try testing.expectEqual(Presence.unknown, scan(&buffer));
 }
 
-test "this test executable has a symbol table without the runtime" {
+test "this test executable has a symbol table without either runtime" {
     if (builtin.os.tag != std.Target.Os.Tag.macos and builtin.os.tag != std.Target.Os.Tag.linux) return error.SkipZigTest;
     try testing.expectEqual(Presence.absent, scanSelf());
 }

@@ -36,6 +36,10 @@ OUT = ROOT / "zig-out" / "check"
 LOGS = OUT / "logs"
 ROC = os.environ.get("ROC_BIN", "roc")
 OPTS = ("speed", "dev", "interpreter")
+# Roc's interpreter keeps a call on the thread that entered it, so the host
+# runs interpreter builds on one thread (platform/host/single_thread_runtime.zig).
+# Tests whose apps ask for several threads run on the other backends.
+SEVERAL_THREADS_OPTS = ("speed", "dev")
 BOTH = ("arena", "tracking")
 ARENA = ("arena",)
 
@@ -101,7 +105,7 @@ TESTS = [
     Test("test-input", {"app": "tests/input/app.roc"}, contract_verify("tests/input/verify.py", "app"), env=CONTRACT_ENV, timing=True),
     Test("test-url-encoded", {"app": "tests/url-encoded/app.roc"},
          ["python3", "tests/url-encoded/verify.py", "{exe:app}"], env=CONTRACT_ENV),
-    Test("test-acceptance", {"app": "tests/acceptance/app.roc"}, contract_verify("tests/acceptance/verify.py", "app"), env=CONTRACT_ENV, timing=True),
+    Test("test-acceptance", {"app": "tests/acceptance/app.roc"}, contract_verify("tests/acceptance/verify.py", "app"), env=CONTRACT_ENV, timing=True, opts=SEVERAL_THREADS_OPTS),
     Test("test-replies", {"app": "tests/replies/app.roc"}, contract_verify("tests/replies/verify.py", "app"), env=CONTRACT_ENV),
     Test("test-tags", {"app": "tests/tags/app.roc"}, contract_verify("tests/tags/verify.py", "app"), env=CONTRACT_ENV),
     Test("test-middleware-example", {"app": "examples/middleware/app.roc"},
@@ -141,33 +145,33 @@ TESTS = [
     Test("test-file-secret", {"app": "tests/file-secret/app.roc"}, contract_verify("tests/file-secret/verify.py", "app"), env=CONTRACT_ENV),
     Test("test-config", {"app": "tests/config/app.roc"}, contract_verify("tests/config/verify.py", "app"), env=CONTRACT_ENV,
          checks=[["bash", "tests/config/checks.sh"]]),
-    Test("test-listen-options", {"app": "tests/listen-options/app.roc"}, ["python3", "tests/listen-options/verify.py", "{exe:app}"],
+    Test("test-listen-options", {"app": "tests/listen-options/app.roc"}, ["python3", "tests/listen-options/verify.py", "{exe:app}", "{opt}"],
          allocators=ARENA),
     Test("test-graceful-shutdown", {"app": "tests/graceful-shutdown/app.roc"},
          contract_verify("tests/graceful-shutdown/verify.py", "app"), env=CONTRACT_ENV, timing=True),
     Test("test-admission", {"app": "tests/admission/app.roc"}, contract_verify("tests/admission/verify.py", "app"),
-         env=CONTRACT_ENV, timing=True),
+         env=CONTRACT_ENV, timing=True, opts=SEVERAL_THREADS_OPTS),
     Test("test-observability", {"app": "tests/observability/app.roc"}, contract_verify("tests/observability/verify.py", "app"),
          env=CONTRACT_ENV, timing=True),
     Test("test-unix-socket", {"app": "tests/unix-socket/app.roc"}, contract_verify("tests/unix-socket/verify.py", "app"), env=CONTRACT_ENV),
     Test("test-http2-listener", {"app": "tests/http2-listener/app.roc"},
          ["zig-out/http2-listener/venv/bin/python", "tests/http2-listener/verify.py", "{exe:app}"],
-         env=CONTRACT_ENV, timing=True, checks=[["bash", "tests/http2-listener/setup.sh"]], tolerate_build_status=("app",)),
+         env=CONTRACT_ENV, timing=True, checks=[["bash", "tests/http2-listener/setup.sh"]], tolerate_build_status=("app",), opts=SEVERAL_THREADS_OPTS),
     Test("test-grpc-wire", {"app": "tests/grpc-wire/app.roc"},
          ["zig-out/grpc-wire/venv/bin/python", "tests/grpc-wire/verify.py", "{exe:app}"],
-         env=CONTRACT_ENV, timing=True, checks=[["bash", "tests/grpc-wire/checks.sh"]]),
+         env=CONTRACT_ENV, timing=True, checks=[["bash", "tests/grpc-wire/checks.sh"]], opts=SEVERAL_THREADS_OPTS),
     Test("test-grpc-example", {"app": "integrations/roxum-grpc/example/app.roc"},
          ["zig-out/grpc-example/venv/bin/python", "integrations/roxum-grpc/example/verify.py", "{exe:app}"],
-         env=CONTRACT_ENV, checks=[["bash", "integrations/roxum-grpc/example/checks.sh"]]),
+         env=CONTRACT_ENV, checks=[["bash", "integrations/roxum-grpc/example/checks.sh"]], opts=SEVERAL_THREADS_OPTS),
     Test("test-grpc-streaming", {"app": "tests/grpc-streaming/app.roc", "acceptance": "tests/grpc-streaming/acceptance.roc"},
          ["zig-out/grpc-streaming/venv/bin/python", "tests/grpc-streaming/verify.py", "{exe:app}", "{exe:acceptance}", "{opt}"],
-         env=CONTRACT_ENV, timing=True, checks=[["bash", "tests/grpc-streaming/checks.sh"]]),
+         env=CONTRACT_ENV, timing=True, checks=[["bash", "tests/grpc-streaming/checks.sh"]], opts=SEVERAL_THREADS_OPTS),
     Test("test-grpc-unary", {"app": "tests/grpc-unary/app.roc"},
          ["zig-out/grpc-unary/venv/bin/python", "tests/grpc-unary/verify.py", "{exe:app}"],
-         env=CONTRACT_ENV, timing=True, checks=[["bash", "tests/grpc-unary/checks.sh"]]),
+         env=CONTRACT_ENV, timing=True, checks=[["bash", "tests/grpc-unary/checks.sh"]], opts=SEVERAL_THREADS_OPTS),
     Test("test-grpc-probe", {"app": "tests/grpc-probe/app.roc"},
          ["zig-out/grpc-probe/venv/bin/python", "tests/grpc-probe/verify.py", "{exe:app}"],
-         env=CONTRACT_ENV, timing=True, checks=[["bash", "tests/grpc-probe/setup.sh"]]),
+         env=CONTRACT_ENV, timing=True, checks=[["bash", "tests/grpc-probe/setup.sh"]], opts=SEVERAL_THREADS_OPTS),
     Test("test-ipv6", {"app": "tests/ipv6/app.roc"}, contract_verify("tests/ipv6/verify.py", "app"), env=CONTRACT_ENV),
     Test("test-tcp", {"app": "tests/tcp/app.roc"}, ["bash", "tests/tcp/variant.sh", "{exe:app}", "{out}"],
          env=CONTRACT_ENV, timing=True),
@@ -178,9 +182,9 @@ TESTS = [
          checks=[[ROC, "test", "integrations/roxum-postgres/package/main.roc"]]),
     Test("test-layered-app", {"app": "tests/layered-app/fixture/app.roc"},
          ["python3", "tests/layered-app/run.py", "{opt}", "{exe:app}"], allocators=ARENA,
-         checks=[[ROC, "test", "tests/layered-app/fixture/domain/product/Product.roc"]]),
+         checks=[[ROC, "test", "tests/layered-app/fixture/domain/product/Product.roc"]], opts=SEVERAL_THREADS_OPTS),
     Test("test-crud-service", {"app": "tests/layered-app/fixture/app.roc"},
-         ["python3", "tests/crud-service/run.py", "{opt}", "{exe:app}"], allocators=ARENA, timing=True),
+         ["python3", "tests/crud-service/run.py", "{opt}", "{exe:app}"], allocators=ARENA, timing=True, opts=SEVERAL_THREADS_OPTS),
     Test("test-m11b", {"app": "integrations/roxum-proxy-headers/example/app.roc",
                        "untrusted": "integrations/roxum-proxy-headers/example/untrusted-app.roc"},
          contract_verify("integrations/roxum-proxy-headers/example/verify.py", "app", "untrusted"), env=CONTRACT_ENV,

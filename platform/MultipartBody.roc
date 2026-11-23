@@ -27,7 +27,7 @@ MultipartBody :: [].{
 	}.{
 		is_eq : _
 
-		parser_for : MultipartEncoding -> (MultipartState -> Try({ value : MultipartBody.Upload, rest : MultipartState }, [BadValue]))
+		parser_for : MultipartEncoding -> (MultipartState -> Try({ value : MultipartBody.Upload, rest : MultipartState }, [Invalid, TooLarge, BadValue, MissingRequiredField(Str)]))
 		parser_for = |_encoding| |state|
 			match state.values {
 				[first, .. as rest] => Ok({
@@ -152,7 +152,7 @@ MultipartEncoding :: [Standard].{
 	rename_field : MultipartEncoding, Str -> Str
 	rename_field = |_, name| name
 
-	parse_str : MultipartEncoding, MultipartState -> Try({ value : Str, rest : MultipartState }, [BadValue])
+	parse_str : MultipartEncoding, MultipartState -> Try({ value : Str, rest : MultipartState }, [Invalid, TooLarge, BadValue, MissingRequiredField(Str)])
 	parse_str = |_, state|
 		match state.values {
 			[first, .. as rest] =>
@@ -163,7 +163,7 @@ MultipartEncoding :: [Standard].{
 			[] => Err(BadValue)
 		}
 
-	parse_bool : MultipartEncoding, MultipartState -> Try({ value : Bool, rest : MultipartState }, [BadValue])
+	parse_bool : MultipartEncoding, MultipartState -> Try({ value : Bool, rest : MultipartState }, [Invalid, TooLarge, BadValue, MissingRequiredField(Str)])
 	parse_bool = |encoding, state| {
 		taken = MultipartEncoding.parse_str(encoding, state)?
 		match taken.value {
@@ -173,7 +173,7 @@ MultipartEncoding :: [Standard].{
 		}
 	}
 
-	parse_u8 : MultipartEncoding, MultipartState -> Try({ value : U8, rest : MultipartState }, [BadValue])
+	parse_u8 : MultipartEncoding, MultipartState -> Try({ value : U8, rest : MultipartState }, [Invalid, TooLarge, BadValue, MissingRequiredField(Str)])
 	parse_u8 = |encoding, state| {
 		taken = MultipartEncoding.parse_str(encoding, state)?
 		match U8.from_str(taken.value) {
@@ -182,7 +182,7 @@ MultipartEncoding :: [Standard].{
 		}
 	}
 
-	parse_u16 : MultipartEncoding, MultipartState -> Try({ value : U16, rest : MultipartState }, [BadValue])
+	parse_u16 : MultipartEncoding, MultipartState -> Try({ value : U16, rest : MultipartState }, [Invalid, TooLarge, BadValue, MissingRequiredField(Str)])
 	parse_u16 = |encoding, state| {
 		taken = MultipartEncoding.parse_str(encoding, state)?
 		match U16.from_str(taken.value) {
@@ -191,7 +191,7 @@ MultipartEncoding :: [Standard].{
 		}
 	}
 
-	parse_u32 : MultipartEncoding, MultipartState -> Try({ value : U32, rest : MultipartState }, [BadValue])
+	parse_u32 : MultipartEncoding, MultipartState -> Try({ value : U32, rest : MultipartState }, [Invalid, TooLarge, BadValue, MissingRequiredField(Str)])
 	parse_u32 = |encoding, state| {
 		taken = MultipartEncoding.parse_str(encoding, state)?
 		match U32.from_str(taken.value) {
@@ -200,7 +200,7 @@ MultipartEncoding :: [Standard].{
 		}
 	}
 
-	parse_u64 : MultipartEncoding, MultipartState -> Try({ value : U64, rest : MultipartState }, [BadValue])
+	parse_u64 : MultipartEncoding, MultipartState -> Try({ value : U64, rest : MultipartState }, [Invalid, TooLarge, BadValue, MissingRequiredField(Str)])
 	parse_u64 = |encoding, state| {
 		taken = MultipartEncoding.parse_str(encoding, state)?
 		match U64.from_str(taken.value) {
@@ -209,7 +209,7 @@ MultipartEncoding :: [Standard].{
 		}
 	}
 
-	parse_i8 : MultipartEncoding, MultipartState -> Try({ value : I8, rest : MultipartState }, [BadValue])
+	parse_i8 : MultipartEncoding, MultipartState -> Try({ value : I8, rest : MultipartState }, [Invalid, TooLarge, BadValue, MissingRequiredField(Str)])
 	parse_i8 = |encoding, state| {
 		taken = MultipartEncoding.parse_str(encoding, state)?
 		match I8.from_str(taken.value) {
@@ -218,7 +218,7 @@ MultipartEncoding :: [Standard].{
 		}
 	}
 
-	parse_i16 : MultipartEncoding, MultipartState -> Try({ value : I16, rest : MultipartState }, [BadValue])
+	parse_i16 : MultipartEncoding, MultipartState -> Try({ value : I16, rest : MultipartState }, [Invalid, TooLarge, BadValue, MissingRequiredField(Str)])
 	parse_i16 = |encoding, state| {
 		taken = MultipartEncoding.parse_str(encoding, state)?
 		match I16.from_str(taken.value) {
@@ -227,7 +227,7 @@ MultipartEncoding :: [Standard].{
 		}
 	}
 
-	parse_i32 : MultipartEncoding, MultipartState -> Try({ value : I32, rest : MultipartState }, [BadValue])
+	parse_i32 : MultipartEncoding, MultipartState -> Try({ value : I32, rest : MultipartState }, [Invalid, TooLarge, BadValue, MissingRequiredField(Str)])
 	parse_i32 = |encoding, state| {
 		taken = MultipartEncoding.parse_str(encoding, state)?
 		match I32.from_str(taken.value) {
@@ -236,7 +236,7 @@ MultipartEncoding :: [Standard].{
 		}
 	}
 
-	parse_i64 : MultipartEncoding, MultipartState -> Try({ value : I64, rest : MultipartState }, [BadValue])
+	parse_i64 : MultipartEncoding, MultipartState -> Try({ value : I64, rest : MultipartState }, [Invalid, TooLarge, BadValue, MissingRequiredField(Str)])
 	parse_i64 = |encoding, state| {
 		taken = MultipartEncoding.parse_str(encoding, state)?
 		match I64.from_str(taken.value) {
@@ -245,7 +245,7 @@ MultipartEncoding :: [Standard].{
 		}
 	}
 
-	parse_f64 : MultipartEncoding, MultipartState -> Try({ value : F64, rest : MultipartState }, [BadValue])
+	parse_f64 : MultipartEncoding, MultipartState -> Try({ value : F64, rest : MultipartState }, [Invalid, TooLarge, BadValue, MissingRequiredField(Str)])
 	parse_f64 = |encoding, state| {
 		taken = MultipartEncoding.parse_str(encoding, state)?
 		match F64.from_str(taken.value) {
@@ -254,17 +254,17 @@ MultipartEncoding :: [Standard].{
 		}
 	}
 
-	parse_list_start : MultipartEncoding, MultipartState -> Try([Counted({ len : U64, rest : MultipartState }), Uncounted(MultipartState)], [BadValue])
+	parse_list_start : MultipartEncoding, MultipartState -> Try([Counted({ len : U64, rest : MultipartState }), Uncounted(MultipartState)], [Invalid, TooLarge, BadValue, MissingRequiredField(Str)])
 	parse_list_start = |_, state| Ok(Counted({ len: List.len(state.values), rest: state }))
 
 	## Never reached: a list always reports its count.
-	parse_list_next : MultipartEncoding, MultipartState -> Try([Item(MultipartState), Done(MultipartState)], [BadValue])
+	parse_list_next : MultipartEncoding, MultipartState -> Try([Item(MultipartState), Done(MultipartState)], [Invalid, TooLarge, BadValue, MissingRequiredField(Str)])
 	parse_list_next = |_, state| Ok(Done(state))
 
-	parse_list_after_item : MultipartEncoding, MultipartState -> Try([Continue(MultipartState), Done(MultipartState)], [BadValue])
+	parse_list_after_item : MultipartEncoding, MultipartState -> Try([Continue(MultipartState), Done(MultipartState)], [Invalid, TooLarge, BadValue, MissingRequiredField(Str)])
 	parse_list_after_item = |_, state| Ok(Done(state))
 
-	parse_record_start : MultipartEncoding, MultipartState -> Try([Counted({ len : U64, rest : MultipartState }), Uncounted(MultipartState)], [BadValue])
+	parse_record_start : MultipartEncoding, MultipartState -> Try([Counted({ len : U64, rest : MultipartState }), Uncounted(MultipartState)], [Invalid, TooLarge, BadValue, MissingRequiredField(Str)])
 	parse_record_start = |_, state| Ok(Uncounted(state))
 
 	parse_record_field : MultipartEncoding,
@@ -277,7 +277,7 @@ MultipartEncoding :: [Standard].{
 			Continue(MultipartState),
 			Done(MultipartState),
 		],
-		[BadValue],
+		[Invalid, TooLarge, BadValue, MissingRequiredField(Str)],
 	)
 	parse_record_field = |_, _fields, state|
 		match state.groups {
@@ -286,15 +286,18 @@ MultipartEncoding :: [Standard].{
 		}
 
 	## A single-valued field with values left over is a name that repeated.
-	parse_record_after_field : MultipartEncoding, MultipartState -> Try([Continue(MultipartState), Done(MultipartState)], [BadValue])
+	parse_record_after_field : MultipartEncoding, MultipartState -> Try([Continue(MultipartState), Done(MultipartState)], [Invalid, TooLarge, BadValue, MissingRequiredField(Str)])
 	parse_record_after_field = |_, state|
 		if List.is_empty(state.values) { Ok(Continue(state)) } else { Err(BadValue) }
 
-	skip_record_field : MultipartEncoding, MultipartState -> Try(MultipartState, [BadValue])
+	skip_record_field : MultipartEncoding, MultipartState -> Try(MultipartState, [Invalid, TooLarge, BadValue, MissingRequiredField(Str)])
 	skip_record_field = |_, state| Ok(MultipartState.{ groups: state.groups, values: [] })
 
-	invalid_value : MultipartEncoding, MultipartState -> [BadValue]
+	invalid_value : MultipartEncoding, MultipartState -> [Invalid, TooLarge, BadValue, MissingRequiredField(Str)]
 	invalid_value = |_, _| BadValue
+
+	missing_field : MultipartEncoding, Str -> [Invalid, TooLarge, BadValue, MissingRequiredField(Str)]
+	missing_field = |_, name| MissingRequiredField(name)
 }
 
 grouped = |fields| {

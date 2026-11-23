@@ -21,6 +21,7 @@ Model := { progress : RateCounter }
 
 program = { init!, routes: Router.build(routes, {}) }
 
+init! : {} => Try({ model : Model, listen : Server.ListenOptions }, [StartupErr(Str)])
 init! = |{}| {
 	settings : { path : Str }
 	settings = Config.load!("path = \"\"").map_err(|ConfigErr(message)| StartupErr(message))?
