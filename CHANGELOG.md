@@ -8,12 +8,21 @@ Changes to the roxum platform and its integrations, newest first. The platform a
 
 ### Breaking changes
 
+- Upgrade to Roc `0.1.0_RC1` (built from `15177e91f62cafddf5336c455e00e9f05427ac16`); Zig stays at 0.17.1. Roc 0.1 closes parser error types, fills a record's default fields only when its type is known where it is built, and evaluates expressions that do not depend on a function's arguments at compile time. Follow [migrating from 0.2](docs/guides/migrating-to-0.3.md) and rebuild applications with matching platform and integration bundles.
+- Roc 0.1 links every Linux executable as a static PIE. The musl targets link `rcrt1.o`, which relocates the executable at startup, instead of `crt1.o`, with a position-independent `libc.a`; `zig build host` and the release bundles provide both.
+- `HttpError` is a record with public `status` and `message` fields. Build one with `HttpError.{ status: 409, message: "..." }` and read its fields; `HttpError.make`, `HttpError.status`, and `HttpError.message` are removed.
+- `Middleware.ChunkCheck.new` takes a record, `{ initial, step, finish }`.
+- Parsers use one closed error type per format. `Extract.json` and `Extract.JsonBody` need `a.Json.Parseable([InvalidJson(Str)])`, and `Extract.typed_headers` and `Extract.Headers` need `a.Encoding.HttpHeader.Parseable([BadHeader, MissingHeader(Str)])`. The URL-encoded and multipart formats report a missing required field as `MissingRequiredField(name)` in their own error types.
+- An app built with `--opt=interpreter` runs one thread per process: Roc's interpreter keeps a call on the thread that entered it. `Server.Threads.Fixed` above 1 stops its startup; raise `processes` to use more CPUs.
+- roc-toml: `Toml.decode` and `Toml.decode_str` return the closed error types `[TomlDecode(Str), MissingRequiredField(Str)]` and `[TomlSyntax(Str), TomlDecode(Str), MissingRequiredField(Str)]`.
+- roxum-postgres: rows decode with the closed error type `[PostgresDecodeFailed(Str), MissingRequiredField(Str)]`; a required column the row lacks is `MissingRequiredField(name)`.
 - `Handler` gains a `Duplex` variant. Update exhaustive matches on handler variants.
 - HTTP/2 streaming handlers receive body chunks before EOF. Streamed input now uses its own limit (unlimited by default) and can exceed `maximum_body_bytes`. The request-body deadline spans reception from the initial metadata, including callback time. A reset, timeout or disconnect can abandon a suspended handler. A response producer returning `Err(StreamClosed)` now aborts unfinished output. See [migrating from 0.2](docs/guides/migrating-to-0.3.md).
 - roxum-grpc: 0.2.0 targets core `^0.3`. Rebuild with matching platform and integration bundles and regenerate service bindings when updating the Protobuf tools.
 
 ### Added
 
+- A `Handler.typed` field that holds the reply of a field that failed can be typed `Try(_, Reply)`, so `?` sends that reply. `[Ok(_), Err(Reply)]` still works.
 - HTTP/2 supports incremental request and response bodies, explicit response trailers, deadline trailers and independent input/output readiness through `Handler.duplex`.
 - roxum-grpc: generated server-streaming, client-streaming and bidirectional services alongside Unary. The greeting example exercises all four forms with the distributed packages.
 - roc-protobuf: matched 0.1.1 generator and wire library. Service generation supports all four RPC shapes. Codec-only generation remains platform-independent.

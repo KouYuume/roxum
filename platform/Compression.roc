@@ -72,7 +72,7 @@ Compression := [].{
 			|_model, head|
 				match request_coding(head.headers) {
 					Ok(_) => Ok(head)
-					Err(Unsupported) => Err(Reply.error(HttpError.make(415, "unsupported Content-Encoding")))
+					Err(Unsupported) => Err(Reply.error(HttpError.{ status: 415, message: "unsupported Content-Encoding" }))
 				},
 		),
 		Middleware.Stage.AfterBody(
@@ -82,7 +82,7 @@ Compression := [].{
 					Ok(Some(coding)) =>
 						match Compression.decompress!(body, coding, maximum_bytes) {
 							Ok(decompressed) => Ok(decompressed)
-							Err(DecompressedTooLarge) => Err(Reply.error(HttpError.make(413, "request body too large")))
+							Err(DecompressedTooLarge) => Err(Reply.error(HttpError.{ status: 413, message: "request body too large" }))
 							Err(DecompressFailed) => Err(Reply.error(HttpError.bad_request("request body is not valid in its Content-Encoding")))
 						},
 				},

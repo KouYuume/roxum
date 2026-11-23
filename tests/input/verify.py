@@ -65,7 +65,7 @@ CASES = [
     ("GET", f"/query?q=a&{pairs(127)}", {}, None, 200, b"a|-|-|-"),
     ("GET", f"/query?q=a&{pairs(128)}", {}, None, 400, None),
     # Form: the media type, its case and parameters, and how it fails.
-    # A field typed [Ok(_), Err(Reply)]: the handler runs, and Err holds the answer.
+    # A field typed Try(_, Reply): the handler runs, and Err holds the answer.
     ("POST", "/attempt-json", JSON, b'{"name":"a"}', 200, b"ok a"),
     ("POST", "/attempt-json", JSON, b"{", 200, b"err 400"),
     ("POST", "/attempt-json", JSON, b"{}", 200, b"err 400"),
@@ -73,7 +73,8 @@ CASES = [
     ("POST", "/attempt-json", {}, b'{"name":"a"}', 200, b"err 415"),
     ("POST", "/attempt-pass", JSON, b"{", 400, None),
     ("POST", "/attempt-pass", {"content-type": "text/plain"}, b"x", 415, None),
-    # A field of another type answers for itself, and each field fails alone.
+    # A field of another type answers for itself, and each field fails alone. The
+    # form field is the structural [Ok(_), Err(Reply)], which still reads as a Try.
     ("POST", "/attempt-mixed/1?q=x", FORM, b"name=n", 200, b"1 x n"),
     ("POST", "/attempt-mixed/1", FORM, b"name=n", 200, b"1 400 n"),
     ("POST", "/attempt-mixed/1?q=x", {}, b"name=n", 200, b"1 x 415"),

@@ -48,12 +48,11 @@ a name that may be left out. A name the record does not have is ignored; a singl
 arrives in the query, so `Extract.Form` reads only the body.
 
 A field that cannot be read answers for itself, and the handler does not run. To decide in the handler, give the field the
-type `[Ok(_), Err(Reply)]`. `Err` holds the reply roxum would have sent; send it, or send your own. Other fields answer as
-usual. It cannot be `Try(_, Reply)`: Roc derives a `Try` only as an optional field, as in `Try(_, [Missing])`. For the same
-reason, read the field with `match`; `?` makes its type a `Try`.
+type `Try(_, Reply)`. `Err` holds the reply roxum would have sent; send it with `?`, or send your own. Other fields answer
+as usual.
 
 ```roc
-create! : Model, { item : [Ok(Extract.JsonBody(Item)), Err(Reply)] } => Try(Reply, Reply)
+create! : Model, { item : Try(Extract.JsonBody(Item), Reply) } => Try(Reply, Reply)
 create! = |_model, { item }|
 	match item {
 		Ok(Extract.JsonBody.(value)) => Ok(Reply.json(value))

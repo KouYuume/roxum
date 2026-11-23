@@ -7,6 +7,11 @@ for (one when left out); a restarted process that asks for another number
 is warned about and the count stays. Threads outside 1 to 256, processes
 outside 1 to 64, and drain timeouts outside 1 ms to one hour stop the
 startup.
+
+An interpreter build runs one thread per process (Roc's interpreter keeps a
+call on the thread that entered it): `Auto` falls back to one thread without a
+warning, a fixed count above one stops the startup, and `processes` still
+adds processes.
 """
 import os
 import pathlib
@@ -31,7 +36,7 @@ def start(executable, directory, output):
                             start_new_session=True)
 
 
-def serves_with(executable, directory, local, local_text, expected):
+def serves_with(executable, directory, local, local_text, expected, quiet=False):
     local.write_text(local_text)
     with tempfile.TemporaryFile() as output:
         server = start(executable, directory, output)
@@ -44,6 +49,11 @@ def serves_with(executable, directory, local, local_text, expected):
                 raise RuntimeError("unexpected response")
         finally:
             stop(server)
+        if quiet:
+            output.seek(0)
+            log = output.read().decode(errors="replace")
+            if "roxum warning:" in log:
+                raise RuntimeError(f"{local_text!r}: expected no warning, found {log!r}")
 
 
 def refused(executable, directory, local, local_text, message):
@@ -125,11 +135,28 @@ def running(pid):
     return state != "" and not state.startswith("Z")
 
 
-def main(executable):
+INTERPRETER = "the app is built with --opt=interpreter, whose Roc interpreter keeps each call on the thread that started it"
+
+
+def interpreter_runs_one_thread(executable, directory, local):
+    """The thread counts around one: left out falls back to one thread without
+    a warning, one is accepted, and two stops the startup with the reason."""
+    serves_with(executable, directory, local, "", 1, quiet=True)
+    serves_with(executable, directory, local, "threads = 1\n", 1)
+    refused(executable, directory, local, "threads = 2\n", INTERPRETER + ": Server.Threads.Fixed must be 1")
+    serves_with(executable, directory, local, "processes = 2\n", 2)
+    refused(executable, directory, local, "threads = 0\n", "Server.Threads.Fixed takes 1 to 256 threads")
+
+
+def main(executable, opt):
     with tempfile.TemporaryDirectory() as directory:
         config = pathlib.Path(directory) / "config"
         config.mkdir()
         local = config / "local.toml"
+
+        if opt == "interpreter":
+            interpreter_runs_one_thread(executable, directory, local)
+            return
 
         supervisor_killed(executable, directory, local)
         serves_with(executable, directory, local, "", 1)
@@ -156,4 +183,4 @@ def main(executable):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1])
+    main(sys.argv[1], sys.argv[2])

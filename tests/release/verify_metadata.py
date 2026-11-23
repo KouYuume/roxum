@@ -9,6 +9,7 @@ protobuf = json.loads((output / 'protobuf.json').read_text())
 assert release['protobuf'] == protobuf
 assert protobuf['version'] == protobuf['generator_version']
 assert protobuf['roc_revision'] == Path('.roc-revision').read_text().strip()
+assert protobuf['roc_release'] == json.loads(Path('libraries/roc-protobuf/compatibility.json').read_text())['roc_release']
 for kind in ('wire', 'source'):
     item = protobuf[kind]
     artifact = output / item['file']

@@ -92,11 +92,11 @@ routes = {
 			"/duplex-reject",
 			MethodRouter.post(duplex).layer([
 				Middleware.Stage.OnChunk(
-					Middleware.ChunkCheck.new(
-						{},
-						|_state, _bytes| Err(Reply.status(403)),
-						|_state| Ok({}),
-					),
+					Middleware.ChunkCheck.new({
+						initial: {},
+						step: |_state, _bytes| Err(Reply.status(403)),
+						finish: |_state| Ok({}),
+					}),
 				),
 			]),
 		)
@@ -104,11 +104,11 @@ routes = {
 			"/duplex-reject-end",
 			MethodRouter.post(duplex).layer([
 				Middleware.Stage.OnChunk(
-					Middleware.ChunkCheck.new(
-						{},
-						|state, bytes| Ok({ state, bytes }),
-						|_state| Err(Reply.status(403)),
-					),
+					Middleware.ChunkCheck.new({
+						initial: {},
+						step: |state, bytes| Ok({ state, bytes }),
+						finish: |_state| Err(Reply.status(403)),
+					}),
 				),
 			]),
 		)
@@ -191,9 +191,9 @@ must_not_run! = |_model, _context| {
 	crash "metadata deadline reached the body handler"
 }
 
-uppercase = Middleware.ChunkCheck.new(
-	{},
-	|state, bytes| Ok({
+uppercase = Middleware.ChunkCheck.new({
+	initial: {},
+	step: |state, bytes| Ok({
 		state,
 		bytes: List.map(
 			bytes,
@@ -204,8 +204,8 @@ uppercase = Middleware.ChunkCheck.new(
 			},
 		),
 	}),
-	|_state| Ok({}),
-)
+	finish: |_state| Ok({}),
+})
 
 collect : Handler(Model, [], {})
 collect = Handler.streaming(

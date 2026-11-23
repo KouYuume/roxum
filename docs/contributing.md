@@ -53,7 +53,7 @@ The local record covers the platform where you ran the checks. Linux differences
 
 ## Dependency updates
 
-[`.github/dependabot.yml`](../.github/dependabot.yml) covers the Cargo projects above and the GitHub Actions in the workflows. The pinned Roc nightly and Zig are not covered; update them by hand ([toolchain.md](toolchain.md)). Neither is the base image of `tools/linux/Dockerfile`: the floating tag `debian:bookworm-slim` takes in the latest image on each build.
+[`.github/dependabot.yml`](../.github/dependabot.yml) covers the Cargo projects above and the GitHub Actions in the workflows. The pinned Roc build and Zig are not covered; update them by hand ([toolchain.md](toolchain.md)). Neither is the base image of `tools/linux/Dockerfile`: the floating tag `debian:bookworm-slim` takes in the latest image on each build.
 
 - Version updates arrive on the 1st of each month at 09:00 JST. Minor and patch updates come together in one pull request per directory, each major update in its own, and only releases at least 7 days old (14 for a major Cargo update) are offered. At most two version update pull requests per directory stay open.
 - Security updates arrive as soon as GitHub knows a fix, without waiting for the schedule. Patch and minor fixes come together in one pull request per directory, a major fix in its own.

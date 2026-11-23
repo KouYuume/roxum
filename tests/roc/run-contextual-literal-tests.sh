@@ -37,7 +37,6 @@ run_negative() {
 }
 
 run_negative json-reply-f64.roc "type mismatch" "encode_f64"
-run_negative typed-try-reply-field.roc "missing method" "parser_for"
 run_negative bad-status.roc "invalid number" "HTTP status must be in 200..599"
 run_negative bad-header-value.roc "invalid string" "header value must not contain CR or LF"
 run_negative unsafe-status-constructor.roc "cannot use opaque nominal type" "Status"

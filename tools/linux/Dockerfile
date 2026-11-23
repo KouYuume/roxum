@@ -6,14 +6,16 @@ ARG ZIG_VERSION=0.17.1
 # From https://ziglang.org/download/index.json for ZIG_VERSION.
 ARG ZIG_SHA256_AARCH64=a1546d5646eb184437918d6635ca6b762a0e889eac09cef720ee7a1ed3fe7795
 ARG ZIG_SHA256_X86_64=3581863e3cbcfd0fce0efc682ce7e9e93da96668a977791d356a26d2a7e9b17a
-# Must match .roc-revision; tools/check-roc-toolchain.sh verifies it.
-ARG ROC_NIGHTLY=nightly-2026-11-09-9e85de7
-# The release assets' digests for ROC_NIGHTLY; update them with the pin
-# (gh api repos/roc-lang/nightlies/releases/tags/<nightly> --jq '.assets[].digest').
-ARG ROC_SHA256_ARM64=9c12d85abce8aa36daed9ffe04c75fe00c67b0fc939647899493500a1a3b5eff
-ARG ROC_SHA256_X86_64=9d2480e900bee27cae0974266c088f43e8e2ceaa6543c2be7314b7bdd2b7891d
-# Not used in the image: tools/install-roc-nightly.sh reads it for macOS.
-ARG ROC_SHA256_MACOS_ARM64=0e12e15c1c1d0af817c1f27b0f103a6502c2b3aea587f1de7d7df312642d74d3
+# A Roc release (0.1.0_RC1) or nightly (nightly-<date>-<commit>) built from
+# .roc-revision; tools/check-roc-toolchain.sh verifies the name.
+ARG ROC_RELEASE=0.1.0_RC1
+# The release assets' digests for ROC_RELEASE; update them with the pin
+# (gh api repos/roc-lang/roc/releases/tags/<release> --jq '.assets[].digest',
+# or repos/roc-lang/nightlies/... for a nightly).
+ARG ROC_SHA256_ARM64=b3e0a9dbc922f3802702a55a1869ad2c2e4f4dc935d8a9d1b26c3612668dff43
+ARG ROC_SHA256_X86_64=043c426ea85dcdbd427951eaed246f0c10c171d988f2598782233a6dae43379d
+# Not used in the image: tools/install-roc.sh reads it for macOS.
+ARG ROC_SHA256_MACOS_ARM64=e8228040c701e130254c72539a1d0f1b150d78c00058747edb0edae51ba5dbc8
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -38,9 +40,12 @@ RUN case "$(uname -m)" in \
         x86_64) roc_arch=linux_x86_64; roc_sha256="$ROC_SHA256_X86_64" ;; \
         *) echo "unsupported architecture" >&2; exit 1 ;; \
     esac \
-    && date_commit="${ROC_NIGHTLY#nightly-}" \
+    && case "$ROC_RELEASE" in \
+        nightly-*) roc_url="https://github.com/roc-lang/nightlies/releases/download/${ROC_RELEASE}/roc_nightly-${roc_arch}-${ROC_RELEASE#nightly-}.tar.gz" ;; \
+        *) roc_url="https://github.com/roc-lang/roc/releases/download/${ROC_RELEASE}/roc-${roc_arch}-${ROC_RELEASE}.tar.gz" ;; \
+    esac \
     && mkdir -p /opt/roc \
-    && curl -fsSL -o /tmp/roc.tar.gz "https://github.com/roc-lang/nightlies/releases/download/${ROC_NIGHTLY}/roc_nightly-${roc_arch}-${date_commit}.tar.gz" \
+    && curl -fsSL -o /tmp/roc.tar.gz "$roc_url" \
     && echo "${roc_sha256}  /tmp/roc.tar.gz" | sha256sum -c - \
     && tar -xz -C /opt/roc --strip-components=1 -f /tmp/roc.tar.gz \
     && rm /tmp/roc.tar.gz \

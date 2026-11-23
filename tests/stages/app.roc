@@ -20,6 +20,7 @@ Model := {}
 
 program = { init!, routes: Router.build(routes, {}) }
 
+init! : {} => Try({ model : Model, listen : Server.ListenOptions }, [StartupErr(Str)])
 init! = |{}|
 	Ok({
 		model: {},
@@ -122,9 +123,9 @@ verify_body = |_model, _head, body|
 	}
 
 ## Fails with 413 once more than `maximum` bytes have passed.
-at_most = |maximum| Middleware.ChunkCheck.new(
-	0,
-	|seen, bytes| {
+at_most = |maximum| Middleware.ChunkCheck.new({
+	initial: 0,
+	step: |seen, bytes| {
 		total = seen + List.len(bytes)
 		if total > maximum {
 			Err(Reply.status(413))
@@ -132,14 +133,14 @@ at_most = |maximum| Middleware.ChunkCheck.new(
 			Ok({ state: total, bytes })
 		}
 	},
-	|_seen| Ok({}),
-)
+	finish: |_seen| Ok({}),
+})
 
-upper = Middleware.ChunkCheck.new(
-	{},
-	|state, bytes| Ok({ state, bytes: List.map(bytes, |byte| if byte >= 'a' and byte <= 'z' { byte - 32 } else { byte }) }),
-	|_state| Ok({}),
-)
+upper = Middleware.ChunkCheck.new({
+	initial: {},
+	step: |state, bytes| Ok({ state, bytes: List.map(bytes, |byte| if byte >= 'a' and byte <= 'z' { byte - 32 } else { byte }) }),
+	finish: |_state| Ok({}),
+})
 
 echo! : Model, RouteContext({}) => Try(Reply, Reply)
 echo! = |_model, context| {

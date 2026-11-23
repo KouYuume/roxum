@@ -65,7 +65,9 @@ def verify(url, http_log):
         bindings = root / 'python'
         run([python, 'generate.py', '--tool-root', tools, '--wire', wire['url'],
              '--grpc', grpc['url'], '--platform', platform['url'], '--python-output', bindings], example, environment)
-        for backend in ('speed', 'dev', 'interpreter'):
+        # The example asks for two threads, which interpreter builds do not run
+        # (platform/host/single_thread_runtime.zig).
+        for backend in ('speed', 'dev'):
             before = http_log.read_text()
             environment = {**os.environ, 'ROC_CACHE_DIR': str(root / ('roc-' + backend)),
                            'XDG_CACHE_HOME': str(root / ('xdg-' + backend))}

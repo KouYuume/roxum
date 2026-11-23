@@ -311,7 +311,7 @@ fn initialize(allocator: *host.HostAllocator, roc_host: *bridge.RocHost) !bridge
     defer context.clearCurrent();
     const result = bridge.rocInit();
     if (result.tag != bridge.InitResultTag.Ok) {
-        result.decref(roc_host);
+        result.payload_err().decref(roc_host);
         return error.StartupFailed;
     }
     return bridge.Application.initOwned(result.payload_ok(), roc_host);

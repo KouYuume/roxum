@@ -6,7 +6,7 @@ import pf.Extract
 import pf.Reply
 
 SearchUsersHandler := [].{
-	handle! : AppState, { query : [Ok(Extract.Query(SearchUsersQueryService.Query)), Err(Reply)] } => Try(Reply, Reply)
+	handle! : AppState, { query : Try(Extract.Query(SearchUsersQueryService.Query), Reply) } => Try(Reply, Reply)
 	handle! = |AppState.({ search_users!, .. }), { query }| {
 		filters = match query {
 			Ok(Extract.Query.(value)) => value

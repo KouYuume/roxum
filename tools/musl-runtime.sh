@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Writes the musl startup object and C library a Roc musl target links
-# (crt1.o, libc.a) into a platform's target directory. Both come from the musl
-# that Zig bundles, so they match the Zig that builds the host.
+# (rcrt1.o, libc.a) into a platform's target directory. Both come from the musl
+# that Zig bundles, so they match the Zig that builds the host. Roc links every
+# Linux executable as a static PIE, so they are the position-independent
+# variants: rcrt1.o relocates the executable before musl starts.
 #
 # Zig 0.16 reimplements part of libc in Zig (lib/zig/c.zig, "zigc") and leaves
 # those functions out of its musl libc.a; a Zig executable gets them from its
@@ -14,7 +16,7 @@ set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # Never empty: bash 3.2 treats an empty array as unset under `set -u`.
-build_flags=(-lc)
+build_flags=(-lc -fPIE)
 if [[ "${1:-}" == "--strip" ]]; then
     build_flags+=(-O ReleaseSmall -fstrip)
     shift
@@ -52,7 +54,7 @@ zig build-obj "${build_flags[@]}" -target "$zig_target" -O ReleaseSmall -fPIC -f
     -femit-bin="$work_dir/zigc.o" -Mroot="$zig_lib_dir/c.zig"
 
 mkdir -p "$output_dir"
-cp "$(find_input crt1.o)" "$output_dir/crt1.o"
+cp "$(find_input rcrt1.o)" "$output_dir/rcrt1.o"
 cp "$(find_input libc.a)" "$work_dir/libc.a"
 chmod u+w "$work_dir/libc.a"
 zig ar rcs "$work_dir/libc.a" "$work_dir/zigc.o"

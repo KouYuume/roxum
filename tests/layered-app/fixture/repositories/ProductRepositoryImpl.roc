@@ -14,7 +14,7 @@ ProductRepositoryImpl := { db : Postgres.Pool }.{
 		rows : Try(List({ sku : Str, name : Str, unit_price_cents : U64 }), _)
 		rows = Postgres.query!(repository.db, "SELECT sku, name, unit_price_cents FROM products WHERE sku = $1", [Postgres.Param.Text(sku)])
 		match rows {
-			Ok([row]) => Ok(Product.new(row.sku, row.name, row.unit_price_cents))
+			Ok([row]) => Ok(Product.new(row))
 			Ok(_) => Err(NotFound)
 			Err(_) => {
 				Log.error!("products: the product query failed")

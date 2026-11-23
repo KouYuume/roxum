@@ -157,6 +157,10 @@ An app whose code puts a function in a `Box` runs on one thread per process for 
 yet safe on several threads. `Reply.stream` and `roxum-sse` do not. `Auto` then uses one thread and says so
 on stderr, and `Fixed` above 1 stops startup; raise `processes` to use more CPUs.
 
+An app built with `--opt=interpreter` also runs on one thread per process: Roc's interpreter keeps a call on the thread
+that entered it, and a request's call can wait for I/O and continue later. `Auto` uses one thread and `Fixed` above 1
+stops startup. Builds with `--opt=dev` and `--opt=speed` are not limited.
+
 `processes` (1 by default, 1 to 64) runs more processes, each with its own `init!`, `Model`, connections, and
 limits, sharing only the listening socket. More processes keep a failure of the host itself in one from stopping the
 others, at the cost of what they cannot share: each holds its own database connections and caches.
@@ -230,6 +234,7 @@ proxy's idle timeout.**
 | Caddy `reverse_proxy` keep-alive | 2 min | 135 s |
 
 ```roc
+init! : {} => Try({ model : Model, listen : Server.ListenOptions }, [StartupErr(Str)])
 init! = |{}| Ok({
 	model: {},
 	listen: {

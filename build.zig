@@ -75,7 +75,7 @@ pub fn build(b: *std.Build) void {
     ) orelse std.builtin.OptimizeMode.ReleaseSafe;
     const development_host = HostBuild{ .platform_dir = "platform", .strip = false, .optimize = host_optimize };
 
-    const host = b.step("host", "Build platform/targets/<roc-target>/ (libhost.a, and crt1.o / libc.a for musl)");
+    const host = b.step("host", "Build platform/targets/<roc-target>/ (libhost.a, and rcrt1.o / libc.a for musl)");
     const build_selected_host = addHostBuild(b, roc_target, contract_alloc, development_host);
     host.dependOn(build_selected_host);
     const hosts = b.step("hosts", "Build the host for every Roc target");
@@ -876,7 +876,7 @@ const unit_tests = [_]ZigTest{
     .{ .root = "platform/host/request_id.zig", .link_libc = true },
     .{ .root = "platform/host/access_log.zig", .link_libc = true },
     .{ .root = "platform/host/metrics.zig", .link_libc = true },
-    .{ .root = "platform/host/boxy.zig", .link_libc = true },
+    .{ .root = "platform/host/single_thread_runtime.zig", .link_libc = true },
     .{ .root = "platform/host/stdio.zig", .link_libc = true },
     .{ .root = "platform/host/net/tcp.zig", .link_libc = true },
     .{ .root = "platform/host/net/deadline.zig", .link_libc = true },
@@ -1040,7 +1040,7 @@ fn nativeRocTarget(b: *std.Build) []const u8 {
 }
 
 /// Builds `platform/targets/<roc_target>/libhost.a`. Musl targets also get
-/// the `crt1.o` and `libc.a` that `platform/main.roc` lists as link inputs.
+/// the `rcrt1.o` and `libc.a` that `platform/main.roc` lists as link inputs.
 /// Where a host goes and whether it keeps debug information.
 const HostBuild = struct {
     /// Directory holding the platform's `targets/`.

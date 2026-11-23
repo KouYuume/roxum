@@ -55,10 +55,10 @@ jobs:
         if: steps.changes.outputs.checked == 'true'
         with:
           version: 0.17.1
-      - name: Install the pinned Roc nightly
+      - name: Install the pinned Roc compiler
         if: steps.changes.outputs.checked == 'true'
         run: |
-          tools/install-roc-nightly.sh "$RUNNER_TEMP/roc"
+          tools/install-roc.sh "$RUNNER_TEMP/roc"
           echo "$RUNNER_TEMP/roc" >> "$GITHUB_PATH"
       - name: Check the changelog and the release metadata
         if: steps.changes.outputs.checked == 'true'

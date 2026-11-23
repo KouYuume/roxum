@@ -38,7 +38,7 @@ Secret :: U64.{
 	from_file! : Str => Try(Secret, [SecretNotFound, SecretPermissionDenied, SecretTooLarge, SecretReadFailed, SecretTableFull])
 	from_file! = |path|
 		match HostSecret.from_file!(path) {
-			Loaded(handle) => Ok(Secret.(handle))
+			Loaded(host_handle) => Ok(Secret.(host_handle))
 			NotFound => Err(SecretNotFound)
 			PermissionDenied => Err(SecretPermissionDenied)
 			TooLarge => Err(SecretTooLarge)
@@ -52,7 +52,7 @@ Secret :: U64.{
 	from_env! : Str => Try(Secret, [SecretNotSet, SecretTooLarge, SecretTableFull])
 	from_env! = |name|
 		match HostSecret.from_env!(name) {
-			Loaded(handle) => Ok(Secret.(handle))
+			Loaded(host_handle) => Ok(Secret.(host_handle))
 			TooLarge => Err(SecretTooLarge)
 			TableFull => Err(SecretTableFull)
 			_ => Err(SecretNotSet)

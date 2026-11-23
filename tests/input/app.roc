@@ -22,6 +22,7 @@ Provided := { user : Try(Str, [Unset]) ?? Err(Unset) }
 
 program = { init!, routes }
 
+init! : {} => Try({ model : Model, listen : Server.ListenOptions }, [StartupErr(Str)])
 init! = |{}|
 	Ok({
 		model: {},
@@ -116,21 +117,20 @@ query_optional_str! = |_model, { search: Extract.Query.(search) }| {
 	Ok(Reply.text("${search.count.to_str()} ${theme}"))
 }
 
-attempt_json! : Model, { item : [Ok(Extract.JsonBody({ name : Str })), Err(Reply)] } => Try(Reply, Reply)
+attempt_json! : Model, { item : Try(Extract.JsonBody({ name : Str }), Reply) } => Try(Reply, Reply)
 attempt_json! = |_model, { item }|
 	match item {
 		Ok(Extract.JsonBody.(value)) => Ok(Reply.text("ok ${value.name}"))
 		Err(reply) => Ok(Reply.text("err ${reply.status_code().to_str()}"))
 	}
 
-attempt_pass! : Model, { item : [Ok(Extract.JsonBody({ name : Str })), Err(Reply)] } => Try(Reply, Reply)
-attempt_pass! = |_model, { item }|
-	match item {
-		Ok(Extract.JsonBody.(value)) => Ok(Reply.text(value.name))
-		Err(reply) => Err(reply)
-	}
+attempt_pass! : Model, { item : Try(Extract.JsonBody({ name : Str }), Reply) } => Try(Reply, Reply)
+attempt_pass! = |_model, { item }| {
+	Extract.JsonBody.(value) = item?
+	Ok(Reply.text(value.name))
+}
 
-attempt_mixed! : Model, { id : Extract.Path(U64), search : [Ok(Extract.Query({ q : Str })), Err(Reply)], form : [Ok(Extract.Form({ name : Str })), Err(Reply)] } => Try(Reply, Reply)
+attempt_mixed! : Model, { id : Extract.Path(U64), search : Try(Extract.Query({ q : Str }), Reply), form : [Ok(Extract.Form({ name : Str })), Err(Reply)] } => Try(Reply, Reply)
 attempt_mixed! = |_model, { id: Extract.Path.(id), search, form }| {
 	query_part = match search {
 		Ok(Extract.Query.(value)) => value.q

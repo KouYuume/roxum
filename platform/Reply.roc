@@ -99,9 +99,12 @@ Reply := [
 			WithStatus(_, inner) | WithHeaders(_, inner) | WithTrailers(_, inner) | ReplaceHeaders(_, inner) | Routed(_, inner) | Compressible(_, inner) => Reply.file_target(inner)
 			Text(_) | Json(_) | Bytes(_, _) | Empty | StatusOnly(_) | Full(_) | Err(_) | Writes(_, _) => Err(NotFile)
 		}
-	## For a field typed `[Ok(_), Err(Reply)]` in `Handler.typed`: the reply that
-	## the failed field would have answered with.
-	parser_for : _encoding -> (state -> Try({ value : Reply, rest : state }, _err)) where [state.rejection : state -> Reply]
+	## For a field typed `Try(_, Reply)` in `Handler.typed`: the reply that the
+	## failed field would have answered with. The error type comes from the
+	## format's `missing_field`, so this parser fits every format's error type
+	## although it never fails.
+	parser_for : encoding -> (state -> Try({ value : Reply, rest : state }, err))
+		where [state.rejection : state -> Reply, encoding.missing_field : encoding, Str -> err]
 	parser_for = |_encoding| |state| Ok({ value: state.rejection(), rest: state })
 
 	## A 200 response with the string as body and
@@ -172,11 +175,11 @@ Reply := [
 	## A plain-text response with the error's status and message. See
 	## `HttpError`.
 	error = |value| Reply.(Err(value))
-	## Marks `reply` as the response of the route pattern `route`, such as
+	## Marks `reply` as the response of the route `pattern`, such as
 	## `/users/{id}`. The router marks the replies of matched routes, and the
 	## host's access log names the route. Wrappers added later keep the mark.
 	## The response is unchanged.
-	with_route = |reply, route| Reply.(Routed(route, reply))
+	with_route = |reply, pattern| Reply.(Routed(pattern, reply))
 	## The route pattern the reply was marked with, looking through wrappers.
 	## The outermost mark wins.
 	route : Reply -> Try(Str, [Unrouted])
@@ -197,7 +200,7 @@ Reply := [
 			StatusOnly(value) | WithStatus(value, _) => Status.code(value)
 			WithHeaders(_, inner) | WithTrailers(_, inner) | ReplaceHeaders(_, inner) | Routed(_, inner) | Compressible(_, inner) => Reply.status_code(inner)
 			Full(response) => response.status
-			Err(http_error) => Status.code(HttpError.status(http_error))
+			Err(http_error) => Status.code(http_error.status)
 		}
 }
 

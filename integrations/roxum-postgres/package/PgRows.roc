@@ -46,9 +46,9 @@ PgRows := [Default].{
 			),
 		)
 
-	decode : PgRows.Node -> Try(a, [PostgresDecodeFailed(Str), ..errs])
+	decode : PgRows.Node -> Try(a, [PostgresDecodeFailed(Str), MissingRequiredField(Str)])
 		where [
-			a.parser_for : PgRows -> (PgRows.State -> Try({ value : a, rest : PgRows.State }, [PostgresDecodeFailed(Str), ..errs])),
+			a.parser_for : PgRows -> (PgRows.State -> Try({ value : a, rest : PgRows.State }, [PostgresDecodeFailed(Str), MissingRequiredField(Str)])),
 		]
 	decode = |node| {
 		Shape : a
@@ -60,10 +60,13 @@ PgRows := [Default].{
 	rename_field : PgRows, Str -> Str
 	rename_field = |_, name| name
 
-	invalid_value : PgRows, PgRows.State -> [PostgresDecodeFailed(Str)]
+	invalid_value : PgRows, PgRows.State -> [PostgresDecodeFailed(Str), MissingRequiredField(Str)]
 	invalid_value = |_, state| failure(top_path(state), "invalid value")
 
-	parse_str : PgRows, PgRows.State -> Try({ value : Str, rest : PgRows.State }, [PostgresDecodeFailed(Str)])
+	missing_field : PgRows, Str -> [PostgresDecodeFailed(Str), MissingRequiredField(Str)]
+	missing_field = |_, name| MissingRequiredField(name)
+
+	parse_str : PgRows, PgRows.State -> Try({ value : Str, rest : PgRows.State }, [PostgresDecodeFailed(Str), MissingRequiredField(Str)])
 	parse_str = |_, state| {
 		(next, rest) = take_value(state)?
 		match next.node {
@@ -76,7 +79,7 @@ PgRows := [Default].{
 		}
 	}
 
-	parse_bool : PgRows, PgRows.State -> Try({ value : Bool, rest : PgRows.State }, [PostgresDecodeFailed(Str)])
+	parse_bool : PgRows, PgRows.State -> Try({ value : Bool, rest : PgRows.State }, [PostgresDecodeFailed(Str), MissingRequiredField(Str)])
 	parse_bool = |_, state| {
 		(next, rest) = take_value(state)?
 		match next.node {
@@ -86,7 +89,7 @@ PgRows := [Default].{
 		}
 	}
 
-	parse_u8 : PgRows, PgRows.State -> Try({ value : U8, rest : PgRows.State }, [PostgresDecodeFailed(Str)])
+	parse_u8 : PgRows, PgRows.State -> Try({ value : U8, rest : PgRows.State }, [PostgresDecodeFailed(Str), MissingRequiredField(Str)])
 	parse_u8 = |_, state| {
 		(next, rest) = take_value(state)?
 		match next.node {
@@ -95,41 +98,41 @@ PgRows := [Default].{
 		}
 	}
 
-	parse_i8 : PgRows, PgRows.State -> Try({ value : I8, rest : PgRows.State }, [PostgresDecodeFailed(Str)])
+	parse_i8 : PgRows, PgRows.State -> Try({ value : I8, rest : PgRows.State }, [PostgresDecodeFailed(Str), MissingRequiredField(Str)])
 	parse_i8 = |_, state| take_number(state, I8.from_str)
 
-	parse_u16 : PgRows, PgRows.State -> Try({ value : U16, rest : PgRows.State }, [PostgresDecodeFailed(Str)])
+	parse_u16 : PgRows, PgRows.State -> Try({ value : U16, rest : PgRows.State }, [PostgresDecodeFailed(Str), MissingRequiredField(Str)])
 	parse_u16 = |_, state| take_number(state, U16.from_str)
 
-	parse_i16 : PgRows, PgRows.State -> Try({ value : I16, rest : PgRows.State }, [PostgresDecodeFailed(Str)])
+	parse_i16 : PgRows, PgRows.State -> Try({ value : I16, rest : PgRows.State }, [PostgresDecodeFailed(Str), MissingRequiredField(Str)])
 	parse_i16 = |_, state| take_number(state, I16.from_str)
 
-	parse_u32 : PgRows, PgRows.State -> Try({ value : U32, rest : PgRows.State }, [PostgresDecodeFailed(Str)])
+	parse_u32 : PgRows, PgRows.State -> Try({ value : U32, rest : PgRows.State }, [PostgresDecodeFailed(Str), MissingRequiredField(Str)])
 	parse_u32 = |_, state| take_number(state, U32.from_str)
 
-	parse_i32 : PgRows, PgRows.State -> Try({ value : I32, rest : PgRows.State }, [PostgresDecodeFailed(Str)])
+	parse_i32 : PgRows, PgRows.State -> Try({ value : I32, rest : PgRows.State }, [PostgresDecodeFailed(Str), MissingRequiredField(Str)])
 	parse_i32 = |_, state| take_number(state, I32.from_str)
 
-	parse_u64 : PgRows, PgRows.State -> Try({ value : U64, rest : PgRows.State }, [PostgresDecodeFailed(Str)])
+	parse_u64 : PgRows, PgRows.State -> Try({ value : U64, rest : PgRows.State }, [PostgresDecodeFailed(Str), MissingRequiredField(Str)])
 	parse_u64 = |_, state| take_number(state, U64.from_str)
 
-	parse_i64 : PgRows, PgRows.State -> Try({ value : I64, rest : PgRows.State }, [PostgresDecodeFailed(Str)])
+	parse_i64 : PgRows, PgRows.State -> Try({ value : I64, rest : PgRows.State }, [PostgresDecodeFailed(Str), MissingRequiredField(Str)])
 	parse_i64 = |_, state| take_number(state, I64.from_str)
 
-	parse_u128 : PgRows, PgRows.State -> Try({ value : U128, rest : PgRows.State }, [PostgresDecodeFailed(Str)])
+	parse_u128 : PgRows, PgRows.State -> Try({ value : U128, rest : PgRows.State }, [PostgresDecodeFailed(Str), MissingRequiredField(Str)])
 	parse_u128 = |_, state| take_number(state, U128.from_str)
 
-	parse_i128 : PgRows, PgRows.State -> Try({ value : I128, rest : PgRows.State }, [PostgresDecodeFailed(Str)])
+	parse_i128 : PgRows, PgRows.State -> Try({ value : I128, rest : PgRows.State }, [PostgresDecodeFailed(Str), MissingRequiredField(Str)])
 	parse_i128 = |_, state| take_number(state, I128.from_str)
 
 	## `numeric` columns; exact, unlike the float types.
-	parse_dec : PgRows, PgRows.State -> Try({ value : Dec, rest : PgRows.State }, [PostgresDecodeFailed(Str)])
+	parse_dec : PgRows, PgRows.State -> Try({ value : Dec, rest : PgRows.State }, [PostgresDecodeFailed(Str), MissingRequiredField(Str)])
 	parse_dec = |_, state| take_number(state, Dec.from_str)
 
-	parse_f64 : PgRows, PgRows.State -> Try({ value : F64, rest : PgRows.State }, [PostgresDecodeFailed(Str)])
+	parse_f64 : PgRows, PgRows.State -> Try({ value : F64, rest : PgRows.State }, [PostgresDecodeFailed(Str), MissingRequiredField(Str)])
 	parse_f64 = |_, state| take_number(state, float_from_str)
 
-	parse_f32 : PgRows, PgRows.State -> Try({ value : F32, rest : PgRows.State }, [PostgresDecodeFailed(Str)])
+	parse_f32 : PgRows, PgRows.State -> Try({ value : F32, rest : PgRows.State }, [PostgresDecodeFailed(Str), MissingRequiredField(Str)])
 	parse_f32 = |format, state| {
 		parsed = PgRows.parse_f64(format, state)?
 		Ok({ value: parsed.value.to_f32_wrap(), rest: parsed.rest })
@@ -137,7 +140,7 @@ PgRows := [Default].{
 
 	## The rows, or the bytes of a `bytea` column (`\x` and hex digits) as
 	## a `List(U8)`.
-	parse_list_start : PgRows, PgRows.State -> Try([Counted({ len : U64, rest : PgRows.State }), Uncounted(PgRows.State)], [PostgresDecodeFailed(Str)])
+	parse_list_start : PgRows, PgRows.State -> Try([Counted({ len : U64, rest : PgRows.State }), Uncounted(PgRows.State)], [PostgresDecodeFailed(Str), MissingRequiredField(Str)])
 	parse_list_start = |_, state| {
 		(next, rest) = take_value(state)?
 		items = match next.node {
@@ -152,13 +155,13 @@ PgRows := [Default].{
 		Ok(Counted({ len: items.len(), rest: if items.is_empty() { rest } else { push(rest, Items({ path: next.path, index: 0, items })) } }))
 	}
 
-	parse_list_next : PgRows, PgRows.State -> Try([Item(PgRows.State), Done(PgRows.State)], [PostgresDecodeFailed(Str)])
+	parse_list_next : PgRows, PgRows.State -> Try([Item(PgRows.State), Done(PgRows.State)], [PostgresDecodeFailed(Str), MissingRequiredField(Str)])
 	parse_list_next = |_, state| Err(failure(top_path(state), "internal error: uncounted list"))
 
-	parse_list_after_item : PgRows, PgRows.State -> Try([Continue(PgRows.State), Done(PgRows.State)], [PostgresDecodeFailed(Str)])
+	parse_list_after_item : PgRows, PgRows.State -> Try([Continue(PgRows.State), Done(PgRows.State)], [PostgresDecodeFailed(Str), MissingRequiredField(Str)])
 	parse_list_after_item = |_, state| Err(failure(top_path(state), "internal error: uncounted list"))
 
-	parse_record_start : PgRows, PgRows.State -> Try([Counted({ len : U64, rest : PgRows.State }), Uncounted(PgRows.State)], [PostgresDecodeFailed(Str)])
+	parse_record_start : PgRows, PgRows.State -> Try([Counted({ len : U64, rest : PgRows.State }), Uncounted(PgRows.State)], [PostgresDecodeFailed(Str), MissingRequiredField(Str)])
 	parse_record_start = |_, state| {
 		(next, rest) = take_value(state)?
 		match next.node {
@@ -178,22 +181,22 @@ PgRows := [Default].{
 			Continue(PgRows.State),
 			Done(PgRows.State),
 		],
-		[PostgresDecodeFailed(Str)],
+		[PostgresDecodeFailed(Str), MissingRequiredField(Str)],
 	)
 	parse_record_field = |_, _, state| {
 		(name, rest) = take_entry(state)?
 		Ok(TryField({ name, rest }))
 	}
 
-	parse_record_after_field : PgRows, PgRows.State -> Try([Continue(PgRows.State), Done(PgRows.State)], [PostgresDecodeFailed(Str)])
+	parse_record_after_field : PgRows, PgRows.State -> Try([Continue(PgRows.State), Done(PgRows.State)], [PostgresDecodeFailed(Str), MissingRequiredField(Str)])
 	parse_record_after_field = |_, state| Err(failure(top_path(state), "internal error: uncounted row"))
 
 	## A column the record has no field for: likely a misspelt alias.
-	skip_record_field : PgRows, PgRows.State -> Try(PgRows.State, [PostgresDecodeFailed(Str)])
+	skip_record_field : PgRows, PgRows.State -> Try(PgRows.State, [PostgresDecodeFailed(Str), MissingRequiredField(Str)])
 	skip_record_field = |_, state| Err(failure(top_path(state), "the type has no field for this column"))
 
 	## A tag without a payload, from text in snake_case: `active` is `Active`.
-	parse_tag_union : PgRows, Encoding.ParseTagUnionSpec(a), PgRows.State -> Try({ value : a, rest : PgRows.State }, [PostgresDecodeFailed(Str)])
+	parse_tag_union : PgRows, Encoding.ParseTagUnionSpec(a, PgRows, PgRows.State, [PostgresDecodeFailed(Str), MissingRequiredField(Str)]), PgRows.State -> Try({ value : a, rest : PgRows.State }, [PostgresDecodeFailed(Str), MissingRequiredField(Str)])
 	parse_tag_union = |format, spec, state| {
 		(next, rest) = take_value(state)?
 		written = match next.node {
@@ -409,7 +412,7 @@ expect {
 # Pairing stops at the shorter list. Cover zero, one fewer, equal, and
 # one extra value around two named columns; NULL preserves its position.
 expect {
-	result : Try(List({ a : Try(Str, [Missing]), b : Try(Str, [Missing]) }), [PostgresDecodeFailed(Str)])
+	result : Try(List({ a : Try(Str, [Missing]), b : Try(Str, [Missing]) }), [PostgresDecodeFailed(Str), MissingRequiredField(Str)])
 	result = PgRows.decode(PgRows.rows(["a", "b"], [[], [text("x")], [Null, text("y")], [text("x"), text("y"), text("ignored")]]))
 	result == Ok([
 		{ a: Err(Missing), b: Err(Missing) },
@@ -420,7 +423,7 @@ expect {
 }
 
 expect {
-	result : Try(List({}), [PostgresDecodeFailed(Str)])
+	result : Try(List({}), [PostgresDecodeFailed(Str), MissingRequiredField(Str)])
 	result = PgRows.decode(PgRows.rows([], [[text("ignored")]]))
 	result == Ok([{}])
 }

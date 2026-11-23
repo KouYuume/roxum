@@ -8,6 +8,7 @@ cleartext HTTP/2 upstreams and their current limits, see [deployment](deployment
 Set roxum's keep-alive idle timeout longer than the proxy's upstream idle timeout. Otherwise, the proxy can reuse a connection just as roxum closes it, causing a failed request. For a proxy configured with a 60-second upstream timeout, use a longer value such as 75 seconds:
 
 ```roc
+init! : {} => Try({ model : Model, listen : Server.ListenOptions }, [StartupErr(Str)])
 init! = |{}| Ok({
 	model: {},
 	listen: {
