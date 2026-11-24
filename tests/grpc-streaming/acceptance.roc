@@ -23,8 +23,8 @@ program = { init!, routes: Router.build(routes, {}) }
 
 init! : {} => Try({ model : Model, listen : Server.ListenOptions }, [StartupErr(Str)])
 init! = |{}| {
-	settings : { path : Str }
-	settings = Config.load!("path = \"\"").map_err(|ConfigErr(message)| StartupErr(message))?
+	settings : { path : Str, threads : U16 }
+	settings = Config.load!("path = \"\"\nthreads = 2").map_err(|ConfigErr(message)| StartupErr(message))?
 	progress = RateCounter.new!({ window_seconds: 3600, max_keys: 1 }).map_err(|_| StartupErr("counter unavailable"))?
 	Ok({
 		model: Model.{ progress },
@@ -35,7 +35,7 @@ init! = |{}| {
 				Server.Endpoint.Unix({ path: settings.path })
 			},
 			protocol: Server.Protocol.Http2,
-			threads: Server.Threads.Fixed(2),
+			threads: Server.Threads.Fixed(settings.threads),
 			timeouts: { ..Server.Timeouts.defaults, response_write_milliseconds: 30_000 },
 			drain_timeout_milliseconds: 2000,
 			limits: { maximum_requests_in_progress: Server.Count.Fixed(2), maximum_body_bytes: 4096, request_memory: Server.MemoryLimit.Bytes(8 * 1024 * 1024), maximum_streams: Server.Count.Fixed(1) },

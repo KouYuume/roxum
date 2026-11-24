@@ -287,12 +287,13 @@ def verify_upload(channel, address, unix, tls_context):
                 assert not output
 
 
-def verify(executable, unix, proxied=False):
+def verify(executable, unix, proxied, backend):
     with tempfile.TemporaryDirectory(prefix='roxum-grpc-stream-', dir='/tmp') as directory:
         path = str(pathlib.Path(directory) / 'rpc.sock') if unix else ''
         config = pathlib.Path(directory) / 'config'
         config.mkdir()
-        (config / 'local.toml').write_text('path = ' + json.dumps(path) + '\n')
+        threads = 1 if backend == 'interpreter' else 2
+        (config / 'local.toml').write_text(f'path = {json.dumps(path)}\nthreads = {threads}\n')
         with tempfile.TemporaryFile(mode='w+') as errors, ExitStack() as stack:
             process = subprocess.Popen([executable], cwd=directory, stdout=subprocess.PIPE,
                                        stderr=errors, text=True, start_new_session=True)
@@ -433,13 +434,12 @@ def verify(executable, unix, proxied=False):
 
 if __name__ == '__main__':
     executable = str(pathlib.Path(sys.argv[1]).resolve())
-    verify(executable, False)
-    verify(executable, True)
-
-    verify(executable, False, True)
-    verify(executable, True, True)
-    import pressure
     acceptance = str(pathlib.Path(sys.argv[2]).resolve())
+    backend = sys.argv[3]
+    import pressure
     for unix in (False, True):
         for proxied in (False, True):
-            pressure.verify(acceptance, unix, proxied, sys.argv[3])
+            verify(executable, unix, proxied, backend)
+    for unix in (False, True):
+        for proxied in (False, True):
+            pressure.verify(acceptance, unix, proxied, backend)

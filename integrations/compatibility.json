@@ -295,7 +295,7 @@
         "tests/grpc-streaming/input_lifecycle.py",
         "tests/grpc-streaming/pressure.py"
       ],
-      "compatibility_sha256": "3167147cce6aa08d99bc2e32d181b66fe16c6feee16f46e647b2c9466af7f394",
+      "compatibility_sha256": "ebfa1972eb4083f9107226a3b4138c0f76a2f27bbcd5a4c907c576a02362a2f5",
       "max_unpacked_bytes": 65536
     }
   ]
