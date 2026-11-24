@@ -76,14 +76,20 @@ pub fn build(b: *std.Build) void {
     const development_host = HostBuild{ .platform_dir = "platform", .strip = false, .optimize = host_optimize };
 
     const host = b.step("host", "Build platform/targets/<roc-target>/ (libhost.a, and rcrt1.o / libc.a for musl)");
-    const build_selected_host = addHostBuild(b, roc_target, contract_alloc, development_host);
+    const fetch_tls = b.addSystemCommand(&.{"bash"});
+    fetch_tls.addFileArg(b.path("tools/fetch-mbedtls.sh"));
+    const archive = fetch_tls.addOutputFileArg("mbedtls.tar.bz2");
+    if (b.option(std.Build.LazyPath, "mbedtls-archive", "Previously downloaded pinned Mbed TLS source archive")) |local_archive| {
+        fetch_tls.addFileArg(local_archive);
+    }
+    const build_selected_host = addHostBuild(b, roc_target, contract_alloc, development_host, archive);
     host.dependOn(build_selected_host);
     const hosts = b.step("hosts", "Build the host for every Roc target");
     for (roc_targets) |each_target| {
         if (std.mem.eql(u8, each_target, roc_target)) {
             hosts.dependOn(build_selected_host);
         } else {
-            hosts.dependOn(addHostBuild(b, each_target, contract_alloc, development_host));
+            hosts.dependOn(addHostBuild(b, each_target, contract_alloc, development_host, archive));
         }
     }
 
@@ -93,7 +99,7 @@ pub fn build(b: *std.Build) void {
     const release_url = b.option([]const u8, "release-url", "The URL the release's bundles are served from, such as https://github.com/<owner>/<repo>/releases/download/v0.1.0") orelse "";
     const bundle_release = b.addSystemCommand(&.{ "bash", "tools/release-bundle.sh", release_url });
     for (roc_targets) |each_target| {
-        bundle_release.step.dependOn(addHostBuild(b, each_target, false, HostBuild.release));
+        bundle_release.step.dependOn(addHostBuild(b, each_target, false, HostBuild.release, archive));
     }
     release.dependOn(&bundle_release.step);
 
@@ -1045,7 +1051,7 @@ fn nativeRocTarget(b: *std.Build) []const u8 {
 const HostBuild = struct {
     /// Directory holding the platform's `targets/`.
     platform_dir: []const u8,
-    /// Release bundles drop debug information to stay under Roc's 10 MB
+    /// Release bundles drop debug information to stay under the platform
     /// package limit; panics then show addresses without function names.
     strip: bool,
     optimize: std.builtin.OptimizeMode,
@@ -1056,7 +1062,7 @@ const HostBuild = struct {
 /// Staging copy of the platform for `zig build release`.
 const release_platform_dir = "zig-out/release/platform";
 
-fn addHostBuild(b: *std.Build, roc_target: []const u8, contract_alloc: bool, options: HostBuild) *std.Build.Step {
+fn addHostBuild(b: *std.Build, roc_target: []const u8, contract_alloc: bool, options: HostBuild, archive: std.Build.LazyPath) *std.Build.Step {
     const target_dir = b.fmt("{s}/targets/{s}", .{ options.platform_dir, roc_target });
     const host_object = b.fmt("{s}/host.o", .{target_dir});
     const resolved_target = b.resolveTargetQuery(
@@ -1111,14 +1117,21 @@ fn addHostBuild(b: *std.Build, roc_target: []const u8, contract_alloc: bool, opt
 
     const place_host_object = b.addUpdateSourceFiles();
     place_host_object.addCopyFileToSource(compile_host.getEmittedBin(), host_object);
-    const archive_host = b.addSystemCommand(&.{
-        b.graph.zig_exe,
-        "ar",
-        "rcs",
-        b.fmt("{s}/libhost.a", .{target_dir}),
-        host_object,
-    });
+    const build_tls = b.addSystemCommand(&.{"bash"});
+    build_tls.addFileArg(b.path("tools/build-mbedtls.sh"));
+    build_tls.addFileArg(archive);
+    build_tls.addArgs(&.{ b.graph.zig_exe, zigTargetOf(roc_target).? });
+    const tls = build_tls.addOutputDirectoryArg("tls");
+    const archive_host = b.addSystemCommand(&.{"bash"});
+    archive_host.addFileArg(b.path("tools/archive-host.sh"));
+    archive_host.addArgs(&.{ b.graph.zig_exe, host_object });
     archive_host.addFileArg(engine_object.getEmittedBin());
+    archive_host.addDirectoryArg(tls);
+    if (options.strip and std.mem.eql(u8, roc_target, "arm64mac")) {
+        for ([_][]const u8{ "MBEDTLS-LICENSE", "TF-PSA-CRYPTO-LICENSE" }) |license| {
+            place_host_object.addCopyFileToSource(tls.path(b, license), b.fmt("{s}/{s}", .{ options.platform_dir, license }));
+        }
+    }
     archive_host.step.dependOn(&place_host_object.step);
     const write_musl_runtime = b.addSystemCommand(&.{
         "bash",

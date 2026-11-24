@@ -23,7 +23,7 @@ systemctl daemon-reload
 systemctl enable --now benchmark-stop.timer
 
 # Keep toolchain installation separate and record resolved OS package versions.
-dnf install -y git jq python3 sysstat tar xz gcc gcc-c++ make util-linux time procps-ng
+dnf install -y git jq python3 sysstat tar xz gcc gcc-c++ make cmake ninja-build bzip2 perl-Digest-SHA util-linux time procps-ng
 systemctl enable --now amazon-ssm-agent
 install -d -o ec2-user -g ec2-user /opt/roxum-bench
 rpm -qa | sort > /opt/roxum-bench/os-packages.txt

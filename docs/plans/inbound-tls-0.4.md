@@ -32,10 +32,8 @@ See the OpenSSL [handshake](https://docs.openssl.org/3.5/man3/SSL_accept/) and
 ## 2. Select and package the server engine
 
 The [packaging trials](inbound-tls-packaging.md) exercise Mbed TLS in the
-extracted Roc application on all three targets. Settle the distribution
-budget before integrating it into the release build. Carry the verified source
-pin, license files and musl PIC flags into that build and retain the
-extracted-application handshake test. Production connections should use the
+extracted Roc application on all three targets. The standard bundle ships the
+server engine under a 17 MB expanded budget. Production connections should use the
 host's readiness and deadline machinery. The existing
 [outbound TLS module](../../platform/host/tls.zig) wraps a client session.
 

@@ -12,6 +12,8 @@ recreate the test venvs under `zig-out/` so they use the selected interpreter.
 
 ## Setup
 
+Host builds use CMake, Ninja, Python 3, curl, shasum and tar with bzip2 support to build the pinned Mbed TLS release with Zig. Applications using a published bundle only need Roc.
+
 Install Zig 0.17.1. From the roxum repository, install the pinned Roc build, and clone the Roc source at the recorded revision beside it:
 
 ```sh

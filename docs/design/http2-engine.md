@@ -13,11 +13,10 @@ execution, see the [streaming contract](http2-streaming.md).
 
 `build.zig.zon` pins the upstream source package and its Zig content hash.
 `tools/nghttp2-build.zig` compiles only the 26 protocol-library C sources and
-uses the pinned Zig compiler to generate bindings in the build cache. No system
-nghttp2, CMake, TLS library, or additional language toolchain is required. The
+uses the pinned Zig compiler to generate bindings in the build cache. The HTTP/2 engine builds directly with Zig. The
 library is included in `libhost.a` for all three supported targets, including
 tracking-allocator builds. Release bundles include `platform/NGHTTP2-LICENSE`.
-The expanded platform bundle budget is 13,000,000 bytes, including all supported
+The expanded platform bundle budget is 17,000,000 bytes, including all supported
 host targets and their runtime libraries.
 
 Only the build helper and engine adapter name nghttp2 APIs. The adapter's public
