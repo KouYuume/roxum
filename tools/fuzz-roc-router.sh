@@ -9,9 +9,9 @@ repo_root="$(cd -- "$script_dir/.." && pwd)"
 temporary_dir="$(mktemp -d "${TMPDIR:-/tmp}/roxum-router-fuzz.XXXXXX")"
 trap 'rm -rf -- "$temporary_dir"' EXIT
 
-roc_fuzz_url="https://github.com/lukewilliamboswell/roc-fuzz/releases/download/0.4.3/41NK5FShyGC9Z8HNpUdUeXMWwLmLNfFxsfmLvdPL4Fxb.tar.zst"
-roc_fuzz_sha256="d9bae1e93e6e94f3fafb4040861402dbab90af247023461d8e5451db4a3ae0f2"
-roc_fuzz_archive="$temporary_dir/roc-fuzz-0.4.3.tar.zst"
+roc_fuzz_url="https://github.com/lukewilliamboswell/roc-fuzz/releases/download/0.7.0/HBigHQhVZWEF2EkLxpYK35u8P6UNsAmPYxpNFTxXK1Br.tar.zst"
+roc_fuzz_sha256="94130c93aa2abb204beb21f06338ecc39c5808e1358d905f219769ecf260e5f2"
+roc_fuzz_archive="$temporary_dir/roc-fuzz-0.7.0.tar.zst"
 
 curl -fsSL "$roc_fuzz_url" -o "$roc_fuzz_archive"
 if command -v sha256sum >/dev/null; then
@@ -20,7 +20,7 @@ else
     actual_sha256="$(shasum -a 256 "$roc_fuzz_archive" | awk '{print $1}')"
 fi
 if [[ "$actual_sha256" != "$roc_fuzz_sha256" ]]; then
-    echo "roc-fuzz 0.4.3 checksum mismatch" >&2
+    echo "roc-fuzz 0.7.0 checksum mismatch" >&2
     exit 1
 fi
 

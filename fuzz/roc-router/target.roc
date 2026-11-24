@@ -1,4 +1,4 @@
-app [target] { fuzz: platform "https://github.com/lukewilliamboswell/roc-fuzz/releases/download/0.4.3/41NK5FShyGC9Z8HNpUdUeXMWwLmLNfFxsfmLvdPL4Fxb.tar.zst" }
+app [target] { fuzz: platform "https://github.com/lukewilliamboswell/roc-fuzz/releases/download/0.7.0/HBigHQhVZWEF2EkLxpYK35u8P6UNsAmPYxpNFTxXK1Br.tar.zst" }
 
 import fuzz.Fuzz
 import Handler
@@ -10,12 +10,16 @@ import RouteProbe
 import Router
 
 Input := { path_case : U8, method_case : U8, order : U8 }.{
+	parser_for : _
+	encoder_for : _
+
 	generator_for = |_| {
 		{ path_case: Fuzz.u8_in(0, 8), method_case: Fuzz.u8_in(0, 7), order: Fuzz.u8 }.Fuzz
 	}
 }
 
 target = Fuzz.target({
+	examples: [],
 	name: "roxum-router-resolution",
 	test: |Input.{ path_case, method_case, order }| {
 		actual = Router.probe(make_router(order), method_for(method_case), path_for(path_case))
