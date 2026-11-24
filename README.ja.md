@@ -62,7 +62,7 @@ routes = Router.new
 
 ## 制約
 
-- 受信TLS・HTTP/3は[リバースプロキシ](docs/guides/reverse-proxy.md)で終端します。HTTP/1トレーラーは未対応です。WebSocketサーバー、CONNECT・TRACE・任意の拡張メソッドは[対応対象外](docs/design/non-goals.md)です。
+- 受信TLS・HTTP/3は[リバースプロキシ](docs/guides/reverse-proxy.md)で終端します。HTTP/1トレーラーは未対応です。WebSocketサーバー、CONNECT、TRACE、任意の拡張メソッドは[強い要望がない限り対応対象外](docs/design/non-goals.md#features-excluded-unless-strong-demand-emerges)です。
 - タイムアウトで任意のRocの計算を強制中断することはできません。
 - 実行時圧縮はgzip。事前圧縮したBrotliは配信可能、複数バイトレンジは未対応です。
 - セッション・CSRF・OAuth・JWT・OpenAPIはライブラリまたはintegrationが担います。[対応範囲の方針](docs/design/non-goals.md#features-owned-by-libraries-and-integrations)を参照してください。

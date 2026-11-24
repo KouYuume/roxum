@@ -7,7 +7,7 @@ and [TLS proxy configuration](../guides/reverse-proxy.md#native-grpc-over-tls).
 ## Scope and responsibilities
 
 Inbound TLS, outbound gRPC, gRPC-Web, reflection, compression, automatic retries,
-and service discovery are outside this target. WebSocket server support is outside the [core scope](../design/non-goals.md#websocket).
+and service discovery are outside this target. For WebSocket server support, see the [scope policy](../design/non-goals.md#features-excluded-unless-strong-demand-emerges).
 
 | Layer | Responsibility |
 |---|---|

@@ -140,4 +140,4 @@ There is no general environment or process access: the platform only exposes wha
 - [Deployment](deployment.md): Linux builds, settings files, worker processes, reverse proxies, timeouts, logs, and
   debug mode
 - [Observability](observability.md): request IDs, the access log, metrics, health checks
-- [Current limitations](../../README.md#limitations) and [WebSocket scope](../design/non-goals.md#websocket)
+- [Current limitations](../../README.md#limitations) and [WebSocket scope](../design/non-goals.md#features-excluded-unless-strong-demand-emerges)

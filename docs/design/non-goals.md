@@ -31,16 +31,13 @@ These Roc projects serve different application needs:
 
 Follow each project's documentation for setup, supported environments, and examples. These are suggestions for choosing an application development model. A browser application can also communicate with a separately deployed roxum API over HTTP.
 
-## WebSocket
-
-WebSocket server endpoints are outside roxum’s scope. Applications can send browser events over SSE and accept client actions through HTTP requests. Clients that require the WebSocket protocol need a separate WebSocket endpoint.
-
 ## Features excluded unless strong demand emerges
 
 The following features are explicitly outside the planned scope unless strong user demand justifies reconsideration. They are not a backlog of promised features.
 
 | Feature | Reason for excluding it | Demand that could justify reconsideration |
 |---|---|---|
+| WebSocket | Applications can send browser events over SSE and accept client actions through HTTP requests. | A concrete need for bidirectional communication that HTTP requests and SSE cannot serve, or an existing client that requires WebSocket interoperability. |
 | CONNECT | Establishing tunnels serves proxy use cases and requires connection management beyond ordinary request handling. | A concrete need to build a tunneling proxy with roxum. |
 | TRACE | Request loopback diagnostics are not needed for ordinary application behavior. | An operational requirement that specifically depends on TRACE. |
 | Arbitrary extension HTTP methods | Accepting and routing methods beyond roxum's supported set expands the API for specialized protocols rather than ordinary web applications. Examples include WebDAV's PROPFIND, MKCOL, COPY, MOVE, LOCK, and UNLOCK. | A concrete interoperability requirement, such as serving existing WebDAV clients. |
