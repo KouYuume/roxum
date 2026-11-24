@@ -73,7 +73,9 @@ for target in arm64mac arm64musl x64musl; do
         adapter="$probe_dir/../../platform/host/inbound_tls"
         probe_flags+=(-I"$adapter")
         if ! "$host_trial"; then
-            ./cc "${probe_flags[@]}" -c "$adapter/credentials.c" -o credentials.o
+            for unit in credentials session; do
+                ./cc "${probe_flags[@]}" -c "$adapter/$unit.c" -o "$unit.o"
+            done
         fi
         ./cc "${probe_flags[@]}" -c "$probe_dir/mbedtls-server.c" -o server.o
         if "$host_trial"; then

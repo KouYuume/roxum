@@ -78,7 +78,9 @@ bash tests/inbound-tls/package-mbedtls.sh mbedtls-4.1.2.tar.bz2 "$platform_bundl
 
 For each trial, run `python3 tests/inbound-tls/verify.py --server "$trial/arm64mac/server"`.
 Run the same verifier with the corresponding musl executable on each Linux
-architecture. The C probe supplies its own main, so the scripts remove the Roc
+architecture. For the Mbed TLS probe, add `--check-write-wait` to saturate the
+socket send buffer and check handshake resumption and cleanup on peer close.
+The C probe supplies its own main, so the scripts remove the Roc
 entry object from a private link copy. The hello binaries use the whole
 extracted archive. Start each hello binary and check that `GET /` returns
 HTTP 200 and `Hello, Roc!` followed by a newline. Use `otool -L` on macOS

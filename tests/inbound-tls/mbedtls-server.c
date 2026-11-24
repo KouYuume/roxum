@@ -1,41 +1,45 @@
 // The verifier supplies one nonblocking socket and waits for WANT_READ before
 // it sends ClientHello, just as it does for the OpenSSL probe.
-#include <mbedtls/net_sockets.h>
-#include "credentials.h"
-#include <mbedtls/ssl.h>
+#include "session.h"
+#include <unistd.h>
 #include <poll.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 
-static int handshake(int fd, const roxum_tls_credentials *credentials, int announce_wait) {
-    mbedtls_net_context peer = { .fd = fd };
-    mbedtls_ssl_context session;
-    mbedtls_ssl_init(&session);
-    int status = 1;
-    if (mbedtls_ssl_setup(&session, roxum_tls_credentials_config(credentials)) != 0) goto done;
-    mbedtls_ssl_set_bio(&session, &peer, mbedtls_net_send, mbedtls_net_recv, NULL);
-    for (;;) {
-        int rc = mbedtls_ssl_handshake(&session);
-        if (rc == 0) break;
-        if (rc != MBEDTLS_ERR_SSL_WANT_READ && rc != MBEDTLS_ERR_SSL_WANT_WRITE) {
-            fprintf(stderr, "mbedtls_ssl_handshake returned %d\n", rc);
-            goto done;
+static int handshake(int fd, const roxum_tls_credentials *credentials, int probe) {
+    roxum_tls_session *session = roxum_tls_session_open(credentials, fd);
+    int announce_read = probe;
+    int announce_write = probe;
+    // The verifier distinguishes a TLS failure from a setup, wait or cleanup error.
+    int status = 2;
+    while (session) {
+        roxum_tls_handshake_result result = roxum_tls_handshake(session);
+        if (result == ROXUM_TLS_FAILED) {
+            status = 1;
+            break;
         }
-        if (announce_wait && rc == MBEDTLS_ERR_SSL_WANT_READ) {
+        if (result == ROXUM_TLS_HTTP1 || result == ROXUM_TLS_HTTP2) {
+            puts(result == ROXUM_TLS_HTTP2 ? "h2" : "http/1.1");
+            fflush(stdout);
+            status = 0;
+            break;
+        }
+        if (announce_read && result == ROXUM_TLS_WANT_READ) {
             puts("waiting for ClientHello");
             fflush(stdout);
-            announce_wait = 0;
+            announce_read = 0;
         }
-        struct pollfd wait = {peer.fd, rc == MBEDTLS_ERR_SSL_WANT_READ ? POLLIN : POLLOUT, 0};
-        if (poll(&wait, 1, 5000) <= 0) goto done;
+        if (announce_write && result == ROXUM_TLS_WANT_WRITE) {
+            fputs("waiting for writable socket\n", stderr);
+            fflush(stderr);
+            announce_write = 0;
+        }
+        struct pollfd wait = {fd, result == ROXUM_TLS_WANT_READ ? POLLIN : POLLOUT, 0};
+        if (poll(&wait, 1, 5000) <= 0) break;
     }
-    const char *selected = mbedtls_ssl_get_alpn_protocol(&session);
-    puts(selected ? selected : "http/1.1");
-    fflush(stdout);
-    status = 0;
-done:
-    mbedtls_ssl_free(&session);
-    mbedtls_net_free(&peer);
+    roxum_tls_session_free(session);
+    if (close(fd) != 0) return 2;
     return status;
 }
 
@@ -66,6 +70,8 @@ int roxum_trial_accept(int fd) {
 #else
 int main(int argc, char **argv) {
     if (argc != 4) return 1;
+    // Workers inherit this disposition from the supervisor.
+    if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) return 1;
     roxum_tls_credentials *credentials = roxum_tls_credentials_load(argv[2], argv[3]);
     if (!credentials) return 1;
     int status = handshake(atoi(argv[1]), credentials, 1);

@@ -14,6 +14,7 @@ trap 'rm -rf "$work"' EXIT
     "$zig" ar -M <<'MRI'
 create libhost.a
 addmod tls/credentials.o
+addmod tls/session.o
 addmod host.o
 addmod nghttp2.o
 addlib tls/libmbedtls.a

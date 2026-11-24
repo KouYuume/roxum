@@ -41,7 +41,9 @@ host's readiness and deadline machinery. The existing
 
 The packaged host includes a worker-owned credential configuration. The
 [trial listener](inbound-tls-packaging.md#intact-host-trial) exercises startup
-failure and reuses the validated pair across sessions.
+failure and reuses the validated pair across sessions. Each handshake borrows
+the nonblocking socket and returns a read wait, a write wait, the negotiated
+HTTP engine, or failure. The trial drives these waits with poll.
 
 Add an opt-in TCP listener setting with certificate chain and private key paths.
 Define the protocol choice alongside existing cleartext settings, handshake
