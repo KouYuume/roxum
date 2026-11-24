@@ -1,9 +1,11 @@
 # Inbound TLS packaging trials
 
-The intact-host trial uses Mbed TLS 4.1.2 on all three release targets.
-The next packaging decision is whether to raise the
-[13,000,000-byte expanded release limit](../../tools/release-bundle.sh)
-or change how the engine is distributed before adding the public listener API.
+The standard platform bundle ships Mbed TLS 4.1.2 in the host archive for
+all three targets. The [expanded release limit](../../tools/release-bundle.sh)
+is 17,000,000 bytes. The host build verifies the upstream source digest,
+compiles the server configuration and includes both upstream licenses in the
+release. The standard bundle measured 16,483,764 bytes expanded and 5,111,692
+bytes compressed on adoption. Direct TLS listener support is tracked in the [0.4 plan](inbound-tls-0.4.md).
 
 ## Measurements
 
@@ -36,8 +38,8 @@ engine. The test hook polls synchronously and loads credentials per connection.
 Production admission, readiness scheduling and encrypted HTTP remain separate
 steps in the [0.4 plan](inbound-tls-0.4.md).
 
-The bundle measured **16,496,190 bytes expanded** and **5,112,110 bytes
-compressed**, 3,496,190 bytes above the expanded limit. The intermediate
+Before adopting the engine, the instrumented bundle measured **16,496,190 bytes expanded** and **5,112,110 bytes
+compressed**, 3,496,190 bytes above the previous 13 MB limit. The intermediate
 release build with the accept hook measured 12,748,768 bytes expanded.
 On Apple silicon, Linux arm64 and emulated Linux x86_64, a verifying client
 exercised all seven ALPN cases for each of TLS 1.2 and TLS 1.3. The verifier
@@ -55,8 +57,8 @@ static PIE linker. The standalone static probe can link without this flag.
 
 Start on Apple silicon with the [pinned Roc and Zig](../toolchain.md), tar
 with zstd support, Python and the OpenSSL CLI for generating test credentials.
-Obtain the platform bundle named by a trusted `release.json` or build it with
-`zig build release`. Use the corresponding upstream source release:
+For the standalone comparisons, use a 0.3.0 platform bundle from a trusted
+release manifest. Use the corresponding upstream source release:
 
 | Candidate | Source asset | Additional build tools |
 |---|---|---|
@@ -105,5 +107,5 @@ receives security and bug fixes through March 2029.
 
 Update the engine version and source digest together. Check upstream security
 advisories and licenses, then repeat size, linkage and handshake checks on
-all three targets. Production adoption also requires the normal host build and
-release verification paths to use the pin.
+all three targets. Update the [host source pin](../../tools/fetch-mbedtls.sh) and the standalone
+trial pin together.

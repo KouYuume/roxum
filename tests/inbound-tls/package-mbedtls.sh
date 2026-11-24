@@ -60,9 +60,14 @@ for target in arm64mac arm64musl x64musl; do
             -DCMAKE_C_COMPILER="$PWD/cc" -DCMAKE_AR="$PWD/ar" -DCMAKE_RANLIB="$PWD/ranlib" \
             -DCMAKE_BUILD_TYPE=MinSizeRel -DCMAKE_C_FLAGS="$c_flags" \
             -DCMAKE_ARCHIVE_OUTPUT_DIRECTORY="$PWD/libs" -DENABLE_TESTING=OFF -DENABLE_PROGRAMS=OFF
-        cmake --build build --target mbedtls --parallel "${JOBS:-4}"
         cp "../platform/targets/$target/libhost.a" base.a
-        printf 'create merged.a\naddlib base.a\naddlib libs/libmbedtls.a\naddlib libs/libmbedx509.a\naddlib libs/libtfpsacrypto.a\nsave\nend\n' | zig ar -M
+        if "$host_trial"; then
+            # Exercise the TLS objects delivered by the normal release build.
+            cp base.a merged.a
+        else
+            cmake --build build --target mbedtls --parallel "${JOBS:-4}"
+            printf 'create merged.a\naddlib base.a\naddlib libs/libmbedtls.a\naddlib libs/libmbedx509.a\naddlib libs/libtfpsacrypto.a\nsave\nend\n' | zig ar -M
+        fi
         probe_flags=(-Wall -Wextra -Werror -Os $c_flags -I"$src/include" -I"$src/tf-psa-crypto/include"
                      -I"$src/tf-psa-crypto/drivers/builtin/include" -I"$PWD/build/tf-psa-crypto/include")
         ./cc "${probe_flags[@]}" -c "$probe_dir/mbedtls-server.c" -o server.o
