@@ -148,6 +148,7 @@ pub const Locals = struct {
     client_socket: c_int = -1,
     client_watch_replaced: ?*bool = null,
     allocator: ?allocator_context.Context = null,
+    decoders: @import("allocator/decode_heap.zig").DecodeScope = .{},
     body: ?body_effect.Active = null,
     request_execution: ?@import("effect/request_execution.zig").Active = null,
     response: ?response_writer.Active = null,

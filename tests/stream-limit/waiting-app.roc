@@ -17,6 +17,7 @@ Model := { gate : Tcp.Pool }
 
 program = { init!, routes: Router.build(routes, {}) }
 
+init! : {} => Try({ model : Model, listen : Server.ListenOptions }, [StartupErr(Str)])
 init! = |{}| {
 	settings : { port : U16 }
 	settings = Config.load!("port = 1").map_err(|_| StartupErr("config"))?

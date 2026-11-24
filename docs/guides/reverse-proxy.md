@@ -8,6 +8,7 @@ cleartext HTTP/2 upstreams and their current limits, see [deployment](deployment
 Set roxum's keep-alive idle timeout longer than the proxy's upstream idle timeout. Otherwise, the proxy can reuse a connection just as roxum closes it, causing a failed request. For a proxy configured with a 60-second upstream timeout, use a longer value such as 75 seconds:
 
 ```roc
+init! : {} => Try({ model : Model, listen : Server.ListenOptions }, [StartupErr(Str)])
 init! = |{}| Ok({
 	model: {},
 	listen: {
@@ -122,10 +123,9 @@ Retries are disabled because RPCs may mutate application state. Match proxy body
 limits and I/O timeouts to the service; they are separate from `grpc-timeout` and
 may terminate a call before its application deadline. Do not translate HTTP 200
 into RPC success: clients must consume the final `grpc-status`.
-The [Unary acceptance fixture](../../tests/grpc-unary/README.md) exercises this
-configuration with a generated client, verified TLS, TCP/Unix upstreams,
-empty error responses, deadlines, and client cancellation. Its evidence is
-specific to the pinned nginx version; other proxies require equivalent checks.
+The [Unary](../../tests/grpc-unary/README.md) and
+[streaming](../../tests/grpc-streaming/README.md) fixtures exercise the pinned
+nginx configuration with verified TLS and TCP/Unix upstreams.
 
 ## Server behavior
 

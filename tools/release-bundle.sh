@@ -34,7 +34,7 @@ fi
 
 target_files=()
 for target_dir in "$staging"/targets/*/; do
-    for file in libhost.a crt1.o libc.a; do
+    for file in libhost.a rcrt1.o libc.a; do
         if [[ -f "$target_dir$file" ]]; then
             target_files+=("${target_dir#"$staging/"}$file")
         fi

@@ -5,18 +5,47 @@ by row, or [server-sent events](https://html.spec.whatwg.org/multipage/server-se
 While the body waits, for a sleep or an outbound call, the request's thread serves other requests. It can also read
 a large request body, such as an upload, in parts as it arrives.
 
-`zig build test-stream-limit` and `zig build test-graceful-shutdown` check the streams themselves, and
-`zig build test-m9p4` runs the server-sent events example in
-[`integrations/roxum-sse/example`](../../integrations/roxum-sse/example/app.roc).
+Choose the API according to which side produces data incrementally:
 
-HTTP/2 currently supports finite bodies. Routing and `BeforeBody` stages run
-before input EOF; a body read suspends until the complete bounded input arrives.
-`Handler.streaming` can then consume that collected body in parts, but does not
-receive incremental network data. The streamed-read default comes from
-`maximum_streamed_body_bytes`; route layers can replace that default, but
-`maximum_body_bytes` remains a hard HTTP/2 cap.
-`Unlimited` cannot remove that finite-input cap. Response writers and file streams
-remain unsupported on HTTP/2. The incremental streaming examples below use HTTP/1.
+| Use case | API | Protocol |
+|---|---|---|
+| Upload a request in parts | [`Handler.streaming`](#reading-a-large-request-body) | HTTP/1 and HTTP/2 |
+| Send a response in parts | [`Reply.stream`](#writing-a-body) | HTTP/1 and HTTP/2 |
+| Send events with keep-alive comments | [`roxum-sse`](#server-sent-events) | HTTP/1 |
+| Keep reading while response output is blocked | [`Handler.duplex`](#independent-http2-input-and-output) | HTTP/2 |
+
+## Independent HTTP/2 input and output
+
+Use `Handler.duplex({ begin!, ready! })` when input must keep progressing while
+the peer has stopped reading output. `begin!` receives the model and request
+head and returns `Ok({ state, status, headers, interest })`, or an error reply.
+Choose `Handler.Interest.Read`, `Write` or `Both`.
+
+`ready!(state, event, writer)` receives input as `Idle`, `Chunk(bytes)`,
+`End` or `Failed(reason)`, plus `event.writable`. Return
+`Handler.DuplexNext.Await({ state, interest })` to continue, or
+`Handler.DuplexNext.Finish(trailers)` to complete. After End or Failed, select
+Write only or finish. Choose Read when there is no output to produce; repeatedly
+asking for unused write readiness can spin.
+
+Use `ResponseWriter.try_write!` with at most 16 KiB per call. Accepted means
+the host copied the bytes; Pending retains nothing, so preserve the unsent bytes
+in your state. Readiness is a hint, so a try-write can still return Pending after
+a writable event. A pending write does not prevent processing input. Blocking
+`write!` is still available but can stall your input processing. Return Finish
+rather than calling `finish!` yourself from the readiness callback.
+
+`OnChunk` transformations and EOF checks run normally. A rejection after
+headers resets the stream; a body-limit failure is delivered as Failed so you
+can finish with application-specific trailers. Response middleware runs before
+headers, and AfterBody does not run. Reset, timeout and disconnect cancel the
+request and release held permits. Returning Err(StreamClosed) aborts the stream.
+HTTP/1 answers 501 without running the duplex callbacks.
+
+The [production fixture](../../tests/http2-listener/app.roc) demonstrates a
+bounded counter and output producer; its client withholds output credit while
+sending input larger than the connection window. The transport and lifetime
+contracts are in [HTTP/2 streaming](../design/http2-streaming.md).
 
 ## Writing a body
 
@@ -36,9 +65,12 @@ report = |_context|
 	}))
 ```
 
-The body goes out chunked (HTTP/1.1) and ends when the function returns. `ResponseWriter.write!` waits while the
-client does not take the bytes, and returns `Err(StreamClosed)` when the client is gone or took nothing for
-`Server.Timeouts.response_write_milliseconds` (30 seconds by default); the stream is then over.
+The body uses chunked framing on HTTP/1.1 or DATA frames on HTTP/2, and ends after
+the function returns. `ResponseWriter.write!` waits when output cannot progress.
+On HTTP/1, a disconnected client or a stalled write returns `Err(StreamClosed)`.
+On HTTP/2, cancellation abandons the request fiber, so application code after a
+blocked write does not resume. `Server.Timeouts.response_write_milliseconds`
+(30 seconds by default) limits a stalled HTTP/1 write or the whole HTTP/2 response.
 
 If the client goes while the function waits for anything else, such as `Sleep` or `Tcp`, the function stops at that
 wait: the code after it never runs, and what the request held is given back. The access log says `client_closed`.
@@ -48,9 +80,16 @@ wait: the code after it never runs, and what the request held is given back. The
 
 `Reply.json_lines` is the same for [JSON Lines](responses.md#json-lines).
 
+On HTTP/2, use default writer options and uncompressed output. To attach trailers,
+call `ResponseWriter.finish!(writer, trailers)` inside the callback. Invalid
+trailers can be corrected and retried. Successful finish closes the writer after
+terminal output is written to the socket. Returning `Err(StreamClosed)` aborts
+unfinished output on either protocol. For execution expiry after headers, see
+[HTTP/2 streaming](../design/http2-streaming.md).
+
 ### Options
 
-`Reply.stream_with` takes `ResponseWriter.Options`:
+On HTTP/1, `Reply.stream_with` accepts the following writer options:
 
 | field | default | |
 |---|---|---|
@@ -138,7 +177,7 @@ Each way has its own limit in `Server.Limits`:
 | | handler | limit | time limit (`Server.Timeouts.request_body_milliseconds`, 30 s) |
 |---|---|---|---|
 | whole | `Handler.pure`, `stateful`, `effectful`, `static` | `maximum_body_bytes`, 2 MiB | the whole body |
-| in parts | `Handler.streaming` | `maximum_streamed_body_bytes`, `Server.BodyLimit.Unlimited` | each wait for bytes |
+| in parts | `Handler.streaming` | `maximum_streamed_body_bytes`, `Server.BodyLimit.Unlimited` | HTTP/1: each wait for bytes; HTTP/2: entire input from metadata completion |
 
 A body past its limit is answered with `413`; a body whose `Content-Length` is over the limit fails at the first
 read, before `100 Continue`. A streaming handler holds only the part it is given, so an upload of any size takes
@@ -163,11 +202,11 @@ upload = Handler.streaming(Handler.Streaming.{
 - `abort!`, which may be left out, runs when the request ends before `done!`: the client disconnected or sent an invalid body
   (`BadRequest`), the body passed its limit (`TooLarge`), the body timeout passed (`TimedOut`), a host failure
   (`Failed`), or a stage or `chunk!` rejected it (`Rejected`). The platform answers with the matching status. It
-  does not run if the handler crashes.
+  does not run after a handler crash or an HTTP/2 transport reset, timeout or disconnect.
 
 `AfterBody` stages do not run for a streaming handler: there is no whole body to give them.
 
-Unless the client sent `Expect: 100-continue`, the host first reads a `Content-Length` body of up to 64 KiB, or the first
+On HTTP/1, unless the client sent `Expect: 100-continue`, the host first reads a `Content-Length` body of up to 64 KiB, or the first
 64 KiB of a chunked body ([Middleware](middleware.md#the-body)). If the connection is cut during that read, no Roc code
 runs: neither `begin!` nor `abort!` is called.
 
@@ -187,5 +226,4 @@ Router.route(
 )
 ```
 
-A streaming handler that answers before the whole body arrived (from `begin!`, or a `chunk!` that returns a reply)
-closes the connection after its response, unless the rest is already received.
+On HTTP/1, an early reply from `begin!` or `chunk!` closes the connection after the response unless the remaining input has already arrived. On HTTP/2, early replies affect only the request stream. A finite reply discards unfinished input within transport limits. A streamed reply sends its terminal output before closing unfinished input with `RST_STREAM(NO_ERROR)`.

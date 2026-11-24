@@ -29,9 +29,24 @@ for workflow in full-checks release; do
     done
 done
 
-linux_nightly="$(sed -n 's/^ARG ROC_NIGHTLY=//p' "$repo_root/tools/linux/Dockerfile")"
-if [[ "$linux_nightly" != nightly-*-"${expected_commit:0:7}" ]]; then
-    echo "tools/linux/Dockerfile Roc nightly does not match .roc-revision: $linux_nightly" >&2
+# A nightly name carries its commit. A release name does not, and neither does
+# its compiler's version, so the pin update checks the release tag's commit.
+roc_release="$(sed -n 's/^ARG ROC_RELEASE=//p' "$repo_root/tools/linux/Dockerfile")"
+if [[ -z "$roc_release" ]]; then
+    echo "tools/linux/Dockerfile does not name a Roc release" >&2
+    exit 1
+fi
+if [[ "$roc_release" == nightly-* && "$roc_release" != nightly-*-"${expected_commit:0:7}" ]]; then
+    echo "tools/linux/Dockerfile Roc nightly does not match .roc-revision: $roc_release" >&2
+    exit 1
+fi
+
+# The Protobuf distribution checks `roc version` against its own record of the
+# release, so that record must name the same build.
+protobuf_manifest="$repo_root/libraries/roc-protobuf/compatibility.json"
+protobuf_release="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["roc_release"])' "$protobuf_manifest")"
+if [[ "$protobuf_release" != "$roc_release" ]]; then
+    echo "libraries/roc-protobuf/compatibility.json names Roc $protobuf_release, not $roc_release" >&2
     exit 1
 fi
 
@@ -49,11 +64,10 @@ if [[ "$source_commit" != "$expected_commit" ]]; then
 fi
 
 compiler_version="$("$ROC_BIN" version)"
-expected_short="${expected_commit:0:7}"
-if [[ "$compiler_version" != "Roc compiler version "*"$expected_short"* ]]; then
+if [[ "$compiler_version" != "Roc compiler version $roc_release" ]]; then
     echo "Roc compiler version mismatch" >&2
-    echo "  expected commit prefix: $expected_short" >&2
-    echo "  actual version:         $compiler_version" >&2
+    echo "  expected: Roc compiler version $roc_release" >&2
+    echo "  actual:   $compiler_version" >&2
     exit 1
 fi
 

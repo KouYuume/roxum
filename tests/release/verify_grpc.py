@@ -1,4 +1,4 @@
-"""Generate and run a Unary service outside the checkout using release artifacts."""
+"""Generate and run all four RPC forms outside the checkout using release artifacts."""
 import hashlib
 import io
 import json
@@ -65,7 +65,9 @@ def verify(url, http_log):
         bindings = root / 'python'
         run([python, 'generate.py', '--tool-root', tools, '--wire', wire['url'],
              '--grpc', grpc['url'], '--platform', platform['url'], '--python-output', bindings], example, environment)
-        for backend in ('speed', 'dev', 'interpreter'):
+        # The example asks for two threads, which interpreter builds do not run
+        # (platform/host/single_thread_runtime.zig).
+        for backend in ('speed', 'dev'):
             before = http_log.read_text()
             environment = {**os.environ, 'ROC_CACHE_DIR': str(root / ('roc-' + backend)),
                            'XDG_CACHE_HOME': str(root / ('xdg-' + backend))}
@@ -85,7 +87,7 @@ def verify(url, http_log):
                 status = stop(process)
                 process.stdout.close()
             assert status == 0
-            print(f'PASS distributed Unary {backend}: generated service, three URL packages, metadata and status')
+            print(f'PASS distributed gRPC (all four forms) {backend}: generated service, three URL packages, metadata and status')
 
 
 if __name__ == '__main__':

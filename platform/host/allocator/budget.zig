@@ -1,9 +1,9 @@
-//! Shared ceiling for HTTP/2 transport storage across a worker's connections.
+//! Byte ceiling on live backing allocations. Budgets can share a bounded backing allocator.
 const std = @import("std");
 
 pub const Budget = struct {
-    backing: std.mem.Allocator = std.heap.smp_allocator,
-    limit: usize = 128 * 1024 * 1024,
+    backing: std.mem.Allocator,
+    limit: usize,
     used: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
 
     pub fn allocator(self: *Budget) std.mem.Allocator {

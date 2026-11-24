@@ -15,7 +15,7 @@ roxumは、[Roc](https://github.com/roc-lang/roc)の思想に沿ったWebサー�
 - **ルートをビルド時に検査する。** トップレベルで定義したルーターの不正なパターンや重複をコンパイル時に検出。
 - **タグと実行段階でミドルウェアを制御する。** 独自の型付きタグで対象を絞り、`BeforeBody`・`OnChunk`・`AfterBody`・`AfterHandler` に処理を配置。[ミドルウェア](docs/guides/middleware.md)と[タグとミドルウェアの例](examples/middleware/README.md)を参照してください。
 
-ホストはリクエスト単位のメモリ再利用・回収も管理します。HTTP/1ではストリーミング、SSE、ファイル配信に対応。gzip、PostgreSQL、外向きHTTPSも利用できます。[アーキテクチャ](docs/design/architecture.md)と[メモリモデル](docs/design/execution-model.md)で仕組みを説明しています。
+既定のHTTP/1.1ではストリーミング、SSE、ファイル配信を利用できます。[平文HTTP/2](docs/guides/deployment.md#opt-in-http2)を選ぶと、入力と出力の逐次処理、トレーラー、非圧縮gRPCの全4形式を利用できます。どちらもIPv4・IPv6のTCPとファイルパスを使うUnixソケットに対応しています。
 
 ## axum・Goとの比較
 
@@ -52,7 +52,7 @@ routes = Router.new
 
 | 分野 | パッケージ |
 |---|---|
-| RPC | [Unary gRPC](integrations/roxum-grpc/README.md) · [実行例](integrations/roxum-grpc/example/README.md) |
+| RPC | [gRPC](integrations/roxum-grpc/README.md) · [実行例](integrations/roxum-grpc/example/README.md) |
 | データと外部API | [PostgreSQL](integrations/roxum-postgres/README.md)、[HTTPクライアント](integrations/roxum-http-client/README.md) |
 | ブラウザクライアント | [CORS](integrations/roxum-cors/README.md)、[Cookie](integrations/roxum-cookie/README.md)、[Server-Sent Events](integrations/roxum-sse/README.md) |
 | トラフィック制御 | [レート制限](integrations/roxum-rate-limit/README.md)、[同時実行数の制限](integrations/roxum-concurrency-limit/README.md) |
@@ -62,7 +62,6 @@ routes = Router.new
 
 ## 制約
 
-- IPv4・IPv6のTCPとファイルパスを使うUnixソケットに対応。HTTP/1.1が既定です。[平文HTTP/2を明示的に選択](docs/guides/deployment.md#opt-in-http2)すると、有限レスポンス・トレーラー・非圧縮のUnary gRPCを利用できます。HTTP/2のレスポンスストリーミングとストリーミングRPCは未対応です。
 - 受信TLS・HTTP/3は[リバースプロキシ](docs/guides/reverse-proxy.md)で終端します。WebSocketとHTTP/1トレーラーは未対応、CONNECT・TRACE・任意の拡張メソッドは[対応対象外](docs/design/non-goals.md)です。
 - タイムアウトで任意のRocの計算を強制中断することはできません。
 - 実行時圧縮はgzip。事前圧縮したBrotliは配信可能、複数バイトレンジは未対応です。
@@ -71,16 +70,7 @@ routes = Router.new
 
 ## 貢献・問い合わせ
 
-issueには最小の再現コード、ツールチェーンのリビジョン、OS、コマンドと出力を記載し、ログの認証情報は削除してください。変更前に[プロジェクトのルール](AGENTS.md)と[Rocのコーディングルール](roc_coding_rules.md)を読み、関連テスト・ドキュメントと両READMEを更新してください。
-
-```sh
-zig build test
-zig build test-e2e
-zig build test-e2e -Dcontract-alloc=true
-zig build test-contract
-```
-
-全体の検証は `speed`・`dev`・`interpreter` を対象とし、push の前に手元で実行します（[contributing](docs/contributing.md)）。リリース検証は `tools/release-check.sh`、Linux検証は `tools/linux/run-tests.sh`、ファジングは `zig build fuzz` の後に `tools/fuzz.sh 10000` を実行します。
+不具合報告には最小の再現コード、ツールチェーンのリビジョン、OS、コマンドと出力を記載し、ログの認証情報は削除してください。変更時は[プロジェクトのルール](AGENTS.md)、[Rocのコーディングルール](roc_coding_rules.md)、[ローカル検証とPRの手順](docs/contributing.md)を参照してください。
 
 ## ライセンス
 

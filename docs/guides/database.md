@@ -141,8 +141,9 @@ A failed statement is `PostgresQueryFailed({ code, message, constraint })`. `cod
 
 Other errors: `PostgresTimedOut`, `PostgresClosed`, `PostgresFailed` (the connection), `PostgresOverloaded` (the
 process's requests hold more memory than `Server.Limits.request_memory`; answer 503), `PostgresLoginFailed(message)`,
-`PostgresTlsFailed`, `PostgresTlsRefused`, `PostgresDecodeFailed(message)`, `PostgresTransactionEnded`, and the
-`Tcp...` errors of making a connection (`TcpConnectFailed`, `TcpBusy` when the pool stayed full, ...).
+`PostgresTlsFailed`, `PostgresTlsRefused`, `PostgresDecodeFailed(message)`, `MissingRequiredField(column)` (the row
+type requires a column the result lacks), `PostgresTransactionEnded`, and the `Tcp...` errors of making a connection
+(`TcpConnectFailed`, `TcpBusy` when the pool stayed full, ...).
 
 Messages name the column or the constraint but never the values: PostgreSQL's `DETAIL` field, which often contains
 values, is not read. In an adapter, map the database's errors to what the core understands (`Unavailable` in the

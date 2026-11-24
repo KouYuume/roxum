@@ -1,6 +1,8 @@
 const std = @import("std");
 
 pub const Prefix = struct {
+    pub const decoder_flag: usize = @as(usize, 1) << (@bitSizeOf(usize) - 1);
+
     pub fn byteLength(alignment: usize) usize {
         return @max(alignment, 2 * @sizeOf(usize));
     }
@@ -12,6 +14,14 @@ pub const Prefix = struct {
     }
 
     pub fn storedTotalSize(ptr: *const anyopaque) usize {
+        return sizeWord(ptr) & ~decoder_flag;
+    }
+
+    pub fn isDecoded(ptr: *const anyopaque) bool {
+        return sizeWord(ptr) & decoder_flag != 0;
+    }
+
+    fn sizeWord(ptr: *const anyopaque) usize {
         const size_ptr: *const usize = @ptrFromInt(
             @intFromPtr(ptr) - @sizeOf(usize),
         );

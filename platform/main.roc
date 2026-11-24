@@ -83,17 +83,25 @@ platform "roxum"
 		"roxum_instant_now_nanoseconds": HostInstant.now_nanoseconds!,
 		"roxum_log_write": HostLog.write!,
 		"roxum_random_u64": HostRandom.u64!,
-		"roxum_request_execution_elapsed": HostRequestExecution.elapsed_nanoseconds!,
-		"roxum_request_execution_limit": HostRequestExecution.limit_nanoseconds!,
-		"roxum_request_execution_limit_with_response": HostRequestExecution.limit_with_response!,
 		"roxum_rate_counter_add": HostRateCounter.add!,
 		"roxum_rate_counter_new": HostRateCounter.new!,
+		"roxum_request_execution_begin_decode": HostRequestExecution.begin_decode!,
+		"roxum_request_execution_begin_decode_with_fallback": HostRequestExecution.begin_decode_with_fallback!,
+		"roxum_request_execution_elapsed": HostRequestExecution.elapsed_nanoseconds!,
+		"roxum_request_execution_end_decode": HostRequestExecution.end_decode!,
+		"roxum_request_execution_limit": HostRequestExecution.limit_nanoseconds!,
+		"roxum_request_execution_limit_with_response": HostRequestExecution.limit_with_response!,
+		"roxum_request_execution_limit_with_trailers": HostRequestExecution.limit_with_trailers!,
 		"roxum_secret_derive": HostSecret.derive!,
 		"roxum_secret_from_env": HostSecret.from_env!,
 		"roxum_secret_from_file": HostSecret.from_file!,
 		"roxum_sleep_milliseconds": HostSleep.milliseconds!,
 		"roxum_sleep_until": HostSleep.until_nanoseconds!,
+		"roxum_stream_abort": HostStream.abort!,
+		"roxum_stream_finish": HostStream.finish!,
 		"roxum_stream_start": HostStream.start!,
+		"roxum_stream_try_write": HostStream.try_write!,
+		"roxum_stream_wait": HostBody.wait!,
 		"roxum_stream_write": HostStream.write!,
 		"roxum_tcp_acquire": HostTcp.acquire!,
 		"roxum_tcp_acquire_origin": HostTcp.acquire_origin!,
@@ -119,11 +127,11 @@ platform "roxum"
 			output: Exe,
 		},
 		arm64musl: {
-			inputs: ["crt1.o", "libhost.a", app, "libc.a"],
+			inputs: ["rcrt1.o", "libhost.a", app, "libc.a"],
 			output: Exe,
 		},
 		x64musl: {
-			inputs: ["crt1.o", "libhost.a", app, "libc.a"],
+			inputs: ["rcrt1.o", "libhost.a", app, "libc.a"],
 			output: Exe,
 		},
 	}
@@ -240,10 +248,13 @@ handle_for_host! = |model, request| {
 				Err(NotCompressible) => { headers: answered.response.headers, gzip: Bool.False }
 			}
 			head = { ..answered.response, headers: planned.headers }
-			token = HostStream.start!(head, keep_alive_milliseconds, keep_alive_bytes, written.options.ends_on_drain, 18_446_744_073_709_551_615, planned.gzip)
+			token = HostStream.start!(head, keep_alive_milliseconds, keep_alive_bytes, written.options.ends_on_drain, 18_446_744_073_709_551_615, planned.gzip, route)
 			if token != 0 {
 				write! = written.write!
-				_ = write!(ResponseWriter.from_token(token))
+				match write!(ResponseWriter.from_token(token)) {
+					Ok({}) => {}
+					Err(StreamClosed) => HostStream.abort!(token)
+				}
 			}
 		}
 		Err(NotStreamed) => {}

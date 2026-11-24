@@ -1,9 +1,13 @@
 # Internal HTTP/2 engine
 
-This document defines the finite HTTP/2 host's ownership, resource bounds, and
+This document defines the HTTP/2 host's ownership, resource bounds, and
 execution contracts. HTTP/1 remains the default; TCP and Unix listeners opt into
 cleartext HTTP/2. For configuration, see [deployment](../guides/deployment.md#opt-in-http2);
-for supported RPC behavior, see the [Unary integration](../../integrations/roxum-grpc/README.md).
+for supported RPC behavior, see the [gRPC integration](../../integrations/roxum-grpc/README.md).
+
+For the copying and cleanup rules of completed requests and responses, see the
+[finite adapters](http2-finite.md). For incremental input/output and duplex
+execution, see the [streaming contract](http2-streaming.md).
 
 ## Dependency and replacement boundary
 
@@ -56,37 +60,6 @@ The DATA provider marks EOF on its last nonempty read, so completion does not
 require an extra byte of flow-control credit. Reset/closure releases the copied
 body; destroy also releases responses retained by slow readers.
 
-## Explicit finite response completion
-
-The internal engine also provides `beginResponse` and `finishResponse`. The first
-copies a finite body and leaves the stream open; the second copies final fields
-and submits terminal HEADERS exactly once. For a nonempty body, completion is
-allowed only after the DATA provider has reached EOF. Until then it returns
-`InvalidState`, including when the peer withholds stream credit. EOF uses
-NO_END_STREAM on the last nonempty read, so no extra DATA credit is required.
-Empty bodies use initial HEADERS without END_STREAM and can complete even with
-zero stream credit. Output ordering is retained when earlier bytes are only
-partially written. This is not an incremental response writer.
-
-Final fields have independent `header_bytes` and 64-field bounds. Pseudo-fields,
-connection-specific fields, content length, host, trailer declarations, content
-type/encoding/range, and authentication fields are rejected. Metadata names such
-as `grpc-status` have no special host interpretation. Invalid fields or allocation
-failure leave completion retryable; cancellation and closure make it unavailable.
-HEAD and status 204/205/304 cannot start this completion mode. Ordinary `respond`
-retains its existing one-call finite response behavior.
-
-`respondWithTrailers` connects finite Roc responses to this completion mode. It
-validates final fields and copies their names and values into session-budgeted
-storage before committing initial HEADERS. `output` submits terminal HEADERS
-after DATA EOF, respecting pending partial writes. Reset, destruction, and
-successful submission release the retained copy; a submission allocation failure
-terminates the connection. No request-owned reference survives response cleanup.
-The existing response-write deadline remains active through terminal output.
-Public `Reply.with_trailers` / `Response.trailers` support finite replies only;
-streaming completion remains separate work. Metadata stages can install generic
-request deadlines before body reads.
-
 ## Nonblocking connection owner
 
 `Owner` owns one nonblocking accepted socket and its engine. Initialization takes
@@ -123,8 +96,9 @@ worker also tracks request/effect lifetimes, as described below.
 
 The engine supports at most sixteen admitted streams, with a configurable lower
 limit. Header accounting includes name/value bytes plus 32 bytes per field and
-is cumulative across initial fields and request trailers. Request body bytes
-have a separate cumulative cap. Exceeding either cap resets only that stream.
+is cumulative across initial fields and request trailers. Exceeding this cap
+resets the affected stream. The finite engine fixture also caps total body
+bytes; production readers apply the whole-body or streamed-body limit.
 The observer may have received a valid prefix before rejection and must discard
 its queued request state on closure. nghttp2 handles protocol framing and HTTP/2
 field validation; a fatal engine failure makes further driving operations fail.
@@ -139,10 +113,11 @@ The small engine object and temporary callback-registration object are outside
 this limit; the engine's stream table has a fixed size. Observer/application
 allocations are outside this domain and require separate bounded admission.
 
-Request input currently uses automatic receive-window replenishment with bounded
-finite request sizes. A streaming request reader must replace that with explicit
-consumption accounting and aggregate backpressure before this adapter can serve
-unbounded or full-duplex requests. Finite response trailers and generic execution
+The finite `Engine.create` fixture uses automatic receive-window replenishment
+and bounded finite request sizes. Production uses `Engine.createIncremental`:
+consuming queued input returns credit explicitly, with connection and worker
+budgets bounding retained input. `Handler.duplex` coordinates production input
+and output independently; see [HTTP/2 streaming](http2-streaming.md). Finite response trailers and generic execution
 deadlines are supported. Production scheduling, GOAWAY drain, and observability
 are described below; streaming gates are tracked in the [gRPC plan](../plans/grpc.md).
 
@@ -197,58 +172,6 @@ the shared request builder copies the result into Roc ownership and rolls back
 partial allocations. Only finite body bytes are supported here. This mapping
 adds no listener negotiation, body reader, or application dispatch capability.
 
-## Finite request input
-
-`http2.input.Input` copies borrowed initial headers and DATA callback bytes into
-connection-owned storage. `headersComplete` freezes the initial field array and
-makes its view available before body EOF. Later header callbacks are trailers and
-are omitted; the engine still validates and accounts for them. `end` exposes the
-finite body. This collector neither validates HTTP fields nor implements streaming
-receive credit, and only accepts callbacks from a validated, admitted stream.
-
-Each input enforces cumulative initial-header accounting (name/value bytes plus
-32 bytes per field) and a body-byte limit. Inputs share a stable `Budget` owned by
-the serialized connection owner. That aggregate allocation ceiling includes field
-arrays, byte-buffer capacities, 16-byte allocation prefixes, and old plus new
-allocations during growth. Its Zig allocator supports alignments up to 16 bytes.
-The fixture normally uses a separate 128 KiB input budget per connection, in addition to
-the engine's session budget; neither budget draws from a Roc request arena.
-
-A limit or allocation failure rejects the input and releases its retained storage.
-The owner queues a stream cancellation outside the callback batch. Invalid call
-ordering returns `InvalidState`; rejected input cannot become ready again.
-Protocol closure or disconnect releases buffered input. Borrowed views must be
-copied into Roc ownership before input release or dispatch to another thread;
-these views do not pin the input across protocol closure. `deinit` also releases
-partially collected input and is safe after rejection.
-
-The independent-client fixture uses this collector for finite echo requests and
-checks copied metadata, fragmented body input, trailer exclusion, stream resets,
-and disconnect cleanup. A smaller fixture budget exercises input rejection,
-unrelated-stream progress, and capacity reuse after repeated cancellations. The
-production connection uses the same collector under its worker lock.
-
-## Input handoff to Roc ownership
-
-`bridge.requestFromHttp2Input` consumes a completed finite `Input`. It must run
-outside engine callbacks, with the caller's request allocation domain active.
-Conversion uses the connection input budget for normalized fields and joined
-Cookie scratch, while the resulting request uses the supplied Roc allocator.
-Engine input and bridge metadata share the same borrowed field representation;
-no intermediate field-array copy or C engine types are needed at this boundary.
-
-Before EOF, or after rejection/release, handoff returns `InvalidState` without
-changing input or allocating Roc values. Once EOF is present, the attempt consumes
-input on success or failure. It releases temporary scratch and buffered input,
-including on invalid metadata or allocation failure. A second handoff therefore
-fails. Other inputs sharing the budget remain owned by their respective streams.
-
-A successful result has no borrowed references to the connection input or request
-ID. The caller retains it until the consuming Roc invocation, or releases it with
-generated cleanup if dispatch is cancelled. Releasing connection input does not
-finish a request lease or cancel pending execution. Production queue integration preserves that contract; incremental streaming body
-handoff remains separate work.
-
 ## Metadata handoff and finite body reads
 
 `Owner.requestMetadataOwned` checks the lease and engine before and after copying
@@ -259,8 +182,8 @@ it contains no borrowed connection bytes or HTTP/2 identity.
 
 The request fiber installs a body-reader callback in its own locals. A read checks
 fresh expiry and engine admission under the connection lock, then either copies
-owned body bytes or suspends without holding the lock. Reads wait for finite EOF;
-a stricter route limit can fail earlier. Input remains bounded by server and
+owned body bytes or suspends without holding the lock. Ordinary handlers wait for complete input; streaming callbacks receive
+chunks before EOF. A stricter route limit can fail a request before EOF. Input remains bounded by server and
 connection limits until finish/reset/disconnect releases it. No borrowed view
 survives suspension, and the callback follows the fiber across worker threads.
 Completion clears the binding; abandonment releases the request heap and the
@@ -298,9 +221,9 @@ and it must outlive all claimed executions.
 
 The independent-client fixture checks both finite echo execution and metadata-only
 replies followed by late body/trailer input. Production worker dispatch uses
-`nextMetadata` under the connection lock and installs the finite body reader
+`nextMetadata` under the connection lock and installs the request-scoped reader
 described in [metadata handoff](#metadata-handoff-and-finite-body-reads). The independent echo fixture retains EOF-gated `next` by default.
-Streaming receive credit remains separate work.
+Production reads return credit as described in the [engine input contract](http2-streaming.md#engine-input).
 
 ## Internal execution deadlines
 
@@ -339,83 +262,16 @@ The host does not interpret gRPC metadata or synthesize gRPC status fields.
 The independent socket fixture installs a fixed generic budget at metadata
 completion and verifies unfinished-body cancellation and unrelated-stream progress.
 
-## Finite Roc response mapping
-
-`bridge.OwnedHttp2Response` consumes one Roc response reference and prepares the
-finite engine's field/body views. It normalizes field names to lowercase while
-preserving field order, duplicate fields, and values. Scratch storage uses a
-caller-supplied bounded allocator; values and body remain in Roc ownership until
-`deinit`. Views survive moving the adapter value, but not its destruction. The
-caller must submit them synchronously to the copying engine outside callbacks,
-and call `deinit` exactly once after either submission success or failure.
-
-The adapter accepts final statuses 200 through 599. It shares the existing HTTP/1
-policy that application Content-Length, Transfer-Encoding, and Connection fields
-are errors, and also rejects HTTP/2 connection-specific fields, pseudo-fields,
-invalid syntax, and values with leading or trailing whitespace. The host adds
-Content-Length except on 204, 304, and responses with trailers. HTTP/2 frames
-delimit those bodies; omitting the length also prevents intermediaries from
-ending an empty response before forwarding its trailers. HEAD retains the representation length with
-an empty transmitted body. Nonempty bodies on 204, 205, and 304 are rejected,
-including for HEAD, consistently with the existing finite response contract.
-
-Field limits include synthetic Content-Length and the :status accounting. At
-most 64 ordinary fields reach the engine. The caller supplies header and body
-limits matching the connection; the body bound also applies to a HEAD response's
-retained representation. Allocation and validation failures consume the response
-and release partial scratch. Engine submission still performs its own validation
-and copies output before Roc cleanup; an error there remains the caller's
-responsibility. Trailers have separate normalized views and field/byte limits;
-the engine validates their semantics before committing the response. The adapter
-does not provide a streaming writer.
-
-## Owned response submission
-
-`Owner.respondOwned` connects the finite Roc response adapter to the copying
-engine. It consumes a response on success and on every failure. The serialized
-owner supplies its stream registry and an execution ticket; the registry's
-connection token must match the owner, and the ticket must identify a claimed,
-still-open execution. Queued, finished, closed, stale, and foreign tickets cannot
-submit output. The engine also checks protocol state, including resets whose
-close notification has not yet arrived and duplicate response submission.
-
-Conversion scratch shares the registry's connection input budget, using the
-engine's configured header and response-byte limits. Scratch and the consumed
-Roc response are released before the method returns, while successfully copied
-output remains owned by the engine through partial writes and flow-control waits.
-The caller must keep the Roc host and request allocation domain alive through
-this synchronous operation outside callbacks, with the corresponding allocator
-context active. Submission does not finish the
-execution lease: the executor must clean up remaining request resources before
-calling `finish`, including after submission failure.
-
-## Checked request dispatch handoff
-
-`Owner.requestOwned` transfers finite input for a claimed execution into the
-active Roc request allocation domain. The owner and registry connection tokens
-must agree, and the ticket must still identify an open, running lease. The
-engine also rejects a queued reset before its close callback arrives, a failed
-session, reentrant calls, and streams with a response already submitted. These
-checks allocate nothing and leave input unchanged.
-
-After these checks, the input bridge consumes completed input on success or
-conversion failure. Repeating the handoff returns `InvalidState`. The returned
-request owns its metadata and body independently of connection input; reset or
-disconnect cannot free those Roc values. The caller must consume the request in
-Roc or release it with generated cleanup, then finish the execution lease. A
-conversion failure also leaves that lease claimed until caller cleanup. No
-engine call may interleave with this synchronous handoff.
-
-## Production finite HTTP/2 listeners
+## Production HTTP/2 listeners
 
 `Server.ListenOptions.protocol` selects `Http1` (the default) or explicit cleartext
 prior-knowledge `Http2`, independently of TCP/Unix addressing. One initialized
 model and the existing worker threads serve both protocols. The HTTP/2 path
 executes routing and `BeforeBody` stages after initial headers. Ordinary handlers
-wait for finite input EOF. It accepts finite responses and response trailers;
-attempted response writers/file streams reset their stream instead of silently
-returning an empty successful body. Incremental network body delivery remains
-unsupported.
+wait for finite input EOF. It accepts finite responses with trailers and
+[incremental callback responses](http2-streaming.md#production-callback-writer).
+File streams and non-default writer modes reset their stream. `Handler.streaming`
+receives bounded input chunks before EOF.
 
 Each connection table slot optionally owns `http2/connection.zig`. Its connection
 lock serializes every engine call, input conversion and response submission.
@@ -427,7 +283,7 @@ until executor cleanup. Stale events and completions cannot address a reused slo
 Request fibers share the production wait registry and may resume on another Roc
 thread. Parking records the fiber and wait serial under the connection lock;
 closure signals that wait, including a wake before registry insertion. Body waits
-also record their active read limit: EOF, rejection, or exceeding that limit wakes
+also record their active read limit: queued bytes, EOF, rejection, or exceeding it wakes
 the reader. Parking rechecks that condition under the same lock to avoid losing
 completion between observing incomplete input and registering the wait. Other
 hosted I/O waits are not woken merely because body input arrives. Resumption
@@ -441,21 +297,26 @@ the acceptor tick also advances runnable owners so edge-triggered input left aft
 a turn is not stranded. Pending frame bytes remain owned by nghttp2 until written.
 The serialized owner protects response copying from concurrent peer reset.
 
-Each connection supports 16 streams, 16 KiB field sections, the configured finite
-body limit, and responses up to 2 MiB. Input/conversion storage and session/output
+Each connection supports 16 streams, 16 KiB field sections and input queues,
+and finite responses up to 2 MiB. The pre-SETTINGS input flight and input-credit
+rules are defined in the [streaming contract](http2-streaming.md#engine-input). Input/conversion storage and session/output
 storage each have 16 MiB ceilings. A thread-safe 128 MiB worker budget bounds all
 HTTP/2 connection, input and session allocations; this is separate from the Roc
 request heap accounting. Admission limits and queue expiry apply to stream jobs.
 Server input-limit failures reset streams; allocation/transport failure can close
 the connection. A route's tighter `BodyLimit` produces `TooLarge` and the normal
 413 reply, including before EOF. Route limits cannot increase the finite server
-cap. `Handler.streaming` consumes the collected body in bounded parts, not as
-network input arrives. Queued jobs still finish their leases after a disconnect.
+cap for whole reads. `Handler.streaming` uses the independent streamed-body
+limit and consumes network input incrementally. Queued jobs still finish their
+leases after a disconnect.
 
 Initial/idle connection timeouts cover empty connections. Header/body deadlines
 cover incomplete streams. Body and response-write deadlines are independent:
-early replies retain the input deadline until EOF, and EOF does not clear a
-pending response-write deadline. The write deadline ends when the transport
+early finite replies retain the input deadline until EOF, and EOF does not clear a
+pending response-write deadline. A streamed response that completes first resets
+unfinished input with `NO_ERROR` after terminal consumption. That completion
+releases its queue and ends the input deadline before the queued reset closes
+the protocol stream. The write deadline ends when the transport
 consumes the final response byte, including terminal HEADERS/CONTINUATION or
 trailers; serialization alone does not complete a write. Submitted responses retain their write deadline
 through flow-control or socket stalls. An unfinished header block closes the connection because decoding spans the

@@ -3,8 +3,8 @@ import ProductEvent
 ## A product and its pure pricing rule. Quantity is limited to 1–10 for this
 ## example, making both API boundaries and arithmetic easy to inspect.
 Product := { sku : Str, name : Str, unit_price_cents : U64 }.{
-	new : Str, Str, U64 -> Product
-	new = |sku, name, unit_price_cents| { sku, name, unit_price_cents }
+	new : { sku : Str, name : Str, unit_price_cents : U64 } -> Product
+	new = |fields| Product.(fields)
 
 	quote : Product, U64, U64 -> Try({ subtotal_cents : U64, tax_cents : U64, total_cents : U64, event : ProductEvent }, [InvalidQuantity, TooMany])
 	quote = |product, quantity, tax_percent| {
@@ -34,7 +34,7 @@ Product := { sku : Str, name : Str, unit_price_cents : U64 }.{
 		name_bytes = Str.count_utf8_bytes(given_name)
 		if name_bytes == 0 or name_bytes > 100 { return Err(InvalidName) }
 		if given_price_cents > maximum_price_cents { return Err(InvalidPrice) }
-		Ok(Product.new(given_sku, given_name, given_price_cents))
+		Ok(Product.new({ sku: given_sku, name: given_name, unit_price_cents: given_price_cents }))
 	}
 
 	sku : Product -> Str
@@ -54,7 +54,7 @@ valid_sku = |sku| {
 	length >= 1 and length <= 32 and List.all(bytes, |byte| (byte >= 'a' and byte <= 'z') or (byte >= '0' and byte <= '9') or byte == '-')
 }
 
-sample = Product.new("tea", "Green tea", 450)
+sample = Product.new({ sku: "tea", name: "Green tea", unit_price_cents: 450 })
 # The accepted quantity interval is 1–10. Test its immediate outside values
 # and the nearest valid values on either side of each boundary.
 expect match Product.quote(sample, 0, 10) {

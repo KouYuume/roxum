@@ -1,7 +1,7 @@
 # Deployment
 
 roxum serves plain HTTP/1.1 by default over IPv4 or IPv6 TCP, or a filesystem Unix domain socket.
-Opt-in cleartext HTTP/2 supports buffered requests and finite responses. Run it behind a reverse proxy or
+Opt-in cleartext HTTP/2 supports incremental request reads and finite or streamed responses. Run it behind a reverse proxy or
 load balancer that terminates TLS (and optionally HTTP/2 or HTTP/3 for clients), such as nginx, Caddy, or AWS Application Load
 Balancer.
 
@@ -14,7 +14,7 @@ client ──HTTPS / HTTP/2──> proxy / load balancer ──HTTP/1.1──> r
 | | in front of roxum | in roxum |
 |---|---|---|
 | TLS and HTTP/3 to clients | the proxy | — |
-| HTTP/2 | the proxy can terminate it or use an HTTP/2 upstream | explicit cleartext prior-knowledge listener for finite responses |
+| HTTP/2 | the proxy can terminate it or use an HTTP/2 upstream | explicit cleartext prior-knowledge listener with incremental I/O |
 | Static files | the proxy or a CDN, for a site mostly made of them | `Files.serve` and `Reply.file`, for files the app's routes own or check access to ([Files](files.md)) |
 | Compression | the proxy's `gzip` / `brotli`, for everything at once | `Compression.layer`, for the routes you choose, and precompressed `.br` / `.gz` files ([Files](files.md#compressing-responses)) |
 
@@ -32,10 +32,11 @@ are not supported on this listener.
 HTTP/2 routing and `BeforeBody` middleware run after initial headers; ordinary
 handlers receive complete finite bodies. Request IDs and effects use the worker's
 existing request fibers. A reset cancels the affected suspended request without
-closing its peers. Responses are finite, optionally with trailers. Response
-streaming, SSE, file responses, and incremental request-body processing remain
-unsupported; attempting a streamed response resets that stream. For uncompressed
-Unary gRPC, use the [integration](../../integrations/roxum-grpc/README.md).
+closing its peers. Finite responses may include trailers. Uncompressed
+`Reply.stream` responses with default writer options send incremental DATA; see
+[streaming](streaming.md) for their limits. Use `Handler.streaming` for incremental input or `Handler.duplex` for
+independent input and output. SSE options and file responses require HTTP/1.
+For uncompressed Unary and streaming RPCs, use the [integration](../../integrations/roxum-grpc/README.md).
 
 To bound HTTP/2 execution, set a listener-wide cap:
 
@@ -53,51 +54,16 @@ Once a finite response has been admitted, its existing response-write timeout
 governs delivery even if the execution duration later elapses. A valid setting
 has no effect on HTTP/1.
 
-Inside an HTTP/2 handler, `RequestExecution.elapsed_nanoseconds!({})` returns
-elapsed time from initial header completion, and
-`RequestExecution.limit_nanoseconds!(duration)` bounds execution from that same
-origin. These return `Err(Unavailable)` in `init!` and on HTTP/1. For example,
-`RequestExecution.limit_nanoseconds!(500_000_000)` sets a total 500 ms budget;
-time spent receiving the body or queueing is already charged. Repeated calls
-can only shorten the current deadline, including the listener's cap. Zero or an
-already-elapsed duration terminates the request without returning to Roc code;
-expiry resets the stream unless an expiry response has been registered.
+Register application deadlines in `BeforeBody` to include body waits. For finite
+expiry responses and streamed expiry trailers, see
+[request execution controls](../design/http2-engine.md#request-execution-controls)
+and the [streaming guide](streaming.md).
 
-The elapsed-time operation also checks expiry before returning. Duration addition
-saturates at `U64.highest`; a large value cannot remove an existing limit. These
-effects apply to the current request and expose no reusable resource handle.
-Install integration deadlines in `BeforeBody`, before body waits. Ordinary handlers
-and `AfterBody` run after EOF. The listener cap also bounds work before Roc begins.
-
-The configured finite body limit applies. Each connection admits at most 16
-streams, with 16 KiB field sections and at most 2 MiB per finite response. Input
-and conversion storage have a 16 MiB connection budget; the protocol session and
-pending output have another 16 MiB budget. A shared 128 MiB worker ceiling covers
-HTTP/2 transport allocations, separately from Roc request-memory accounting.
-
-`RequestExecution.limit_with_response!(duration, response)` additionally registers
-an `Http.Response` to send if execution expires. Build a finite response directly,
-or convert a finite reply with `Respond.to_response`. The host validates and copies
-it before changing the deadline; `InvalidResponse` leaves the prior configuration
-unchanged. Successful repeated calls replace the response while only tightening
-the deadline. Normal response commitment discards it. Expiry bypasses response
-middleware and cancels the request, so it cannot execute an application callback.
-Client reset and I/O timeout do not use this response. Delivery still depends on
-connection memory, peer availability, and write timeout. Register it before body
-waits; expiry before registration still resets the stream.
-
-Exhausted stream/input limits reset streams; connection or worker allocation
-failure can close a connection. Header/body timeouts and pending-response write
-timeouts bound incomplete work. An unfinished header block closes the connection;
-body or response timeouts reset the affected stream. The keep-alive idle timeout applies when there are
-no protocol streams or executing handlers. A blocked socket that cannot send a
-reset before its write timeout closes the connection.
-
-Shutdown sends GOAWAY, allows admitted streams to finish, and retains connection
-storage until queued/running handlers finish cleanup. The configured drain timeout
-still bounds the process shutdown. [Finite response trailers](responses.md#finite-http2-trailers)
-are supported; incremental streaming remains outside the current scope. See the
-[gRPC roadmap](../plans/grpc.md) for future capability gates.
+Whole-body handlers use `maximum_body_bytes`. Streaming handlers use
+`maximum_streamed_body_bytes` and route overrides. Budget for both the
+[HTTP/2 transport](../design/http2-engine.md#production-http2-listeners)
+and Roc request memory. Graceful shutdown sends GOAWAY and gives admitted
+streams until the drain timeout to finish.
 
 ## Building for Linux
 
@@ -191,6 +157,10 @@ An app whose code puts a function in a `Box` runs on one thread per process for 
 yet safe on several threads. `Reply.stream` and `roxum-sse` do not. `Auto` then uses one thread and says so
 on stderr, and `Fixed` above 1 stops startup; raise `processes` to use more CPUs.
 
+An app built with `--opt=interpreter` also runs on one thread per process: Roc's interpreter keeps a call on the thread
+that entered it, and a request's call can wait for I/O and continue later. `Auto` uses one thread and `Fixed` above 1
+stops startup. Builds with `--opt=dev` and `--opt=speed` are not limited.
+
 `processes` (1 by default, 1 to 64) runs more processes, each with its own `init!`, `Model`, connections, and
 limits, sharing only the listening socket. More processes keep a failure of the host itself in one from stopping the
 others, at the cost of what they cannot share: each holds its own database connections and caches.
@@ -264,6 +234,7 @@ proxy's idle timeout.**
 | Caddy `reverse_proxy` keep-alive | 2 min | 135 s |
 
 ```roc
+init! : {} => Try({ model : Model, listen : Server.ListenOptions }, [StartupErr(Str)])
 init! = |{}| Ok({
 	model: {},
 	listen: {
@@ -279,7 +250,7 @@ init! = |{}| Ok({
 
 `Server.Timeouts` has five limits, in milliseconds; each must be at least 1:
 
-| Field | Default | Limits |
+| Field | Default | HTTP/1 enforcement |
 |---|---|---|
 | `initial_request_milliseconds` | 5,000 | the first byte of the first request on a connection |
 | `keep_alive_idle_milliseconds` | 15,000 | the wait for the next request on an idle connection |
@@ -287,16 +258,21 @@ init! = |{}| Ok({
 | `request_body_milliseconds` | 30,000 | the whole request body read into memory; for a body read as a stream, each wait for bytes |
 | `response_write_milliseconds` | 30,000 | the whole response; for a streamed response, the head and each chunk |
 
-Timeouts are checked every 50 ms, so a connection closes up to 50 ms after its deadline. Request heads are limited
+On HTTP/1, timeouts are checked every 50 ms, so a connection closes up to 50 ms after its deadline. Request heads are limited
 to 32 KiB.
 
-A request body is received before the handler runs, under `Server.Limits.maximum_body_bytes` (2 MiB), unless the handler
+On HTTP/1, a request body is received before the handler runs, under `Server.Limits.maximum_body_bytes` (2 MiB), unless the handler
 is `Handler.streaming`, which reads it in parts under `maximum_streamed_body_bytes` (none); see
 [Streaming](streaming.md#reading-a-large-request-body). A body over its limit is answered `413`, a late one `408`, and
 malformed chunked framing `400`; a handler that takes its body whole does not run.
 
-The host reads up to 64 KiB of a body before any Roc code runs ([Middleware](middleware.md#the-body)). When one process
+The HTTP/1 host reads up to 64 KiB of a body before any Roc code runs ([Middleware](middleware.md#the-body)). When one process
 already holds 64 MiB of such bodies still arriving, a further request with a body is answered `503`.
+
+On HTTP/2, the body deadline starts when request metadata is complete and
+includes time spent in callbacks. The write deadline covers the whole response.
+Receiving or sending another chunk does not extend either deadline. See the
+[streaming guide](streaming.md) for cancellation and body limits.
 
 Set the proxy's body limit at or above the largest a route takes, such as an upload route's.
 
@@ -345,8 +321,8 @@ much per request.
 Streams: when a process already writes `maximum_streams` streams, a handler that returns another stream is
 answered `503` before its head is sent, and the stream never runs; the handler's own effects have already happened.
 Responses that are not streams, and streams answering `HEAD`, do not count. Each refusal logs a warning with the
-request. There is no limit on how long a stream runs: a client that stops reading is cut off by
-`response_write_milliseconds`, which applies to each chunk.
+request. On HTTP/1 each stalled write is subject to `response_write_milliseconds`.
+On HTTP/2 the same setting limits total response write time, including active streams.
 
 ## Client addresses behind a proxy
 

@@ -1,6 +1,6 @@
 # Contributing
 
-The full checks build every test application in every Roc backend and allocator mode. They run on your machine before you push, so pull request CI only needs a fast subset.
+The full checks run each test group with the backends and allocators configured in [the runner](../tools/check.py). The default matrix covers speed, dev and interpreter with both allocators. Fixtures that require multiple server threads run on speed and dev. They run on your machine before you push, so pull request CI only needs a fast subset.
 
 ## Setup
 
@@ -53,7 +53,7 @@ The local record covers the platform where you ran the checks. Linux differences
 
 ## Dependency updates
 
-[`.github/dependabot.yml`](../.github/dependabot.yml) covers the Cargo projects above and the GitHub Actions in the workflows. The pinned Roc nightly and Zig are not covered; update them by hand ([toolchain.md](toolchain.md)). Neither is the base image of `tools/linux/Dockerfile`: the floating tag `debian:bookworm-slim` takes in the latest image on each build.
+[`.github/dependabot.yml`](../.github/dependabot.yml) covers the Cargo projects above and the GitHub Actions in the workflows. The pinned Roc build and Zig are not covered; update them by hand ([toolchain.md](toolchain.md)). Neither is the base image of `tools/linux/Dockerfile`: the floating tag `debian:bookworm-slim` takes in the latest image on each build.
 
 - Version updates arrive on the 1st of each month at 09:00 JST. Minor and patch updates come together in one pull request per directory, each major update in its own, and only releases at least 7 days old (14 for a major Cargo update) are offered. At most two version update pull requests per directory stay open.
 - Security updates arrive as soon as GitHub knows a fix, without waiting for the schedule. Patch and minor fixes come together in one pull request per directory, a major fix in its own.

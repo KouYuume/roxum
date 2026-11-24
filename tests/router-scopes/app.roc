@@ -17,6 +17,7 @@ Model := {}
 
 program = { init!, routes: Router.build(routes, {}) }
 
+init! : {} => Try({ model : Model, listen : Server.ListenOptions }, [StartupErr(Str)])
 init! = |{}|
 	Ok({
 		model: {},

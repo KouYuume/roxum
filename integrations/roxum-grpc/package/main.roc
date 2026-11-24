@@ -1,1 +1,1 @@
-package [GrpcFrame, GrpcMetadata, GrpcStatus, GrpcTimeout, GrpcUnary, GrpcWire] { pf: platform "../../../platform/main.roc" }
+package [GrpcDuplex, GrpcClientStream, GrpcFrame, GrpcMetadata, GrpcServerStream, GrpcStatus, GrpcTimeout, GrpcUnary, GrpcWire] { pf: platform "../../../platform/main.roc" }

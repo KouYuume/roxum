@@ -19,6 +19,9 @@ const concurrency_effect = @import("effect/concurrency.zig");
 const tcp_effect = @import("effect/tcp.zig");
 
 pub fn exportRuntime() void {
+    @export(&request_execution_effect.hostedBeginDecode, .{ .name = "roxum_request_execution_begin_decode", .visibility = std.builtin.SymbolVisibility.hidden });
+    @export(&request_execution_effect.hostedBeginDecodeWithFallback, .{ .name = "roxum_request_execution_begin_decode_with_fallback", .visibility = std.builtin.SymbolVisibility.hidden });
+    @export(&request_execution_effect.hostedEndDecode, .{ .name = "roxum_request_execution_end_decode", .visibility = std.builtin.SymbolVisibility.hidden });
     @export(&request_execution_effect.hostedElapsed, .{ .name = "roxum_request_execution_elapsed", .visibility = std.builtin.SymbolVisibility.hidden });
     @export(&request_execution_effect.hostedLimit, .{ .name = "roxum_request_execution_limit", .visibility = std.builtin.SymbolVisibility.hidden });
     @export(&request_execution_effect.hostedLimitWithResponse, .{ .name = "roxum_request_execution_limit_with_response", .visibility = std.builtin.SymbolVisibility.hidden });
@@ -53,6 +56,11 @@ pub fn exportRuntime() void {
         .name = "roxum_stream_start",
         .visibility = std.builtin.SymbolVisibility.hidden,
     });
+    @export(&response_writer.hostedStreamAbort, .{ .name = "roxum_stream_abort", .visibility = std.builtin.SymbolVisibility.hidden });
+    @export(&response_writer.hostedStreamTryWrite, .{ .name = "roxum_stream_try_write", .visibility = std.builtin.SymbolVisibility.hidden });
+    @export(&response_writer.hostedStreamWait, .{ .name = "roxum_stream_wait", .visibility = std.builtin.SymbolVisibility.hidden });
+    @export(&response_writer.hostedStreamFinish, .{ .name = "roxum_stream_finish", .visibility = std.builtin.SymbolVisibility.hidden });
+    @export(&request_execution_effect.hostedLimitWithTrailers, .{ .name = "roxum_request_execution_limit_with_trailers", .visibility = std.builtin.SymbolVisibility.hidden });
     @export(&response_writer.hostedStreamWrite, .{
         .name = "roxum_stream_write",
         .visibility = std.builtin.SymbolVisibility.hidden,

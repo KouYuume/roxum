@@ -81,6 +81,8 @@ pub const RocErasedCallableOnDrop = *const fn (?[*]u8, *RocHost) callconv(.c) vo
 pub const RocErasedCallablePayload = extern struct {
     callable_fn_ptr: RocErasedCallableFn,
     on_drop: ?RocErasedCallableOnDrop,
+    on_copy: ?*const fn (?[*]u8, isize) callconv(.c) void = null,
+    capture_size: usize = 0,
 };
 
 /// Runtime representation of `Box(function)`.
@@ -118,7 +120,7 @@ pub fn rocErasedCallableAllocate(
     const rc: *isize = @ptrFromInt(@intFromPtr(data) - @sizeOf(isize));
     rc.* = 1;
     const payload: *RocErasedCallablePayload = @ptrCast(@alignCast(data));
-    payload.* = .{ .callable_fn_ptr = callable_fn_ptr, .on_drop = on_drop };
+    payload.* = .{ .callable_fn_ptr = callable_fn_ptr, .on_drop = on_drop, .capture_size = capture_size };
     return data;
 }
 
@@ -562,6 +564,86 @@ pub fn RocListWith(comptime T: type, comptime elements_refcounted: bool) type {
     };
 }
 
+/// A Roc list whose items have a type only the application knows.
+///
+/// This host knows neither the size of an item nor whether items are
+/// refcounted, so it cannot read an item, allocate such a list, or release
+/// one. It can move the list, retain it, and pass it back to Roc. To release
+/// it, pass it to a Roc function that takes ownership of it.
+pub const RocOpaqueList = extern struct {
+    elements_ptr: ?*anyopaque,
+    length: usize,
+    capacity_or_alloc_ptr: usize,
+
+    /// Return the number of items in the list.
+    pub fn len(self: RocOpaqueList) usize {
+        return self.length;
+    }
+
+    /// Return true if the list has zero items.
+    pub fn isEmpty(self: RocOpaqueList) bool {
+        return self.length == 0;
+    }
+
+    /// Increment the reference count by `amount`.
+    pub fn incref(self: RocOpaqueList, amount: isize) void {
+        retainListAllocation(self.elements_ptr, self.capacity_or_alloc_ptr, amount);
+    }
+};
+
+/// A Roc list whose items hold opaque Roc values.
+///
+/// The items have a known layout, so the host can read them. Whether the
+/// opaque values inside them are refcounted is known only to Roc, and the
+/// list's allocation header depends on it, so the host cannot allocate such
+/// a list or release one. It can move the list, retain it, and pass it back
+/// to Roc. To release it, pass it to a Roc function that takes ownership of
+/// it.
+pub fn RocHeldList(comptime T: type) type {
+    return extern struct {
+        elements_ptr: ?[*]T,
+        length: usize,
+        capacity_or_alloc_ptr: usize,
+
+        const Self = @This();
+
+        /// Return the list items as a `[]const T` slice.
+        pub fn items(self: Self) []const T {
+            if (self.elements_ptr) |ptr| return ptr[0..self.length];
+            return &[_]T{};
+        }
+
+        /// Return the number of items in the list.
+        pub fn len(self: Self) usize {
+            return self.length;
+        }
+
+        /// Return true if the list has zero items.
+        pub fn isEmpty(self: Self) bool {
+            return self.length == 0;
+        }
+
+        /// Increment the reference count by `amount`.
+        pub fn incref(self: Self, amount: isize) void {
+            retainListAllocation(@ptrCast(self.elements_ptr), self.capacity_or_alloc_ptr, amount);
+        }
+    };
+}
+
+/// Add `amount` references to a list's allocation. The refcount slot sits
+/// directly before the allocation's first item whatever the item type is,
+/// and a seamless slice names its allocation in `capacity_or_alloc_ptr`.
+fn retainListAllocation(elements_ptr: ?*anyopaque, capacity_or_alloc_ptr: usize, amount: isize) void {
+    const alloc_addr = if ((capacity_or_alloc_ptr & 1) != 0)
+        capacity_or_alloc_ptr & ~@as(usize, 1)
+    else
+        @intFromPtr(elements_ptr);
+    if (alloc_addr == 0) return;
+    const rc: *isize = @ptrFromInt(alloc_addr - @sizeOf(isize));
+    if (rc.* == 0) return; // REFCOUNT_STATIC_DATA
+    _ = @atomicRmw(isize, rc, .Add, amount, .monotonic);
+}
+
 pub fn RocNoopRelease(comptime T: type) type {
     return struct {
         pub fn release(value: T, roc_host: *RocHost) void {
@@ -896,6 +978,52 @@ comptime {
     if (@sizeOf(usize) == 4) {
         if (@sizeOf(HttpResponseHeader) != 24) @compileError("HttpResponseHeader size mismatch");
         if (@alignOf(HttpResponseHeader) != 4) @compileError("HttpResponseHeader alignment mismatch");
+    }
+}
+
+/// Element type for __AnonStruct_ea28a62ffdf96dc4
+pub const __AnonStruct_ea28a62ffdf96dc4 = if (@sizeOf(usize) == 4) extern struct {
+    @"remaining": RocListWith(u8, false),
+    @"trailers": RocList(HttpResponseHeader),
+    /// Recursively decrement Roc-owned fields.
+    pub fn decref(self: @This(), roc_host: *RocHost) void {
+        const value = self;
+        value.@"remaining".decref(roc_host);
+        decrefListOfHttpResponseHeader(value.@"trailers", roc_host);
+    }
+
+    /// Increment Roc-owned fields.
+    pub fn incref(self: @This(), amount: isize) void {
+        const value = self;
+        value.@"remaining".incref(amount);
+        value.@"trailers".incref(amount);
+    }
+} else extern struct {
+    @"remaining": RocListWith(u8, false),
+    @"trailers": RocList(HttpResponseHeader),
+    /// Recursively decrement Roc-owned fields.
+    pub fn decref(self: @This(), roc_host: *RocHost) void {
+        const value = self;
+        value.@"remaining".decref(roc_host);
+        decrefListOfHttpResponseHeader(value.@"trailers", roc_host);
+    }
+
+    /// Increment Roc-owned fields.
+    pub fn incref(self: @This(), amount: isize) void {
+        const value = self;
+        value.@"remaining".incref(amount);
+        value.@"trailers".incref(amount);
+    }
+};
+
+comptime {
+    if (@sizeOf(usize) == 8) {
+        if (@sizeOf(__AnonStruct_ea28a62ffdf96dc4) != 48) @compileError("__AnonStruct_ea28a62ffdf96dc4 size mismatch");
+        if (@alignOf(__AnonStruct_ea28a62ffdf96dc4) != 8) @compileError("__AnonStruct_ea28a62ffdf96dc4 alignment mismatch");
+    }
+    if (@sizeOf(usize) == 4) {
+        if (@sizeOf(__AnonStruct_ea28a62ffdf96dc4) != 24) @compileError("__AnonStruct_ea28a62ffdf96dc4 size mismatch");
+        if (@alignOf(__AnonStruct_ea28a62ffdf96dc4) != 4) @compileError("__AnonStruct_ea28a62ffdf96dc4 alignment mismatch");
     }
 }
 
@@ -1398,13 +1526,9 @@ pub const __AnonStruct_8cf0b1000143cff5 = if (@sizeOf(usize) == 4) extern struct
     @"listen": ServerListenOptions,
     @"model": RocBox,
     @"routes": RocList(RocStr),
-    /// Recursively decrement Roc-owned fields.
-    pub fn decref(self: @This(), roc_host: *RocHost) void {
-        const value = self;
-        value.@"listen".decref(roc_host);
-        decrefBox(@ptrCast(value.@"model"), roc_host);
-        decrefListOfStr(value.@"routes", roc_host);
-    }
+    // No `decref`: this value holds an opaque Roc value, which only Roc can
+    // release. Release its other parts one at a time and pass the opaque value
+    // to a Roc function that takes ownership of it.
 
     /// Increment Roc-owned fields.
     pub fn incref(self: @This(), amount: isize) void {
@@ -1417,13 +1541,9 @@ pub const __AnonStruct_8cf0b1000143cff5 = if (@sizeOf(usize) == 4) extern struct
     @"listen": ServerListenOptions,
     @"model": RocBox,
     @"routes": RocList(RocStr),
-    /// Recursively decrement Roc-owned fields.
-    pub fn decref(self: @This(), roc_host: *RocHost) void {
-        const value = self;
-        value.@"listen".decref(roc_host);
-        decrefBox(@ptrCast(value.@"model"), roc_host);
-        decrefListOfStr(value.@"routes", roc_host);
-    }
+    // No `decref`: this value holds an opaque Roc value, which only Roc can
+    // release. Release its other parts one at a time and pass the opaque value
+    // to a Roc function that takes ownership of it.
 
     /// Increment Roc-owned fields.
     pub fn incref(self: @This(), amount: isize) void {
@@ -2287,62 +2407,130 @@ comptime {
     }
 }
 
-/// Tag discriminant for HostRequestExecution.Elapsed.
-pub const HostRequestExecutionElapsedTag = enum(u8) {
-    @"Elapsed" = 0,
-    @"Unavailable" = 1,
+/// Tag discriminant for HostRequestExecution.DecodeInput.
+pub const HostRequestExecutionDecodeInputTag = enum(u8) {
+    @"Exhausted" = 0,
+    @"Input" = 1,
+    @"Unavailable" = 2,
 };
 
-/// Payload union for HostRequestExecution.Elapsed.
-pub const HostRequestExecutionElapsedPayload = extern union {
-        @"elapsed": u64,
+/// Payload union for HostRequestExecution.DecodeInput.
+pub const HostRequestExecutionDecodeInputPayload = extern union {
+        @"exhausted": [0]u8,
+        @"input": RocListWith(u8, false),
         @"unavailable": [0]u8,
 };
 
-/// Tag union: HostRequestExecution.Elapsed
-pub const HostRequestExecutionElapsed = if (@sizeOf(usize) == 4) extern struct {
-    payload: [8]u8 align(8),
-    tag: HostRequestExecutionElapsedTag,
-    pub fn payload_elapsed(self: *const @This()) u64 {
-        const ptr: *const u64 = @ptrCast(@alignCast(&self.payload));
+/// Tag union: HostRequestExecution.DecodeInput
+pub const HostRequestExecutionDecodeInput = if (@sizeOf(usize) == 4) extern struct {
+    payload: [12]u8 align(4),
+    tag: HostRequestExecutionDecodeInputTag,
+    pub fn payload_input(self: *const @This()) RocListWith(u8, false) {
+        const ptr: *const RocListWith(u8, false) = @ptrCast(@alignCast(&self.payload));
         return ptr.*;
     }
     /// Recursively decrement Roc-owned payloads.
     pub fn decref(self: @This(), roc_host: *RocHost) void {
-        decrefHostRequestExecutionElapsed(self, roc_host);
+        decrefHostRequestExecutionDecodeInput(self, roc_host);
     }
 
     /// Increment Roc-owned payloads.
     pub fn incref(self: @This(), amount: isize) void {
-        increfHostRequestExecutionElapsed(self, amount);
+        increfHostRequestExecutionDecodeInput(self, amount);
     }
 } else extern struct {
-    payload: HostRequestExecutionElapsedPayload,
-    tag: HostRequestExecutionElapsedTag,
-    pub fn payload_elapsed(self: *const @This()) u64 {
-        return self.payload.@"elapsed";
+    payload: HostRequestExecutionDecodeInputPayload,
+    tag: HostRequestExecutionDecodeInputTag,
+    pub fn payload_input(self: *const @This()) RocListWith(u8, false) {
+        return self.payload.@"input";
     }
     /// Recursively decrement Roc-owned payloads.
     pub fn decref(self: @This(), roc_host: *RocHost) void {
-        decrefHostRequestExecutionElapsed(self, roc_host);
+        decrefHostRequestExecutionDecodeInput(self, roc_host);
     }
 
     /// Increment Roc-owned payloads.
     pub fn incref(self: @This(), amount: isize) void {
-        increfHostRequestExecutionElapsed(self, amount);
+        increfHostRequestExecutionDecodeInput(self, amount);
     }
 };
 
 comptime {
     if (@sizeOf(usize) == 8) {
-        if (@sizeOf(HostRequestExecutionElapsed) != 16) @compileError("HostRequestExecutionElapsed size mismatch");
-        if (@alignOf(HostRequestExecutionElapsed) != 8) @compileError("HostRequestExecutionElapsed alignment mismatch");
-        if (@offsetOf(HostRequestExecutionElapsed, "tag") != 8) @compileError("HostRequestExecutionElapsed tag offset mismatch");
+        if (@sizeOf(HostRequestExecutionDecodeInput) != 32) @compileError("HostRequestExecutionDecodeInput size mismatch");
+        if (@alignOf(HostRequestExecutionDecodeInput) != 8) @compileError("HostRequestExecutionDecodeInput alignment mismatch");
+        if (@offsetOf(HostRequestExecutionDecodeInput, "tag") != 24) @compileError("HostRequestExecutionDecodeInput tag offset mismatch");
     }
     if (@sizeOf(usize) == 4) {
-        if (@sizeOf(HostRequestExecutionElapsed) != 16) @compileError("HostRequestExecutionElapsed size mismatch");
-        if (@alignOf(HostRequestExecutionElapsed) != 8) @compileError("HostRequestExecutionElapsed alignment mismatch");
-        if (@offsetOf(HostRequestExecutionElapsed, "tag") != 8) @compileError("HostRequestExecutionElapsed tag offset mismatch");
+        if (@sizeOf(HostRequestExecutionDecodeInput) != 16) @compileError("HostRequestExecutionDecodeInput size mismatch");
+        if (@alignOf(HostRequestExecutionDecodeInput) != 4) @compileError("HostRequestExecutionDecodeInput alignment mismatch");
+        if (@offsetOf(HostRequestExecutionDecodeInput, "tag") != 12) @compileError("HostRequestExecutionDecodeInput tag offset mismatch");
+    }
+}
+
+/// Tag discriminant for HostRequestExecution.DecodeFallback.
+pub const HostRequestExecutionDecodeFallbackTag = enum(u8) {
+    @"Finite" = 0,
+    @"Stream" = 1,
+};
+
+/// Payload union for HostRequestExecution.DecodeFallback.
+pub const HostRequestExecutionDecodeFallbackPayload = extern union {
+        @"finite": HttpResponse,
+        @"stream": __AnonStruct_ea28a62ffdf96dc4,
+};
+
+/// Tag union: HostRequestExecution.DecodeFallback
+pub const HostRequestExecutionDecodeFallback = if (@sizeOf(usize) == 4) extern struct {
+    payload: [44]u8 align(4),
+    tag: HostRequestExecutionDecodeFallbackTag,
+    pub fn payload_finite(self: *const @This()) HttpResponse {
+        const ptr: *const HttpResponse = @ptrCast(@alignCast(&self.payload));
+        return ptr.*;
+    }
+    pub fn payload_stream(self: *const @This()) __AnonStruct_ea28a62ffdf96dc4 {
+        const ptr: *const __AnonStruct_ea28a62ffdf96dc4 = @ptrCast(@alignCast(&self.payload));
+        return ptr.*;
+    }
+    /// Recursively decrement Roc-owned payloads.
+    pub fn decref(self: @This(), roc_host: *RocHost) void {
+        decrefHostRequestExecutionDecodeFallback(self, roc_host);
+    }
+
+    /// Increment Roc-owned payloads.
+    pub fn incref(self: @This(), amount: isize) void {
+        increfHostRequestExecutionDecodeFallback(self, amount);
+    }
+} else extern struct {
+    payload: HostRequestExecutionDecodeFallbackPayload,
+    tag: HostRequestExecutionDecodeFallbackTag,
+    pub fn payload_finite(self: *const @This()) HttpResponse {
+        return self.payload.@"finite";
+    }
+    pub fn payload_stream(self: *const @This()) __AnonStruct_ea28a62ffdf96dc4 {
+        return self.payload.@"stream";
+    }
+    /// Recursively decrement Roc-owned payloads.
+    pub fn decref(self: @This(), roc_host: *RocHost) void {
+        decrefHostRequestExecutionDecodeFallback(self, roc_host);
+    }
+
+    /// Increment Roc-owned payloads.
+    pub fn incref(self: @This(), amount: isize) void {
+        increfHostRequestExecutionDecodeFallback(self, amount);
+    }
+};
+
+comptime {
+    if (@sizeOf(usize) == 8) {
+        if (@sizeOf(HostRequestExecutionDecodeFallback) != 96) @compileError("HostRequestExecutionDecodeFallback size mismatch");
+        if (@alignOf(HostRequestExecutionDecodeFallback) != 8) @compileError("HostRequestExecutionDecodeFallback alignment mismatch");
+        if (@offsetOf(HostRequestExecutionDecodeFallback, "tag") != 88) @compileError("HostRequestExecutionDecodeFallback tag offset mismatch");
+    }
+    if (@sizeOf(usize) == 4) {
+        if (@sizeOf(HostRequestExecutionDecodeFallback) != 48) @compileError("HostRequestExecutionDecodeFallback size mismatch");
+        if (@alignOf(HostRequestExecutionDecodeFallback) != 4) @compileError("HostRequestExecutionDecodeFallback alignment mismatch");
+        if (@offsetOf(HostRequestExecutionDecodeFallback, "tag") != 44) @compileError("HostRequestExecutionDecodeFallback tag offset mismatch");
     }
 }
 
@@ -2402,6 +2590,65 @@ comptime {
         if (@sizeOf(HttpResponseBody) != 16) @compileError("HttpResponseBody size mismatch");
         if (@alignOf(HttpResponseBody) != 4) @compileError("HttpResponseBody alignment mismatch");
         if (@offsetOf(HttpResponseBody, "tag") != 12) @compileError("HttpResponseBody tag offset mismatch");
+    }
+}
+
+/// Tag discriminant for HostRequestExecution.Elapsed.
+pub const HostRequestExecutionElapsedTag = enum(u8) {
+    @"Elapsed" = 0,
+    @"Unavailable" = 1,
+};
+
+/// Payload union for HostRequestExecution.Elapsed.
+pub const HostRequestExecutionElapsedPayload = extern union {
+        @"elapsed": u64,
+        @"unavailable": [0]u8,
+};
+
+/// Tag union: HostRequestExecution.Elapsed
+pub const HostRequestExecutionElapsed = if (@sizeOf(usize) == 4) extern struct {
+    payload: [8]u8 align(8),
+    tag: HostRequestExecutionElapsedTag,
+    pub fn payload_elapsed(self: *const @This()) u64 {
+        const ptr: *const u64 = @ptrCast(@alignCast(&self.payload));
+        return ptr.*;
+    }
+    /// Recursively decrement Roc-owned payloads.
+    pub fn decref(self: @This(), roc_host: *RocHost) void {
+        decrefHostRequestExecutionElapsed(self, roc_host);
+    }
+
+    /// Increment Roc-owned payloads.
+    pub fn incref(self: @This(), amount: isize) void {
+        increfHostRequestExecutionElapsed(self, amount);
+    }
+} else extern struct {
+    payload: HostRequestExecutionElapsedPayload,
+    tag: HostRequestExecutionElapsedTag,
+    pub fn payload_elapsed(self: *const @This()) u64 {
+        return self.payload.@"elapsed";
+    }
+    /// Recursively decrement Roc-owned payloads.
+    pub fn decref(self: @This(), roc_host: *RocHost) void {
+        decrefHostRequestExecutionElapsed(self, roc_host);
+    }
+
+    /// Increment Roc-owned payloads.
+    pub fn incref(self: @This(), amount: isize) void {
+        increfHostRequestExecutionElapsed(self, amount);
+    }
+};
+
+comptime {
+    if (@sizeOf(usize) == 8) {
+        if (@sizeOf(HostRequestExecutionElapsed) != 16) @compileError("HostRequestExecutionElapsed size mismatch");
+        if (@alignOf(HostRequestExecutionElapsed) != 8) @compileError("HostRequestExecutionElapsed alignment mismatch");
+        if (@offsetOf(HostRequestExecutionElapsed, "tag") != 8) @compileError("HostRequestExecutionElapsed tag offset mismatch");
+    }
+    if (@sizeOf(usize) == 4) {
+        if (@sizeOf(HostRequestExecutionElapsed) != 16) @compileError("HostRequestExecutionElapsed size mismatch");
+        if (@alignOf(HostRequestExecutionElapsed) != 8) @compileError("HostRequestExecutionElapsed alignment mismatch");
+        if (@offsetOf(HostRequestExecutionElapsed, "tag") != 8) @compileError("HostRequestExecutionElapsed tag offset mismatch");
     }
 }
 
@@ -3018,10 +3265,9 @@ pub const Init_for_hostResult = if (@sizeOf(usize) == 4) extern struct {
         const ptr: *const __AnonStruct_8cf0b1000143cff5 = @ptrCast(@alignCast(&self.payload));
         return ptr.*;
     }
-    /// Recursively decrement Roc-owned payloads.
-    pub fn decref(self: @This(), roc_host: *RocHost) void {
-        decrefInit_for_hostResult(self, roc_host);
-    }
+    // No `decref`: this value holds an opaque Roc value, which only Roc can
+    // release. Release its other parts one at a time and pass the opaque value
+    // to a Roc function that takes ownership of it.
 
     /// Increment Roc-owned payloads.
     pub fn incref(self: @This(), amount: isize) void {
@@ -3036,10 +3282,9 @@ pub const Init_for_hostResult = if (@sizeOf(usize) == 4) extern struct {
     pub fn payload_ok(self: *const @This()) __AnonStruct_8cf0b1000143cff5 {
         return self.payload.@"ok";
     }
-    /// Recursively decrement Roc-owned payloads.
-    pub fn decref(self: @This(), roc_host: *RocHost) void {
-        decrefInit_for_hostResult(self, roc_host);
-    }
+    // No `decref`: this value holds an opaque Roc value, which only Roc can
+    // release. Release its other parts one at a time and pass the opaque value
+    // to a Roc function that takes ownership of it.
 
     /// Increment Roc-owned payloads.
     pub fn incref(self: @This(), amount: isize) void {
@@ -3662,21 +3907,6 @@ pub const HostLogWriteArgs = extern struct {
     arg1: RocStr,
 };
 
-/// Arguments for HostRequestExecution.limit_nanoseconds!
-/// Roc signature: U64 => Bool
-/// Refcounted fields are owned by the hosted function.
-pub const HostRequestExecutionLimit_nanosecondsArgs = extern struct {
-    arg0: u64,
-};
-
-/// Arguments for HostRequestExecution.limit_with_response!
-/// Roc signature: U64, Http.Response => U8
-/// Refcounted fields are owned by the hosted function.
-pub const HostRequestExecutionLimit_with_responseArgs = extern struct {
-    arg0: u64,
-    arg1: HttpResponse,
-};
-
 /// Arguments for HostRateCounter.add!
 /// Roc signature: U64, Str, U64 => HostRateCounter.Counted
 /// Refcounted fields are owned by the hosted function.
@@ -3692,6 +3922,44 @@ pub const HostRateCounterAddArgs = extern struct {
 pub const HostRateCounterNewArgs = extern struct {
     arg0: u64,
     arg1: u64,
+};
+
+/// Arguments for HostRequestExecution.begin_decode!
+/// Roc signature: List(U8) => HostRequestExecution.DecodeInput
+/// Refcounted fields are owned by the hosted function.
+pub const HostRequestExecutionBegin_decodeArgs = extern struct {
+    arg0: RocListWith(u8, false),
+};
+
+/// Arguments for HostRequestExecution.begin_decode_with_fallback!
+/// Roc signature: List(U8), HostRequestExecution.DecodeFallback => HostRequestExecution.DecodeInput
+/// Refcounted fields are owned by the hosted function.
+pub const HostRequestExecutionBegin_decode_with_fallbackArgs = extern struct {
+    arg0: RocListWith(u8, false),
+    arg1: HostRequestExecutionDecodeFallback,
+};
+
+/// Arguments for HostRequestExecution.limit_nanoseconds!
+/// Roc signature: U64 => Bool
+/// Refcounted fields are owned by the hosted function.
+pub const HostRequestExecutionLimit_nanosecondsArgs = extern struct {
+    arg0: u64,
+};
+
+/// Arguments for HostRequestExecution.limit_with_response!
+/// Roc signature: U64, Http.Response => U8
+/// Refcounted fields are owned by the hosted function.
+pub const HostRequestExecutionLimit_with_responseArgs = extern struct {
+    arg0: u64,
+    arg1: HttpResponse,
+};
+
+/// Arguments for HostRequestExecution.limit_with_trailers!
+/// Roc signature: U64, List(Http.ResponseHeader) => U8
+/// Refcounted fields are owned by the hosted function.
+pub const HostRequestExecutionLimit_with_trailersArgs = extern struct {
+    arg0: u64,
+    arg1: RocList(HttpResponseHeader),
 };
 
 /// Arguments for HostSecret.derive!
@@ -3730,8 +3998,23 @@ pub const HostSleepUntil_nanosecondsArgs = extern struct {
     arg0: u64,
 };
 
+/// Arguments for HostStream.abort!
+/// Roc signature: U64 => {}
+/// Refcounted fields are owned by the hosted function.
+pub const HostStreamAbortArgs = extern struct {
+    arg0: u64,
+};
+
+/// Arguments for HostStream.finish!
+/// Roc signature: U64, List(Http.ResponseHeader) => U8
+/// Refcounted fields are owned by the hosted function.
+pub const HostStreamFinishArgs = extern struct {
+    arg0: u64,
+    arg1: RocList(HttpResponseHeader),
+};
+
 /// Arguments for HostStream.start!
-/// Roc signature: Http.Response, U64, List(U8), Bool, U64, Bool => U64
+/// Roc signature: Http.Response, U64, List(U8), Bool, U64, Bool, Str => U64
 /// Refcounted fields are owned by the hosted function.
 pub const HostStreamStartArgs = extern struct {
     arg0: HttpResponse,
@@ -3740,6 +4023,24 @@ pub const HostStreamStartArgs = extern struct {
     arg3: bool,
     arg4: u64,
     arg5: bool,
+    arg6: RocStr,
+};
+
+/// Arguments for HostStream.try_write!
+/// Roc signature: U64, List(U8) => U8
+/// Refcounted fields are owned by the hosted function.
+pub const HostStreamTry_writeArgs = extern struct {
+    arg0: u64,
+    arg1: RocListWith(u8, false),
+};
+
+/// Arguments for HostBody.wait!
+/// Roc signature: U64, U64, U8 => U8
+/// Refcounted fields are owned by the hosted function.
+pub const HostBodyWaitArgs = extern struct {
+    arg0: u64,
+    arg1: u64,
+    arg2: u8,
 };
 
 /// Arguments for HostStream.write!
@@ -4018,9 +4319,14 @@ pub const HostTcpWrite_derivedArgs = extern struct {
 // Platform Type Aliases
 
 pub const HostFilesFileOpenedOpened = __AnonStruct_ffafd7a563bb9a6a;
+pub const HostRateCounterCountedCounted = __AnonStruct_8fa85c66081ab890;
+pub const HostRequestExecutionDecodeFallbackFinite = HttpResponse;
+pub const HostRequestExecutionDecodeFallbackStream = __AnonStruct_ea28a62ffdf96dc4;
 pub const HttpResponseHeaders = HttpResponseHeader;
 pub const HttpResponseTrailers = HttpResponseHeader;
-pub const HostRateCounterCountedCounted = __AnonStruct_8fa85c66081ab890;
+pub const HostRequestExecutionDecodeFallbackStreamTrailers = HttpResponseHeader;
+pub const HostRequestExecutionLimit_with_trailersArg1 = HttpResponseHeader;
+pub const HostStreamFinishArg1 = HttpResponseHeader;
 pub const HostTcpAcquire_originArg0 = __AnonStruct_7534307d805cbbcd;
 pub const HostTcpConfigure_originsArg0 = __AnonStruct_de1446c11164b88b;
 pub const HostTcpPoolArg0 = __AnonStruct_f35e5645cca1b32b;
@@ -4275,24 +4581,56 @@ pub const __AnonStruct_8fa85c66081ab890Release = struct {
     }
 };
 
-fn decrefHostRequestExecutionElapsed(value: HostRequestExecutionElapsed, roc_host: *RocHost) void {
-    _ = roc_host;
+fn decrefHostRequestExecutionDecodeInput(value: HostRequestExecutionDecodeInput, roc_host: *RocHost) void {
     switch (value.tag) {
-        .@"Elapsed" => {},
+        .@"Exhausted" => {},
+        .@"Input" => {
+        value.payload_input().decref(roc_host);
+        },
         .@"Unavailable" => {},
     }
 }
 
-fn increfHostRequestExecutionElapsed(value: HostRequestExecutionElapsed, amount: isize) void {
-    _ = amount;
+fn increfHostRequestExecutionDecodeInput(value: HostRequestExecutionDecodeInput, amount: isize) void {
     switch (value.tag) {
-        .@"Elapsed" => {},
+        .@"Exhausted" => {},
+        .@"Input" => {
+        value.payload_input().incref(amount);
+        },
         .@"Unavailable" => {},
     }
 }
 
-pub const HostRequestExecutionElapsedRelease = struct {
-    pub fn release(value: HostRequestExecutionElapsed, roc_host: *RocHost) void {
+pub const HostRequestExecutionDecodeInputRelease = struct {
+    pub fn release(value: HostRequestExecutionDecodeInput, roc_host: *RocHost) void {
+        value.decref(roc_host);
+    }
+};
+
+fn decrefHostRequestExecutionDecodeFallback(value: HostRequestExecutionDecodeFallback, roc_host: *RocHost) void {
+    switch (value.tag) {
+        .@"Finite" => {
+        value.payload_finite().decref(roc_host);
+        },
+        .@"Stream" => {
+        value.payload_stream().decref(roc_host);
+        },
+    }
+}
+
+fn increfHostRequestExecutionDecodeFallback(value: HostRequestExecutionDecodeFallback, amount: isize) void {
+    switch (value.tag) {
+        .@"Finite" => {
+        value.payload_finite().incref(amount);
+        },
+        .@"Stream" => {
+        value.payload_stream().incref(amount);
+        },
+    }
+}
+
+pub const HostRequestExecutionDecodeFallbackRelease = struct {
+    pub fn release(value: HostRequestExecutionDecodeFallback, roc_host: *RocHost) void {
         value.decref(roc_host);
     }
 };
@@ -4329,6 +4667,34 @@ pub const HttpResponseBodyRelease = struct {
 
 pub const HttpResponseHeaderRelease = struct {
     pub fn release(value: HttpResponseHeader, roc_host: *RocHost) void {
+        value.decref(roc_host);
+    }
+};
+
+pub const __AnonStruct_ea28a62ffdf96dc4Release = struct {
+    pub fn release(value: __AnonStruct_ea28a62ffdf96dc4, roc_host: *RocHost) void {
+        value.decref(roc_host);
+    }
+};
+
+fn decrefHostRequestExecutionElapsed(value: HostRequestExecutionElapsed, roc_host: *RocHost) void {
+    _ = roc_host;
+    switch (value.tag) {
+        .@"Elapsed" => {},
+        .@"Unavailable" => {},
+    }
+}
+
+fn increfHostRequestExecutionElapsed(value: HostRequestExecutionElapsed, amount: isize) void {
+    _ = amount;
+    switch (value.tag) {
+        .@"Elapsed" => {},
+        .@"Unavailable" => {},
+    }
+}
+
+pub const HostRequestExecutionElapsedRelease = struct {
+    pub fn release(value: HostRequestExecutionElapsed, roc_host: *RocHost) void {
         value.decref(roc_host);
     }
 };
@@ -4587,17 +4953,6 @@ pub const __AnonStruct_49323bdccdf3685cRelease = struct {
     }
 };
 
-fn decrefInit_for_hostResult(value: Init_for_hostResult, roc_host: *RocHost) void {
-    switch (value.tag) {
-        .@"Err" => {
-        value.payload_err().decref(roc_host);
-        },
-        .@"Ok" => {
-        value.payload_ok().decref(roc_host);
-        },
-    }
-}
-
 fn increfInit_for_hostResult(value: Init_for_hostResult, amount: isize) void {
     switch (value.tag) {
         .@"Err" => {
@@ -4608,18 +4963,6 @@ fn increfInit_for_hostResult(value: Init_for_hostResult, amount: isize) void {
         },
     }
 }
-
-pub const Init_for_hostResultRelease = struct {
-    pub fn release(value: Init_for_hostResult, roc_host: *RocHost) void {
-        value.decref(roc_host);
-    }
-};
-
-pub const __AnonStruct_8cf0b1000143cff5Release = struct {
-    pub fn release(value: __AnonStruct_8cf0b1000143cff5, roc_host: *RocHost) void {
-        value.decref(roc_host);
-    }
-};
 
 pub const ServerListenOptionsRelease = struct {
     pub fn release(value: ServerListenOptions, roc_host: *RocHost) void {
@@ -4844,10 +5187,13 @@ fn rocReleasePolicy(comptime T: type) type {
     if (T == RocListWith(u8, false)) return RocListSpineRelease(RocListWith(u8, false));
     if (T == HostCompressDecompressed) return HostCompressDecompressedRelease;
     if (T == HostFileRead) return HostFileReadRelease;
+    if (T == HostRequestExecutionDecodeInput) return HostRequestExecutionDecodeInputRelease;
+    if (T == HostRequestExecutionDecodeFallback) return HostRequestExecutionDecodeFallbackRelease;
     if (T == HttpResponse) return HttpResponseRelease;
     if (T == HttpResponseBody) return HttpResponseBodyRelease;
     if (T == RocList(HttpResponseHeader)) return RocListRelease(RocList(HttpResponseHeader), HttpResponseHeaderRelease);
     if (T == HttpResponseHeader) return HttpResponseHeaderRelease;
+    if (T == __AnonStruct_ea28a62ffdf96dc4) return __AnonStruct_ea28a62ffdf96dc4Release;
     if (T == __AnonStruct_f35e5645cca1b32b) return __AnonStruct_f35e5645cca1b32bRelease;
     if (T == __AnonStruct_7534307d805cbbcd) return __AnonStruct_7534307d805cbbcdRelease;
     if (T == HostTcpReceived) return HostTcpReceivedRelease;
@@ -4856,8 +5202,6 @@ fn rocReleasePolicy(comptime T: type) type {
     if (T == HttpRequestBody) return HttpRequestBodyRelease;
     if (T == RocList(HttpRequestHeader)) return RocListRelease(RocList(HttpRequestHeader), HttpRequestHeaderRelease);
     if (T == HttpRequestHeader) return HttpRequestHeaderRelease;
-    if (T == Init_for_hostResult) return Init_for_hostResultRelease;
-    if (T == __AnonStruct_8cf0b1000143cff5) return __AnonStruct_8cf0b1000143cff5Release;
     if (T == ServerListenOptions) return ServerListenOptionsRelease;
     if (T == ServerEndpoint) return ServerEndpointRelease;
     if (T == __AnonStruct_10282560bf9afa3b) return __AnonStruct_10282560bf9afa3bRelease;
@@ -4974,9 +5318,41 @@ pub extern fn roxum_log_write(arg0: u8, arg1: RocStr) callconv(.c) void;
 /// Roc signature: {} => U64
 pub extern fn roxum_random_u64() callconv(.c) u64;
 
+/// Hosted symbol for HostRateCounter.add!
+/// Roc signature: U64, Str, U64 => HostRateCounter.Counted
+/// Owned arguments. Release each exactly once before returning, unless it is
+/// moved into storage or into the result:
+///     arg1.decref(roc_host);
+pub extern fn roxum_rate_counter_add(arg0: u64, arg1: RocStr, arg2: u64) callconv(.c) HostRateCounterCounted;
+
+/// Hosted symbol for HostRateCounter.new!
+/// Roc signature: U64, U64 => HostRateCounter.Made
+pub extern fn roxum_rate_counter_new(arg0: u64, arg1: u64) callconv(.c) HostRateCounterMade;
+
+/// Hosted symbol for HostRequestExecution.begin_decode!
+/// Roc signature: List(U8) => HostRequestExecution.DecodeInput
+/// Owned arguments. Release each exactly once before returning, unless it is
+/// moved into storage or into the result:
+///     arg0.decref(roc_host);
+/// The result is owned by Roc: return exactly one owned reference.
+pub extern fn roxum_request_execution_begin_decode(arg0: RocListWith(u8, false)) callconv(.c) HostRequestExecutionDecodeInput;
+
+/// Hosted symbol for HostRequestExecution.begin_decode_with_fallback!
+/// Roc signature: List(U8), HostRequestExecution.DecodeFallback => HostRequestExecution.DecodeInput
+/// Owned arguments. Release each exactly once before returning, unless it is
+/// moved into storage or into the result:
+///     arg0.decref(roc_host);
+///     arg1.decref(roc_host);
+/// The result is owned by Roc: return exactly one owned reference.
+pub extern fn roxum_request_execution_begin_decode_with_fallback(arg0: RocListWith(u8, false), arg1: HostRequestExecutionDecodeFallback) callconv(.c) HostRequestExecutionDecodeInput;
+
 /// Hosted symbol for HostRequestExecution.elapsed_nanoseconds!
 /// Roc signature: {} => HostRequestExecution.Elapsed
 pub extern fn roxum_request_execution_elapsed() callconv(.c) HostRequestExecutionElapsed;
+
+/// Hosted symbol for HostRequestExecution.end_decode!
+/// Roc signature: {} => {}
+pub extern fn roxum_request_execution_end_decode() callconv(.c) void;
 
 /// Hosted symbol for HostRequestExecution.limit_nanoseconds!
 /// Roc signature: U64 => Bool
@@ -4989,16 +5365,12 @@ pub extern fn roxum_request_execution_limit(arg0: u64) callconv(.c) bool;
 ///     arg1.decref(roc_host);
 pub extern fn roxum_request_execution_limit_with_response(arg0: u64, arg1: HttpResponse) callconv(.c) u8;
 
-/// Hosted symbol for HostRateCounter.add!
-/// Roc signature: U64, Str, U64 => HostRateCounter.Counted
+/// Hosted symbol for HostRequestExecution.limit_with_trailers!
+/// Roc signature: U64, List(Http.ResponseHeader) => U8
 /// Owned arguments. Release each exactly once before returning, unless it is
 /// moved into storage or into the result:
-///     arg1.decref(roc_host);
-pub extern fn roxum_rate_counter_add(arg0: u64, arg1: RocStr, arg2: u64) callconv(.c) HostRateCounterCounted;
-
-/// Hosted symbol for HostRateCounter.new!
-/// Roc signature: U64, U64 => HostRateCounter.Made
-pub extern fn roxum_rate_counter_new(arg0: u64, arg1: u64) callconv(.c) HostRateCounterMade;
+///     decrefListOfHttpResponseHeader(arg1, roc_host);
+pub extern fn roxum_request_execution_limit_with_trailers(arg0: u64, arg1: RocList(HttpResponseHeader)) callconv(.c) u8;
 
 /// Hosted symbol for HostSecret.derive!
 /// Roc signature: U64, List(U8) => List(U8)
@@ -5030,13 +5402,36 @@ pub extern fn roxum_sleep_milliseconds(arg0: u64) callconv(.c) void;
 /// Roc signature: U64 => {}
 pub extern fn roxum_sleep_until(arg0: u64) callconv(.c) void;
 
+/// Hosted symbol for HostStream.abort!
+/// Roc signature: U64 => {}
+pub extern fn roxum_stream_abort(arg0: u64) callconv(.c) void;
+
+/// Hosted symbol for HostStream.finish!
+/// Roc signature: U64, List(Http.ResponseHeader) => U8
+/// Owned arguments. Release each exactly once before returning, unless it is
+/// moved into storage or into the result:
+///     decrefListOfHttpResponseHeader(arg1, roc_host);
+pub extern fn roxum_stream_finish(arg0: u64, arg1: RocList(HttpResponseHeader)) callconv(.c) u8;
+
 /// Hosted symbol for HostStream.start!
-/// Roc signature: Http.Response, U64, List(U8), Bool, U64, Bool => U64
+/// Roc signature: Http.Response, U64, List(U8), Bool, U64, Bool, Str => U64
 /// Owned arguments. Release each exactly once before returning, unless it is
 /// moved into storage or into the result:
 ///     arg0.decref(roc_host);
 ///     arg2.decref(roc_host);
-pub extern fn roxum_stream_start(arg0: HttpResponse, arg1: u64, arg2: RocListWith(u8, false), arg3: bool, arg4: u64, arg5: bool) callconv(.c) u64;
+///     arg6.decref(roc_host);
+pub extern fn roxum_stream_start(arg0: HttpResponse, arg1: u64, arg2: RocListWith(u8, false), arg3: bool, arg4: u64, arg5: bool, arg6: RocStr) callconv(.c) u64;
+
+/// Hosted symbol for HostStream.try_write!
+/// Roc signature: U64, List(U8) => U8
+/// Owned arguments. Release each exactly once before returning, unless it is
+/// moved into storage or into the result:
+///     arg1.decref(roc_host);
+pub extern fn roxum_stream_try_write(arg0: u64, arg1: RocListWith(u8, false)) callconv(.c) u8;
+
+/// Hosted symbol for HostBody.wait!
+/// Roc signature: U64, U64, U8 => U8
+pub extern fn roxum_stream_wait(arg0: u64, arg1: u64, arg2: u8) callconv(.c) u8;
 
 /// Hosted symbol for HostStream.write!
 /// Roc signature: U64, List(U8) => Bool

@@ -32,7 +32,7 @@ Multipart :: [].{
 	streaming = |callbacks| Handler.Streaming.{
 		begin!: |model, head|
 			match boundary_of(head.headers) {
-				Err(NotMultipart) => Err(Reply.error(HttpError.make(415, "expected a multipart/form-data Content-Type")))
+				Err(NotMultipart) => Err(Reply.error(HttpError.{ status: 415, message: "expected a multipart/form-data Content-Type" }))
 				Ok(boundary) => {
 					inner = (callbacks.begin!)(model, head)?
 					Ok({ parser: MultipartBody.new(boundary, callbacks.limits), inner })
@@ -70,5 +70,5 @@ boundary_of = |headers|
 failure_reply = |failure|
 	match failure {
 		Invalid => Reply.error(HttpError.bad_request("invalid multipart body"))
-		TooLarge => Reply.error(HttpError.make(413, "multipart body too large"))
+		TooLarge => Reply.error(HttpError.{ status: 413, message: "multipart body too large" })
 	}

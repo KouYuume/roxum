@@ -10,6 +10,9 @@ pub const Active = struct {
     /// Null duration reads elapsed time; a duration also tightens the deadline.
     /// Null result means execution ended and must not return to application code.
     apply: *const fn (*anyopaque, ?u64) ?u64,
+    decode_fallback: ?abi.HostRequestExecutionDecodeFallback = null,
+    on_decode_exhausted: ?*const fn (*anyopaque, abi.HostRequestExecutionDecodeFallback) void = null,
+    limit_trailers: ?*const fn (*anyopaque, u64, []const abi.HttpResponseHeader) u8 = null,
     limit_response: ?*const fn (*anyopaque, u64, abi.HttpResponse, *abi.RocHost) Result = null,
 };
 
@@ -25,6 +28,75 @@ fn apply(current: Active, duration: ?u64) u64 {
     const target = fiber.current() orelse unreachable;
     _ = target.stop.cmpxchgStrong(fiber.Stop.none, fiber.Stop.client_gone, std.builtin.AtomicOrder.acq_rel, std.builtin.AtomicOrder.acquire);
     fiber_wait.cancelCurrent();
+}
+
+pub fn hostedBeginDecode(bytes: abi.RocListWith(u8, false)) callconv(std.builtin.CallingConvention.c) abi.HostRequestExecutionDecodeInput {
+    const allocator_context = @import("../allocator/context.zig");
+    const runtime = @import("../runtime.zig");
+    const context = allocator_context.current() orelse @panic("allocator context is not set");
+    var host = runtime.makeRocHost(@ptrCast(context.host_allocator));
+    defer bytes.decref(&host);
+    var result = std.mem.zeroes(abi.HostRequestExecutionDecodeInput);
+    result.tag = abi.HostRequestExecutionDecodeInputTag.Unavailable;
+    if (active() == null) return result;
+    allocator_context.beginDecode() catch |err| {
+        if (err == error.OutOfMemory) result.tag = abi.HostRequestExecutionDecodeInputTag.Exhausted;
+        return result;
+    };
+    // A decoder may return its input or a slice of it without allocating.
+    const copy = @import("../bridge/request.zig").rocByteListFromSliceChecked(bytes.items(), .{
+        .roc_host = &host,
+        .try_alloc = runtime.tryAllocWithHost,
+    }) catch {
+        allocator_context.endDecode();
+        result.tag = abi.HostRequestExecutionDecodeInputTag.Exhausted;
+        return result;
+    };
+    result.tag = abi.HostRequestExecutionDecodeInputTag.Input;
+    const payload: *abi.RocListWith(u8, false) = @ptrCast(@alignCast(&result.payload));
+    payload.* = copy;
+    return result;
+}
+
+pub fn hostedBeginDecodeWithFallback(bytes: abi.RocListWith(u8, false), fallback: abi.HostRequestExecutionDecodeFallback) callconv(std.builtin.CallingConvention.c) abi.HostRequestExecutionDecodeInput {
+    const result = hostedBeginDecode(bytes);
+    if (result.tag == abi.HostRequestExecutionDecodeInputTag.Input) {
+        fiber.currentLocals().?.request_execution.?.decode_fallback = fallback;
+    } else releaseFallback(fallback);
+    return result;
+}
+
+fn releaseFallback(fallback: abi.HostRequestExecutionDecodeFallback) void {
+    const context = @import("../allocator/context.zig").current().?;
+    var host = @import("../runtime.zig").makeRocHost(@ptrCast(context.host_allocator));
+    fallback.decref(&host);
+}
+
+pub fn discardDecodeFallback() void {
+    const locals = fiber.currentLocals() orelse return;
+    const execution = if (locals.request_execution) |*value| value else return;
+    const fallback = execution.decode_fallback orelse return;
+    execution.decode_fallback = null;
+    releaseFallback(fallback);
+}
+
+pub fn decodeExhausted() void {
+    const execution = active() orelse return;
+    const fallback = execution.decode_fallback orelse return;
+    @import("../allocator/context.zig").abandonDecode();
+    if (execution.on_decode_exhausted) |send| {
+        // The fiber owns the borrowed completion through writer waits. A
+        // cancellation drops it before abandoning the stack.
+        send(execution.context, fallback);
+        discardDecodeFallback();
+        fiber_wait.abandonCurrent();
+    }
+    discardDecodeFallback();
+}
+
+pub fn hostedEndDecode() callconv(std.builtin.CallingConvention.c) void {
+    discardDecodeFallback();
+    @import("../allocator/context.zig").endDecode();
 }
 
 pub fn hostedElapsed() callconv(std.builtin.CallingConvention.c) abi.HostRequestExecutionElapsed {
@@ -67,6 +139,19 @@ pub fn hostedLimitWithResponse(duration: u64, response: abi.HttpResponse) callco
     }
     response.decref(&roc_host);
     return 1;
+}
+
+pub fn hostedLimitWithTrailers(duration: u64, trailers: abi.RocList(abi.HttpResponseHeader)) callconv(std.builtin.CallingConvention.c) u8 {
+    const context = @import("../allocator/context.zig").current() orelse @panic("allocator context is not set");
+    var roc_host = @import("../runtime.zig").makeRocHost(@ptrCast(context.host_allocator));
+    const result: u8 = if (active()) |current| if (current.limit_trailers) |callback| callback(current.context, duration, trailers.items()) else 1 else 1;
+    abi.decrefListOfHttpResponseHeader(trailers, &roc_host);
+    if (result == 3) {
+        const target = fiber.current() orelse unreachable;
+        _ = target.stop.cmpxchgStrong(fiber.Stop.none, fiber.Stop.client_gone, std.builtin.AtomicOrder.acq_rel, std.builtin.AtomicOrder.acquire);
+        fiber_wait.cancelCurrent();
+    }
+    return result;
 }
 
 test "execution controls are unavailable outside a request fiber" {

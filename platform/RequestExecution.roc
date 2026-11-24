@@ -9,6 +9,30 @@ import Http
 ## a deadline before waiting for input; ordinary handlers run after body EOF.
 RequestExecution := [].{
 
+	## Copies the input into an 8 MiB message heap before calling a pure decoder.
+	## Returned values may retain that copy until request cleanup. Exhausted means
+	## the host could not start the heap or copy the input. Allocation failure
+	## inside the callback abandons the request under the Roc allocator contract.
+	decode_bytes! : List(U8), (List(U8) -> value) => Try(value, [Unavailable, Exhausted])
+	decode_bytes! = |bytes, decode|
+		run_decode!(HostRequestExecution.begin_decode!(bytes), decode)
+
+	## On allocation failure inside the codec, abandon the request and send the
+	## supplied finite response if output has not started.
+	## Delivery is subject to cancellation, deadlines and transport capacity.
+	decode_bytes_with_response! : List(U8), Http.Response, (List(U8) -> value) => Try(value, [Unavailable, Exhausted])
+	decode_bytes_with_response! = |bytes, response, decode|
+		run_decode!(HostRequestExecution.begin_decode_with_fallback!(bytes, HostRequestExecution.DecodeFallback.Finite(response)), decode)
+
+	## On allocation failure inside the codec, finish an active HTTP/2 writer
+	## with the unsent bytes of an already started message and then its trailers.
+	## Supply empty remaining bytes at a message boundary. Output obeys normal
+	## flow control, cancellation and deadlines. With no open writer, exhaustion
+	## abandons the request. In either case the failed callback never resumes.
+	decode_bytes_with_completion! : List(U8), { remaining : List(U8), trailers : List(Http.ResponseHeader) }, (List(U8) -> value) => Try(value, [Unavailable, Exhausted])
+	decode_bytes_with_completion! = |bytes, completion, decode|
+		run_decode!(HostRequestExecution.begin_decode_with_fallback!(bytes, HostRequestExecution.DecodeFallback.Stream(completion)), decode)
+
 	## Elapsed monotonic nanoseconds since initial headers completed.
 	## An expired or closed request stops instead of returning to application code.
 	elapsed_nanoseconds! : {} => Try(U64, [Unavailable])
@@ -24,8 +48,9 @@ RequestExecution := [].{
 	## Zero, or a duration already elapsed, stops this request before returning.
 	##
 	## Expiry cancels suspended I/O and resets the stream unless a response was
-	## registered with `limit_with_response!`. Pure computation is not preempted.
-	## Response commitment wins over later expiry; socket writes still have their
+	## registered with `limit_with_response!` or `limit_with_trailers!`. Pure
+	## computation is not preempted. Finite response commitment or streamed
+	## terminal selection wins over later expiry; socket writes still have their
 	## own timeout. This does not change idle/read/write timeouts.
 	limit_nanoseconds! : U64 => Try({}, [Unavailable])
 	limit_nanoseconds! = |nanoseconds|
@@ -51,4 +76,30 @@ RequestExecution := [].{
 			_ => Err(InvalidResponse)
 		}
 
+	## Registers terminal fields before starting HTTP/2 streamed output and
+	## tightens the deadline from initial metadata. The host copies and validates
+	## fields atomically. On expiry after headers, accepted DATA drains before
+	## these trailers; before headers, expiry resets the request. A write timeout,
+	## client cancellation or forced shutdown can prevent delivery. Normal finish
+	## and expiry select their terminal exactly once. No abandoned code resumes.
+	limit_with_trailers! : U64, List(Http.ResponseHeader) => Try({}, [Unavailable, InvalidTrailers, InvalidState])
+	limit_with_trailers! = |nanoseconds, trailers|
+		match HostRequestExecution.limit_with_trailers!(nanoseconds, trailers) {
+			0 => Ok({})
+			1 => Err(Unavailable)
+			2 => Err(InvalidTrailers)
+			_ => Err(InvalidState)
+		}
+
 }
+
+run_decode! = |input, decode|
+	match input {
+		Input(owned) => {
+			value = decode(owned)
+			HostRequestExecution.end_decode!({})
+			Ok(value)
+		}
+		Unavailable => Err(Unavailable)
+		Exhausted => Err(Exhausted)
+	}

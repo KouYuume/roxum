@@ -23,7 +23,7 @@ is relative to the generated `main.roc`, not the working directory. For the
 separate Roc bundle, replace the `--roc_opt` value with `wire=<URL>` using the wire URL in the release's `protobuf.json`.
 Import `generated/main.roc` as a package from an application on any compatible
 Roc platform. With only `wire`, services in schemas are ignored and generation remains
-platform-free. Opt into roxum Unary registration by also supplying `grpc` and
+platform-free. Opt into roxum Unary and streaming service registration by also supplying `grpc` and
 `pf`; follow the gRPC distribution guide in the matching roxum release.
 The generated service needs roxum-grpc and its matching platform; the Protobuf
 wire package itself has no gRPC runtime dependency.

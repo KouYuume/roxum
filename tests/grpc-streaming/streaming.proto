@@ -1,0 +1,10 @@
+syntax = "proto3";
+package streaming;
+message Request { uint32 count = 1; string mode = 2; }
+message Update { uint32 sequence = 1; string text = 2; }
+service Updates {
+  rpc Echo(Request) returns (Update);
+  rpc Watch(Request) returns (stream Update);
+}
+service Uploads { rpc Submit(stream Request) returns (Update); }
+service Exchange { rpc Chat(stream Request) returns (stream Update); }

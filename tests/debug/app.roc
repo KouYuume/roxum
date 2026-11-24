@@ -83,9 +83,11 @@ crashing : RouteContext({}) -> Try(Reply, Reply)
 crashing = |_context| crash "debug test crash"
 
 # Deeper than the fiber stack holds in every backend: speed takes
-# about 16 bytes a level, so 64 MiB runs out after about 4 million.
+# about 16 bytes a level, so 64 MiB runs out after about 4 million. The depth
+# reads the request (its query is empty), so Roc cannot evaluate the call at
+# compile time.
 overflowing : RouteContext({}) -> Try(Reply, Reply)
-overflowing = |_context| Ok(Reply.text("${deeper(100_000_000).to_str()}\n"))
+overflowing = |context| Ok(Reply.text("${deeper(100_000_000 + context.request.query.len()).to_str()}\n"))
 
 deeper : U64 -> U64
 deeper = |remaining| if remaining == 0 { 0 } else { 1 + deeper(remaining - 1) }

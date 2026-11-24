@@ -30,6 +30,8 @@ def compatibility(root=ROOT):
         raise ValueError('invalid Protobuf version')
     if not re.fullmatch(r'[0-9a-f]{40}', value['roc_revision']) or value['roc_revision'] != (root / '.roc-revision').read_text().strip():
         raise ValueError('Protobuf compiler compatibility is stale')
+    if not re.fullmatch(r'[0-9A-Za-z._-]+', value.get('roc_release', '')):
+        raise ValueError('invalid Roc release name')
     if value['generator_version'] != value['version']:
         raise ValueError('generator and wire package must use the same version')
     if value['schema_subset'] != 'proto3-v1':
@@ -68,7 +70,7 @@ def build(output, release_url, root=ROOT):
     contract = compatibility(root)
     roc = os.environ.get('ROC_BIN', 'roc')
     version = subprocess.check_output([roc, 'version'], text=True).strip()
-    if not version.startswith('Roc compiler version ') or contract['roc_revision'][:7] not in version:
+    if version != f"Roc compiler version {contract['roc_release']}":
         raise ValueError('Roc compiler does not match Protobuf compatibility revision')
     output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as temporary:

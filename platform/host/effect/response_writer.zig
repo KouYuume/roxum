@@ -1,5 +1,5 @@
 //! `ResponseWriter`: the body a handler writes as it goes. While a
-//! request's Roc code runs, its session is the sink: `start!` sends the
+//! request's Roc code runs, its protocol adapter is the sink: `start!` sends the
 //! head and `write!` the parts of the body. The handle lives in the
 //! request fiber's `Locals`, so it follows the fiber to another thread.
 const std = @import("std");
@@ -8,7 +8,7 @@ const allocator_context = @import("../allocator/context.zig");
 const fiber = @import("../fiber.zig");
 const runtime = @import("../runtime.zig");
 
-/// Where a request's written body goes: its session.
+/// Request-scoped protocol operations for an output writer.
 pub const Sink = struct {
     context: *anyopaque,
     /// Sends the head from the response's status and headers; false when
@@ -23,12 +23,17 @@ pub const Sink = struct {
     write: *const fn (context: *anyopaque, bytes: []const u8) bool,
     /// Aborts the body without writing a successful terminator.
     abort: *const fn (context: *anyopaque) void,
+    finish: ?*const fn (*anyopaque, []const abi.HttpResponseHeader) u8 = null,
+    try_write: ?*const fn (*anyopaque, []const u8) u8 = null,
+    wait: ?*const fn (*anyopaque, u8) u8 = null,
+    route: ?*const fn (*anyopaque, []const u8) void = null,
 };
 
 pub const Active = struct {
     token: u64,
     sink: Sink,
     started: bool = false,
+    finished: bool = false,
 };
 
 /// The active sink of code off a fiber, as in tests.
@@ -56,9 +61,10 @@ pub fn deactivate() void {
 
 /// `content_length` is the body's length, or the largest `U64` when it is
 /// not known. With `gzip_body`, the body is gzip-compressed as it goes.
-pub fn hostedStreamStart(response: abi.HttpResponse, keep_alive_milliseconds: u64, keep_alive_bytes: abi.RocListWith(u8, false), ends_on_drain: bool, content_length: u64, gzip_body: bool) callconv(std.builtin.CallingConvention.c) u64 {
+pub fn hostedStreamStart(response: abi.HttpResponse, keep_alive_milliseconds: u64, keep_alive_bytes: abi.RocListWith(u8, false), ends_on_drain: bool, content_length: u64, gzip_body: bool, route: abi.RocStr) callconv(std.builtin.CallingConvention.c) u64 {
     var roc_host = rocHost();
     defer response.decref(&roc_host);
+    defer route.decref(&roc_host);
     defer keep_alive_bytes.decref(&roc_host);
     const place = slot();
     const current = &(place.* orelse return 0);
@@ -69,6 +75,7 @@ pub fn hostedStreamStart(response: abi.HttpResponse, keep_alive_milliseconds: u6
     var token = next_token.fetchAdd(1, std.builtin.AtomicOrder.monotonic);
     if (token == 0) token = next_token.fetchAdd(1, std.builtin.AtomicOrder.monotonic);
     current.token = token;
+    if (current.sink.route) |set_route| set_route(current.sink.context, route.asSlice());
     if (!current.sink.start(current.sink.context, &response, keep_alive_milliseconds, keep_alive_bytes.items(), ends_on_drain, if (content_length == std.math.maxInt(u64)) null else content_length, gzip_body)) return 0;
     return current.token;
 }
@@ -84,13 +91,53 @@ pub fn hostedStreamWrite(token: u64, bytes: abi.RocListWith(u8, false)) callconv
 pub fn write(token: u64, bytes: []const u8) bool {
     if (token == 0) return false;
     const current = slot().* orelse return false;
-    if (current.token != token) return false;
+    if (current.token != token or current.finished) return false;
     return current.sink.write(current.sink.context, bytes);
 }
 
+/// 0 accepted, 1 unavailable, 2 pending, 3 closed, 4 invalid, 5 too large.
+/// A pending operation retains no bytes.
+pub fn hostedStreamTryWrite(token: u64, bytes: abi.RocListWith(u8, false)) callconv(std.builtin.CallingConvention.c) u8 {
+    var roc_host = rocHost();
+    defer bytes.decref(&roc_host);
+    return tryWrite(token, bytes.items());
+}
+
+pub fn tryWrite(token: u64, bytes: []const u8) u8 {
+    const current = slot().* orelse return 1;
+    if (token == 0 or current.token != token or !current.started or current.finished) return 4;
+    const operation = current.sink.try_write orelse return 1;
+    return operation(current.sink.context, bytes);
+}
+
+/// 1 readable, 2 writable, 3 both; 0 unavailable, 4 invalid, 5 closed.
+pub fn hostedStreamWait(token: u64, body_token: u64, interest: u8) callconv(std.builtin.CallingConvention.c) u8 {
+    const current = slot().* orelse return 0;
+    if (token == 0 or current.token != token or !current.started or current.finished or
+        !@import("body.zig").matches(body_token) or interest == 0 or interest > 3) return 4;
+    const operation = current.sink.wait orelse return 0;
+    return operation(current.sink.context, interest);
+}
+
+pub fn hostedStreamFinish(token: u64, trailers: abi.RocList(abi.HttpResponseHeader)) callconv(std.builtin.CallingConvention.c) u8 {
+    var roc_host = rocHost();
+    defer abi.decrefListOfHttpResponseHeader(trailers, &roc_host);
+    const current = &(slot().* orelse return 1);
+    if (token == 0 or current.token != token or !current.started or current.finished) return 4;
+    const finish = current.sink.finish orelse return 1;
+    const result = finish(current.sink.context, trailers.items());
+    if (result == 0) current.finished = true;
+    return result;
+}
+
+pub fn hostedStreamAbort(token: u64) callconv(std.builtin.CallingConvention.c) void {
+    abort(token);
+}
+
 pub fn abort(token: u64) void {
-    const current = slot().* orelse return;
-    if (current.token != token or !current.started) return;
+    const current = &(slot().* orelse return);
+    if (current.token != token or !current.started or current.finished) return;
+    current.finished = true;
     current.sink.abort(current.sink.context);
 }
 
@@ -114,7 +161,7 @@ test "stream capabilities reject zero, repeated starts, and previous requests" {
         fn begin() u64 {
             var response = std.mem.zeroes(abi.HttpResponse);
             response.status = 200;
-            return hostedStreamStart(response, 0, abi.RocListWith(u8, false).empty(), false, 0, false);
+            return hostedStreamStart(response, 0, abi.RocListWith(u8, false).empty(), false, 0, false, std.mem.zeroes(abi.RocStr));
         }
     };
     const allocator = @import("../allocator/host_allocator.zig");
@@ -130,6 +177,8 @@ test "stream capabilities reject zero, repeated starts, and previous requests" {
     try std.testing.expect(!write(0, "before start"));
     const first = Mock.begin();
     try std.testing.expect(first != 0);
+    try std.testing.expectEqual(@as(u8, 1), hostedStreamFinish(first, std.mem.zeroes(abi.RocList(abi.HttpResponseHeader))));
+    try std.testing.expectEqual(@as(u8, 4), hostedStreamFinish(0, std.mem.zeroes(abi.RocList(abi.HttpResponseHeader))));
     try std.testing.expectEqual(@as(u64, 0), Mock.begin());
     try std.testing.expect(write(first, "active stream"));
     deactivate();
@@ -142,4 +191,68 @@ test "stream capabilities reject zero, repeated starts, and previous requests" {
     try std.testing.expect(!write(first, "stale capability"));
     try std.testing.expect(write(second, "next stream"));
     try std.testing.expectEqual(@as(usize, 2), mock.writes);
+}
+
+test "duplex effects validate both capabilities and interests before calling transport" {
+    const body = @import("body.zig");
+    const Mock = struct {
+        calls: usize = 0,
+        result: u8 = 2,
+        fn start(_: *anyopaque, _: *const abi.HttpResponse, _: u64, _: []const u8, _: bool, _: ?u64, _: bool) bool {
+            return true;
+        }
+        fn writeBytes(_: *anyopaque, _: []const u8) bool {
+            return true;
+        }
+        fn abortStream(_: *anyopaque) void {}
+        fn tryBytes(ptr: *anyopaque, _: []const u8) u8 {
+            const self: *@This() = @ptrCast(@alignCast(ptr));
+            self.calls += 1;
+            return self.result;
+        }
+        fn wait(ptr: *anyopaque, interest: u8) u8 {
+            const self: *@This() = @ptrCast(@alignCast(ptr));
+            self.calls += 1;
+            return interest;
+        }
+        fn read(_: *anyopaque, _: u64, _: bool) abi.HostBodyRequestRead {
+            unreachable;
+        }
+        fn limit(_: *anyopaque, _: u64, _: bool) void {}
+    };
+    var mock = Mock{};
+    activate(.{ .context = &mock, .start = Mock.start, .write = Mock.writeBytes, .abort = Mock.abortStream });
+    defer deactivate();
+    const body_token = body.activateReader(.{ .context = &mock, .read = Mock.read, .limit = Mock.limit });
+    defer body.deactivate();
+    const current = &(slot().* orelse unreachable);
+    current.token = 17;
+    current.started = true;
+    try std.testing.expectEqual(@as(u8, 1), tryWrite(17, "unsupported"));
+    try std.testing.expectEqual(@as(u8, 0), hostedStreamWait(17, body_token, 3));
+    current.sink.try_write = Mock.tryBytes;
+    current.sink.wait = Mock.wait;
+    for ([_]u64{ 0, 16, 18 }) |token| {
+        try std.testing.expectEqual(@as(u8, 4), tryWrite(token, "invalid"));
+        try std.testing.expectEqual(@as(u8, 4), hostedStreamWait(token, body_token, 3));
+    }
+    for ([_]u8{ 0, 4, 255 }) |interest| {
+        try std.testing.expectEqual(@as(u8, 4), hostedStreamWait(17, body_token, interest));
+    }
+    try std.testing.expectEqual(@as(u8, 4), hostedStreamWait(17, 0, 3));
+    try std.testing.expectEqual(@as(u8, 4), hostedStreamWait(17, body_token + 1, 3));
+    try std.testing.expectEqual(@as(usize, 0), mock.calls);
+    for ([_]u8{ 1, 2, 3 }) |interest| {
+        try std.testing.expectEqual(interest, hostedStreamWait(17, body_token, interest));
+    }
+    // Pending/accepted/errors preserve the adapter's result.
+    for ([_]u8{ 0, 2, 3, 4, 5 }) |result| {
+        mock.result = result;
+        try std.testing.expectEqual(result, tryWrite(17, "bytes"));
+    }
+    try std.testing.expectEqual(@as(usize, 8), mock.calls);
+    current.finished = true;
+    try std.testing.expectEqual(@as(u8, 4), tryWrite(17, "after finish"));
+    try std.testing.expectEqual(@as(u8, 4), hostedStreamWait(17, body_token, 3));
+    try std.testing.expectEqual(@as(usize, 8), mock.calls);
 }

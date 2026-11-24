@@ -69,8 +69,8 @@ with_body = |bytes, content_type| {
 }
 
 error_response = |error| {
-	response = with_body((HttpError.message(error)).to_utf8(), "text/plain; charset=utf-8")
-	{ ..response, status: Status.code(HttpError.status(error)) }
+	response = with_body(error.message.to_utf8(), "text/plain; charset=utf-8")
+	{ ..response, status: Status.code(error.status) }
 }
 
 ## Header names compare without regard to ASCII case.

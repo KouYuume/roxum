@@ -10,6 +10,24 @@ Never implement Roc reference counts by hand. Contract tests check zero, one, an
 
 Persistent allocations outlive requests; request allocations last until their values are released or the request is cleaned up. The allocation prefix stores size and domain/generation metadata immediately before the user pointer. Its size is `max(alignment, 2 * sizeof(usize))`; padding precedes the metadata at larger alignments.
 
+For a bounded decoder allocation, the size word also marks the block as
+decoder-owned and the metadata word points to the message heap, which carries
+the request generation. At a given alignment, ordinary and decoder-owned blocks have
+the same prefix size. A request fiber retains its message heaps across suspension. Closing
+a decode scope releases an empty heap immediately. Otherwise its last free
+releases the heap, and request teardown reclaims any remaining heaps.
+
+`RequestExecution.decode_bytes_with_response!` gives the host a finite HTTP/2
+response before the pure callback runs. On an allocation failure inside the
+callback the host leaves the decode scope, submits that response if output
+has not started, and abandons the fiber. The host releases the failed message heap before sending the fallback. A normal return drops the fallback. A codec crash and
+an expired or closed stream retain their existing termination behavior.
+
+`decode_bytes_with_completion!` registers remaining output bytes and trailers
+for a streamed response. The request fiber retains both across writer waits,
+then releases them on completion or cancellation. Only storage from before
+the failed callback can be referenced by the completion.
+
 Only allocation chooses a domain from the active context. Reallocation and deallocation use the pointer's recorded domain, never the current execution phase. Reallocation preserves domain and generation. A stale request generation detects use after reset. Contract tests exercise power-of-two alignments 1, 2, 4, 8, 16, and 32.
 
 The production request allocator reuses freed capacity. Small values up to 1 KiB with alignment at most 16 use slabs; empty slabs return their pages to the block cache. Larger allocations use page-rounded blocks. Blocks above the cache size or alignment limits return directly to the backing allocator. Reset releases remaining live allocations and advances the generation; deinit releases caches as well. A cloned worker starts with an independent empty cache.
@@ -71,9 +89,10 @@ has a separate HTTP/2 adapter for initial field sections, described in
 [the engine contract](http2-engine.md#request-metadata-mapping). Neither entry
 installs an HTTP/2 body reader by itself. The production metadata adapter copies
 initial fields and attaches a request-scoped body token. The shared worker scheduler
-runs routing and metadata stages before EOF; body effects suspend while bounded
-input is collected and copy results under the connection lock. Incremental network
-body delivery remains separate work.
+runs routing and metadata stages before EOF; body effects copy available input
+chunks under the connection lock and suspend while the bounded queue is empty.
+Whole-body assembly stays in the Roc pipeline; streaming handlers process each
+chunk as it arrives.
 
 Code that exhaustively matches `Http.Version` must also handle `Http20`. Build
 Roc platform sources and host archives together after this enum extension;

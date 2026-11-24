@@ -52,7 +52,7 @@ roundtrip = |bytes, read, write| {
 		Ok(_) => {}
 		Err(_) => crash "exact scalar output bound rejected"
 	}
-	if write(ProtobufWire.new_writer(encoded.len() - 1), value) != Err(OutputLimit) {
+	if write(ProtobufWire.new_writer(encoded.len() - 1), value) != Try.Err(OutputLimit) {
 		crash "scalar output exceeded its limit"
 	}
 	Ok({})

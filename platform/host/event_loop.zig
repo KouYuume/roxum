@@ -1152,6 +1152,7 @@ pub const Loop = struct {
         protocol.expire(self.now);
         if (protocol.failed) return self.close(slot);
         for (0..4) |_| {
+            protocol.advanceTerminals();
             const progress = protocol.owner.step() catch return self.close(slot);
             if (protocol.failed) return self.close(slot);
             protocol.recordCompleted();
@@ -1189,6 +1190,18 @@ pub const Loop = struct {
         }
     }
 
+    /// A writer has queued output under the connection lock. Drive one bounded
+    /// transport turn now instead of waiting for the acceptor's periodic tick.
+    pub fn driveHttp2Output(self: *Loop, request: work_queue.Request) void {
+        const item = &self.handoff.connections[request.slot];
+        if (item.generation != request.generation) return;
+        const protocol = item.http2 orelse return;
+        const ticket = request.http2 orelse return;
+        if (protocol.execution(ticket) == null) return;
+        self.readClock();
+        self.advanceHttp2(request.slot);
+    }
+
     pub fn finishHttp2(self: *Loop, request: work_queue.Request, failure: ?access_log.Outcome) void {
         const item = &self.handoff.connections[request.slot];
         item.lock.lock();
@@ -1214,6 +1227,7 @@ pub const Loop = struct {
             }
             if (protocol.streams.leases.runningStream(ticket)) |id| protocol.owner.cancel(id) catch {};
         }
+        protocol.discardInput(ticket);
         _ = protocol.streams.finish(ticket);
         execution.* = .{};
         self.readClock();

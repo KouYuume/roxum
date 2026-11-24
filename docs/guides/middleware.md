@@ -95,9 +95,9 @@ refusal does not wait for the body.
 
 A body too large to hold is read by a `Handler.streaming` handler, part by part; see [Streaming](streaming.md).
 
-`OnChunk` stages check or transform the parts as they arrive. `Middleware.ChunkCheck.new` takes the state each
-request starts from, a function from the state and a part to the new state and the bytes to pass on, and an end
-check. A check that returns a reply stops the request.
+`OnChunk` stages check or transform the parts as they arrive. `Middleware.ChunkCheck.new` takes a record: `initial`,
+the state each request starts from; `step`, a function from the state and a part to the new state and the bytes to
+pass on; and `finish`, an end check. A check that returns a reply stops the request.
 
 ## Tags and provided values
 

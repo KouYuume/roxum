@@ -281,7 +281,7 @@ Router(model, tag, provided) :: {
 				Ok(prefix_parsed) =>
 					if prefix_parsed.asterisk or ends_with_empty_segment(prefix_parsed.segments) {
 						Err(InvalidPattern(prefix))
-					} else if List.any(prefix_parsed.segments, |segment| segment == CatchAll) {
+					} else if List.any(prefix_parsed.segments, |segment| segment == Segment.CatchAll) {
 						Err(CatchAllInNestPrefix)
 					} else {
 						mount_prefix = if prefix == "/" { [] } else { prefix_parsed.segments }
@@ -338,7 +338,7 @@ Router(model, tag, provided) :: {
 
 parse_pattern = |pattern|
 	if pattern == "*" {
-		Ok({ segments: [Asterisk], param_names: [], asterisk: Bool.True })
+		Ok({ segments: [Segment.Asterisk], param_names: [], asterisk: Bool.True })
 	} else if !Str.starts_with(pattern, "/") {
 		Err(InvalidPattern(pattern))
 	} else {
@@ -353,16 +353,16 @@ parse_segments = |parts, pattern| {
 		part = list_get(parts, $index)
 		match parse_segment(part) {
 			Err(_) => return Err(InvalidPattern(pattern))
-			Ok(Static(value)) => { $segments = List.append($segments, Static(value)) }
+			Ok(Static(value)) => { $segments = List.append($segments, Segment.Static(value)) }
 			Ok(ParamName(name)) => {
 				if List.any($names, |existing| existing == name) { return Err(DuplicateParameter(name)) }
-				$segments = List.append($segments, Param)
+				$segments = List.append($segments, Segment.Param)
 				$names = List.append($names, name)
 			}
 			Ok(CatchAllName(name)) => {
 				if $index + 1 != List.len(parts) { return Err(CatchAllMustBeLast(pattern)) }
 				if List.any($names, |existing| existing == name) { return Err(DuplicateParameter(name)) }
-				$segments = List.append($segments, CatchAll)
+				$segments = List.append($segments, Segment.CatchAll)
 				$names = List.append($names, name)
 			}
 		}
@@ -442,7 +442,7 @@ append_endpoints = |endpoints, methods, param_names, route, pattern| {
 ## merged or nested route reads as one pattern and static segments appear in
 ## the normalized form they match in.
 render_route = |segments, param_names| {
-	if segments == [Asterisk] { return "*" }
+	if segments == [Segment.Asterisk] { return "*" }
 	var $parts = []
 	var $name_index = 0
 	for segment in segments {
@@ -481,7 +481,7 @@ merge_route_endpoints = |router, segments, endpoints, index|
 		Ok(router)
 	} else {
 		endpoint = list_get(endpoints, index)
-		parsed = { segments, param_names: endpoint.param_names, asterisk: segments == [Asterisk] }
+		parsed = { segments, param_names: endpoint.param_names, asterisk: segments == [Segment.Asterisk] }
 		updated = add_route(router, "merged route", parsed, [(endpoint.method, { layers: flat_layers(endpoint), handler: endpoint.handler, tags: endpoint.tags })])?
 		merge_route_endpoints(updated, segments, endpoints, index + 1)
 	}
@@ -533,19 +533,19 @@ nest_route_endpoints = |router, segments, prefix_names, endpoints, index|
 		endpoint = list_get(endpoints, index)
 		names = List.concat(prefix_names, endpoint.param_names)
 		if has_duplicate_name(names) { return Err(DuplicateParameter("nested route")) }
-		parsed = { segments, param_names: names, asterisk: segments == [Asterisk] }
+		parsed = { segments, param_names: names, asterisk: segments == [Segment.Asterisk] }
 		updated = add_route(router, "nested route", parsed, [(endpoint.method, { layers: flat_layers(endpoint), handler: endpoint.handler, tags: endpoint.tags })])?
 		nest_route_endpoints(updated, segments, prefix_names, endpoints, index + 1)
 	}
 
 combine_nested_segments = |prefix, child|
-	if child == [Asterisk] { child }
-	else if child == [Static("")] { prefix }
-	else if prefix == [Static("")] { child }
+	if child == [Segment.Asterisk] { child }
+	else if child == [Segment.Static("")] { prefix }
+	else if prefix == [Segment.Static("")] { child }
 	else { List.concat(prefix, child) }
 
 ends_with_empty_segment = |segments|
-	List.len(segments) > 1 and List.last(segments) == Ok(Static(""))
+	List.len(segments) > 1 and List.last(segments) == Ok(Segment.Static(""))
 
 has_duplicate_name = |names| {
 	var $outer = 0

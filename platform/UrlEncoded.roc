@@ -254,14 +254,14 @@ UrlEncoding :: [Standard].{
 	rename_field : UrlEncoding, Str -> Str
 	rename_field = |_, name| name
 
-	parse_str : UrlEncoding, UrlState -> Try({ value : Str, rest : UrlState }, [TooManyBytes, TooManyFields, BadValue])
+	parse_str : UrlEncoding, UrlState -> Try({ value : Str, rest : UrlState }, [TooManyBytes, TooManyFields, BadValue, MissingRequiredField(Str)])
 	parse_str = |_, state|
 		match state.values {
 			[first, .. as rest] => Ok({ value: first, rest: UrlState.{ groups: state.groups, values: rest } })
 			[] => Err(BadValue)
 		}
 
-	parse_bool : UrlEncoding, UrlState -> Try({ value : Bool, rest : UrlState }, [TooManyBytes, TooManyFields, BadValue])
+	parse_bool : UrlEncoding, UrlState -> Try({ value : Bool, rest : UrlState }, [TooManyBytes, TooManyFields, BadValue, MissingRequiredField(Str)])
 	parse_bool = |encoding, state| {
 		taken = UrlEncoding.parse_str(encoding, state)?
 		match taken.value {
@@ -271,7 +271,7 @@ UrlEncoding :: [Standard].{
 		}
 	}
 
-	parse_u8 : UrlEncoding, UrlState -> Try({ value : U8, rest : UrlState }, [TooManyBytes, TooManyFields, BadValue])
+	parse_u8 : UrlEncoding, UrlState -> Try({ value : U8, rest : UrlState }, [TooManyBytes, TooManyFields, BadValue, MissingRequiredField(Str)])
 	parse_u8 = |encoding, state| {
 		taken = UrlEncoding.parse_str(encoding, state)?
 		match U8.from_str(taken.value) {
@@ -280,7 +280,7 @@ UrlEncoding :: [Standard].{
 		}
 	}
 
-	parse_u16 : UrlEncoding, UrlState -> Try({ value : U16, rest : UrlState }, [TooManyBytes, TooManyFields, BadValue])
+	parse_u16 : UrlEncoding, UrlState -> Try({ value : U16, rest : UrlState }, [TooManyBytes, TooManyFields, BadValue, MissingRequiredField(Str)])
 	parse_u16 = |encoding, state| {
 		taken = UrlEncoding.parse_str(encoding, state)?
 		match U16.from_str(taken.value) {
@@ -289,7 +289,7 @@ UrlEncoding :: [Standard].{
 		}
 	}
 
-	parse_u32 : UrlEncoding, UrlState -> Try({ value : U32, rest : UrlState }, [TooManyBytes, TooManyFields, BadValue])
+	parse_u32 : UrlEncoding, UrlState -> Try({ value : U32, rest : UrlState }, [TooManyBytes, TooManyFields, BadValue, MissingRequiredField(Str)])
 	parse_u32 = |encoding, state| {
 		taken = UrlEncoding.parse_str(encoding, state)?
 		match U32.from_str(taken.value) {
@@ -298,7 +298,7 @@ UrlEncoding :: [Standard].{
 		}
 	}
 
-	parse_u64 : UrlEncoding, UrlState -> Try({ value : U64, rest : UrlState }, [TooManyBytes, TooManyFields, BadValue])
+	parse_u64 : UrlEncoding, UrlState -> Try({ value : U64, rest : UrlState }, [TooManyBytes, TooManyFields, BadValue, MissingRequiredField(Str)])
 	parse_u64 = |encoding, state| {
 		taken = UrlEncoding.parse_str(encoding, state)?
 		match U64.from_str(taken.value) {
@@ -307,7 +307,7 @@ UrlEncoding :: [Standard].{
 		}
 	}
 
-	parse_i8 : UrlEncoding, UrlState -> Try({ value : I8, rest : UrlState }, [TooManyBytes, TooManyFields, BadValue])
+	parse_i8 : UrlEncoding, UrlState -> Try({ value : I8, rest : UrlState }, [TooManyBytes, TooManyFields, BadValue, MissingRequiredField(Str)])
 	parse_i8 = |encoding, state| {
 		taken = UrlEncoding.parse_str(encoding, state)?
 		match I8.from_str(taken.value) {
@@ -316,7 +316,7 @@ UrlEncoding :: [Standard].{
 		}
 	}
 
-	parse_i16 : UrlEncoding, UrlState -> Try({ value : I16, rest : UrlState }, [TooManyBytes, TooManyFields, BadValue])
+	parse_i16 : UrlEncoding, UrlState -> Try({ value : I16, rest : UrlState }, [TooManyBytes, TooManyFields, BadValue, MissingRequiredField(Str)])
 	parse_i16 = |encoding, state| {
 		taken = UrlEncoding.parse_str(encoding, state)?
 		match I16.from_str(taken.value) {
@@ -325,7 +325,7 @@ UrlEncoding :: [Standard].{
 		}
 	}
 
-	parse_i32 : UrlEncoding, UrlState -> Try({ value : I32, rest : UrlState }, [TooManyBytes, TooManyFields, BadValue])
+	parse_i32 : UrlEncoding, UrlState -> Try({ value : I32, rest : UrlState }, [TooManyBytes, TooManyFields, BadValue, MissingRequiredField(Str)])
 	parse_i32 = |encoding, state| {
 		taken = UrlEncoding.parse_str(encoding, state)?
 		match I32.from_str(taken.value) {
@@ -334,7 +334,7 @@ UrlEncoding :: [Standard].{
 		}
 	}
 
-	parse_i64 : UrlEncoding, UrlState -> Try({ value : I64, rest : UrlState }, [TooManyBytes, TooManyFields, BadValue])
+	parse_i64 : UrlEncoding, UrlState -> Try({ value : I64, rest : UrlState }, [TooManyBytes, TooManyFields, BadValue, MissingRequiredField(Str)])
 	parse_i64 = |encoding, state| {
 		taken = UrlEncoding.parse_str(encoding, state)?
 		match I64.from_str(taken.value) {
@@ -343,7 +343,7 @@ UrlEncoding :: [Standard].{
 		}
 	}
 
-	parse_f64 : UrlEncoding, UrlState -> Try({ value : F64, rest : UrlState }, [TooManyBytes, TooManyFields, BadValue])
+	parse_f64 : UrlEncoding, UrlState -> Try({ value : F64, rest : UrlState }, [TooManyBytes, TooManyFields, BadValue, MissingRequiredField(Str)])
 	parse_f64 = |encoding, state| {
 		taken = UrlEncoding.parse_str(encoding, state)?
 		match F64.from_str(taken.value) {
@@ -352,17 +352,17 @@ UrlEncoding :: [Standard].{
 		}
 	}
 
-	parse_list_start : UrlEncoding, UrlState -> Try([Counted({ len : U64, rest : UrlState }), Uncounted(UrlState)], [TooManyBytes, TooManyFields, BadValue])
+	parse_list_start : UrlEncoding, UrlState -> Try([Counted({ len : U64, rest : UrlState }), Uncounted(UrlState)], [TooManyBytes, TooManyFields, BadValue, MissingRequiredField(Str)])
 	parse_list_start = |_, state| Ok(Counted({ len: List.len(state.values), rest: state }))
 
 	## Never reached: a list always reports its count.
-	parse_list_next : UrlEncoding, UrlState -> Try([Item(UrlState), Done(UrlState)], [TooManyBytes, TooManyFields, BadValue])
+	parse_list_next : UrlEncoding, UrlState -> Try([Item(UrlState), Done(UrlState)], [TooManyBytes, TooManyFields, BadValue, MissingRequiredField(Str)])
 	parse_list_next = |_, state| Ok(Done(state))
 
-	parse_list_after_item : UrlEncoding, UrlState -> Try([Continue(UrlState), Done(UrlState)], [TooManyBytes, TooManyFields, BadValue])
+	parse_list_after_item : UrlEncoding, UrlState -> Try([Continue(UrlState), Done(UrlState)], [TooManyBytes, TooManyFields, BadValue, MissingRequiredField(Str)])
 	parse_list_after_item = |_, state| Ok(Done(state))
 
-	parse_record_start : UrlEncoding, UrlState -> Try([Counted({ len : U64, rest : UrlState }), Uncounted(UrlState)], [TooManyBytes, TooManyFields, BadValue])
+	parse_record_start : UrlEncoding, UrlState -> Try([Counted({ len : U64, rest : UrlState }), Uncounted(UrlState)], [TooManyBytes, TooManyFields, BadValue, MissingRequiredField(Str)])
 	parse_record_start = |_, state| Ok(Uncounted(state))
 
 	parse_record_field : UrlEncoding,
@@ -375,7 +375,7 @@ UrlEncoding :: [Standard].{
 			Continue(UrlState),
 			Done(UrlState),
 		],
-		[TooManyBytes, TooManyFields, BadValue],
+		[TooManyBytes, TooManyFields, BadValue, MissingRequiredField(Str)],
 	)
 	parse_record_field = |_, _fields, state|
 		match state.groups {
@@ -384,15 +384,18 @@ UrlEncoding :: [Standard].{
 		}
 
 	## A single-valued field with values left over is a name that repeated.
-	parse_record_after_field : UrlEncoding, UrlState -> Try([Continue(UrlState), Done(UrlState)], [TooManyBytes, TooManyFields, BadValue])
+	parse_record_after_field : UrlEncoding, UrlState -> Try([Continue(UrlState), Done(UrlState)], [TooManyBytes, TooManyFields, BadValue, MissingRequiredField(Str)])
 	parse_record_after_field = |_, state|
 		if List.is_empty(state.values) { Ok(Continue(state)) } else { Err(BadValue) }
 
-	skip_record_field : UrlEncoding, UrlState -> Try(UrlState, [TooManyBytes, TooManyFields, BadValue])
+	skip_record_field : UrlEncoding, UrlState -> Try(UrlState, [TooManyBytes, TooManyFields, BadValue, MissingRequiredField(Str)])
 	skip_record_field = |_, state| Ok(UrlState.{ groups: state.groups, values: [] })
 
-	invalid_value : UrlEncoding, UrlState -> [TooManyBytes, TooManyFields, BadValue]
+	invalid_value : UrlEncoding, UrlState -> [TooManyBytes, TooManyFields, BadValue, MissingRequiredField(Str)]
 	invalid_value = |_, _| BadValue
+
+	missing_field : UrlEncoding, Str -> [TooManyBytes, TooManyFields, BadValue, MissingRequiredField(Str)]
+	missing_field = |_, name| MissingRequiredField(name)
 }
 
 ## The pairs by name, in the order each name first appeared.

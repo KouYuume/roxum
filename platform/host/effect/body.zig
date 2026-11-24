@@ -48,6 +48,12 @@ fn activateSource(source: Source) u64 {
     return token;
 }
 
+/// Capabilities from another request must never authorize a coordinated wait.
+pub fn matches(token: u64) bool {
+    const current = slot().* orelse return false;
+    return token != 0 and current.token == token;
+}
+
 pub fn deactivate() void {
     const place = slot();
     std.debug.assert(place.* != null);

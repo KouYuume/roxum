@@ -17,9 +17,9 @@ TomlDecode := [Default].{
 	State := { stack : List(TomlDecode.Frame) }
 
 	## Decodes a value into the type the caller asks for.
-	decode : TomlValue -> Try(a, [TomlDecode(Str), ..errs])
+	decode : TomlValue -> Try(a, [TomlDecode(Str), MissingRequiredField(Str)])
 		where [
-			a.parser_for : TomlDecode -> (TomlDecode.State -> Try({ value : a, rest : TomlDecode.State }, [TomlDecode(Str), ..errs])),
+			a.parser_for : TomlDecode -> (TomlDecode.State -> Try({ value : a, rest : TomlDecode.State }, [TomlDecode(Str), MissingRequiredField(Str)])),
 		]
 	decode = |value| {
 		Shape : a
@@ -31,10 +31,13 @@ TomlDecode := [Default].{
 	rename_field : TomlDecode, Str -> Str
 	rename_field = |_, name| name
 
-	invalid_value : TomlDecode, TomlDecode.State -> [TomlDecode(Str)]
+	invalid_value : TomlDecode, TomlDecode.State -> [TomlDecode(Str), MissingRequiredField(Str)]
 	invalid_value = |_, state| failure(top_path(state), "invalid value")
 
-	parse_str : TomlDecode, TomlDecode.State -> Try({ value : Str, rest : TomlDecode.State }, [TomlDecode(Str)])
+	missing_field : TomlDecode, Str -> [TomlDecode(Str), MissingRequiredField(Str)]
+	missing_field = |_, name| MissingRequiredField(name)
+
+	parse_str : TomlDecode, TomlDecode.State -> Try({ value : Str, rest : TomlDecode.State }, [TomlDecode(Str), MissingRequiredField(Str)])
 	parse_str = |_, state| {
 		(next, rest) = take_value(state)?
 		match next.value {
@@ -47,7 +50,7 @@ TomlDecode := [Default].{
 		}
 	}
 
-	parse_bool : TomlDecode, TomlDecode.State -> Try({ value : Bool, rest : TomlDecode.State }, [TomlDecode(Str)])
+	parse_bool : TomlDecode, TomlDecode.State -> Try({ value : Bool, rest : TomlDecode.State }, [TomlDecode(Str), MissingRequiredField(Str)])
 	parse_bool = |_, state| {
 		(next, rest) = take_value(state)?
 		match next.value {
@@ -56,38 +59,38 @@ TomlDecode := [Default].{
 		}
 	}
 
-	parse_u8 : TomlDecode, TomlDecode.State -> Try({ value : U8, rest : TomlDecode.State }, [TomlDecode(Str)])
+	parse_u8 : TomlDecode, TomlDecode.State -> Try({ value : U8, rest : TomlDecode.State }, [TomlDecode(Str), MissingRequiredField(Str)])
 	parse_u8 = |_, state| integer(state, "U8", |number| if number >= 0 and number <= 255 { Ok(number.to_u8_wrap()) } else { Err(OutOfRange) })
 
-	parse_u16 : TomlDecode, TomlDecode.State -> Try({ value : U16, rest : TomlDecode.State }, [TomlDecode(Str)])
+	parse_u16 : TomlDecode, TomlDecode.State -> Try({ value : U16, rest : TomlDecode.State }, [TomlDecode(Str), MissingRequiredField(Str)])
 	parse_u16 = |_, state| integer(state, "U16", |number| if number >= 0 and number <= 65_535 { Ok(number.to_u16_wrap()) } else { Err(OutOfRange) })
 
-	parse_u32 : TomlDecode, TomlDecode.State -> Try({ value : U32, rest : TomlDecode.State }, [TomlDecode(Str)])
+	parse_u32 : TomlDecode, TomlDecode.State -> Try({ value : U32, rest : TomlDecode.State }, [TomlDecode(Str), MissingRequiredField(Str)])
 	parse_u32 = |_, state| integer(state, "U32", |number| if number >= 0 and number <= 4_294_967_295 { Ok(number.to_u32_wrap()) } else { Err(OutOfRange) })
 
-	parse_u64 : TomlDecode, TomlDecode.State -> Try({ value : U64, rest : TomlDecode.State }, [TomlDecode(Str)])
+	parse_u64 : TomlDecode, TomlDecode.State -> Try({ value : U64, rest : TomlDecode.State }, [TomlDecode(Str), MissingRequiredField(Str)])
 	parse_u64 = |_, state| integer(state, "U64", |number| if number >= 0 { Ok(number.to_u64_wrap()) } else { Err(OutOfRange) })
 
-	parse_u128 : TomlDecode, TomlDecode.State -> Try({ value : U128, rest : TomlDecode.State }, [TomlDecode(Str)])
+	parse_u128 : TomlDecode, TomlDecode.State -> Try({ value : U128, rest : TomlDecode.State }, [TomlDecode(Str), MissingRequiredField(Str)])
 	parse_u128 = |_, state| integer(state, "U128", |number| if number >= 0 { Ok(number.to_u128_wrap()) } else { Err(OutOfRange) })
 
-	parse_i8 : TomlDecode, TomlDecode.State -> Try({ value : I8, rest : TomlDecode.State }, [TomlDecode(Str)])
+	parse_i8 : TomlDecode, TomlDecode.State -> Try({ value : I8, rest : TomlDecode.State }, [TomlDecode(Str), MissingRequiredField(Str)])
 	parse_i8 = |_, state| integer(state, "I8", |number| if number >= -128 and number <= 127 { Ok(number.to_i8_wrap()) } else { Err(OutOfRange) })
 
-	parse_i16 : TomlDecode, TomlDecode.State -> Try({ value : I16, rest : TomlDecode.State }, [TomlDecode(Str)])
+	parse_i16 : TomlDecode, TomlDecode.State -> Try({ value : I16, rest : TomlDecode.State }, [TomlDecode(Str), MissingRequiredField(Str)])
 	parse_i16 = |_, state| integer(state, "I16", |number| if number >= -32_768 and number <= 32_767 { Ok(number.to_i16_wrap()) } else { Err(OutOfRange) })
 
-	parse_i32 : TomlDecode, TomlDecode.State -> Try({ value : I32, rest : TomlDecode.State }, [TomlDecode(Str)])
+	parse_i32 : TomlDecode, TomlDecode.State -> Try({ value : I32, rest : TomlDecode.State }, [TomlDecode(Str), MissingRequiredField(Str)])
 	parse_i32 = |_, state| integer(state, "I32", |number| if number >= -2_147_483_648 and number <= 2_147_483_647 { Ok(number.to_i32_wrap()) } else { Err(OutOfRange) })
 
-	parse_i64 : TomlDecode, TomlDecode.State -> Try({ value : I64, rest : TomlDecode.State }, [TomlDecode(Str)])
+	parse_i64 : TomlDecode, TomlDecode.State -> Try({ value : I64, rest : TomlDecode.State }, [TomlDecode(Str), MissingRequiredField(Str)])
 	parse_i64 = |_, state| integer(state, "I64", |number| Ok(number))
 
-	parse_i128 : TomlDecode, TomlDecode.State -> Try({ value : I128, rest : TomlDecode.State }, [TomlDecode(Str)])
+	parse_i128 : TomlDecode, TomlDecode.State -> Try({ value : I128, rest : TomlDecode.State }, [TomlDecode(Str), MissingRequiredField(Str)])
 	parse_i128 = |_, state| integer(state, "I128", |number| Ok(number.to_i128()))
 
 	## Integers are accepted where a float is expected, as in `timeout = 30`.
-	parse_f64 : TomlDecode, TomlDecode.State -> Try({ value : F64, rest : TomlDecode.State }, [TomlDecode(Str)])
+	parse_f64 : TomlDecode, TomlDecode.State -> Try({ value : F64, rest : TomlDecode.State }, [TomlDecode(Str), MissingRequiredField(Str)])
 	parse_f64 = |_, state| {
 		(next, rest) = take_value(state)?
 		match next.value {
@@ -97,13 +100,13 @@ TomlDecode := [Default].{
 		}
 	}
 
-	parse_f32 : TomlDecode, TomlDecode.State -> Try({ value : F32, rest : TomlDecode.State }, [TomlDecode(Str)])
+	parse_f32 : TomlDecode, TomlDecode.State -> Try({ value : F32, rest : TomlDecode.State }, [TomlDecode(Str), MissingRequiredField(Str)])
 	parse_f32 = |format, state| {
 		parsed = TomlDecode.parse_f64(format, state)?
 		Ok({ value: parsed.value.to_f32_wrap(), rest: parsed.rest })
 	}
 
-	parse_list_start : TomlDecode, TomlDecode.State -> Try([Counted({ len : U64, rest : TomlDecode.State }), Uncounted(TomlDecode.State)], [TomlDecode(Str)])
+	parse_list_start : TomlDecode, TomlDecode.State -> Try([Counted({ len : U64, rest : TomlDecode.State }), Uncounted(TomlDecode.State)], [TomlDecode(Str), MissingRequiredField(Str)])
 	parse_list_start = |_, state| {
 		(next, rest) = take_value(state)?
 		match next.value {
@@ -116,13 +119,13 @@ TomlDecode := [Default].{
 	}
 
 	## Never called: arrays are always counted.
-	parse_list_next : TomlDecode, TomlDecode.State -> Try([Item(TomlDecode.State), Done(TomlDecode.State)], [TomlDecode(Str)])
+	parse_list_next : TomlDecode, TomlDecode.State -> Try([Item(TomlDecode.State), Done(TomlDecode.State)], [TomlDecode(Str), MissingRequiredField(Str)])
 	parse_list_next = |_, state| Err(failure(top_path(state), "internal error: uncounted array"))
 
-	parse_list_after_item : TomlDecode, TomlDecode.State -> Try([Continue(TomlDecode.State), Done(TomlDecode.State)], [TomlDecode(Str)])
+	parse_list_after_item : TomlDecode, TomlDecode.State -> Try([Continue(TomlDecode.State), Done(TomlDecode.State)], [TomlDecode(Str), MissingRequiredField(Str)])
 	parse_list_after_item = |_, state| Err(failure(top_path(state), "internal error: uncounted array"))
 
-	parse_record_start : TomlDecode, TomlDecode.State -> Try([Counted({ len : U64, rest : TomlDecode.State }), Uncounted(TomlDecode.State)], [TomlDecode(Str)])
+	parse_record_start : TomlDecode, TomlDecode.State -> Try([Counted({ len : U64, rest : TomlDecode.State }), Uncounted(TomlDecode.State)], [TomlDecode(Str), MissingRequiredField(Str)])
 	parse_record_start = |_, state| open_table(state)
 
 	parse_record_field : TomlDecode,
@@ -135,7 +138,7 @@ TomlDecode := [Default].{
 			Continue(TomlDecode.State),
 			Done(TomlDecode.State),
 		],
-		[TomlDecode(Str)],
+		[TomlDecode(Str), MissingRequiredField(Str)],
 	)
 	parse_record_field = |_, _, state| {
 		(name, rest) = take_entry(state)?
@@ -143,27 +146,27 @@ TomlDecode := [Default].{
 	}
 
 	## Never called: tables are always counted.
-	parse_record_after_field : TomlDecode, TomlDecode.State -> Try([Continue(TomlDecode.State), Done(TomlDecode.State)], [TomlDecode(Str)])
+	parse_record_after_field : TomlDecode, TomlDecode.State -> Try([Continue(TomlDecode.State), Done(TomlDecode.State)], [TomlDecode(Str), MissingRequiredField(Str)])
 	parse_record_after_field = |_, state| Err(failure(top_path(state), "internal error: uncounted table"))
 
 	## A key that the record does not have: a typo in a settings file should
 	## stop the program, not be silently ignored.
-	skip_record_field : TomlDecode, TomlDecode.State -> Try(TomlDecode.State, [TomlDecode(Str)])
+	skip_record_field : TomlDecode, TomlDecode.State -> Try(TomlDecode.State, [TomlDecode(Str), MissingRequiredField(Str)])
 	skip_record_field = |_, state| Err(failure(top_path(state), "unknown key"))
 
-	parse_dict_start : TomlDecode, TomlDecode.State -> Try([Counted({ len : U64, rest : TomlDecode.State }), Uncounted(TomlDecode.State)], [TomlDecode(Str)])
+	parse_dict_start : TomlDecode, TomlDecode.State -> Try([Counted({ len : U64, rest : TomlDecode.State }), Uncounted(TomlDecode.State)], [TomlDecode(Str), MissingRequiredField(Str)])
 	parse_dict_start = |_, state| open_table(state)
 
-	parse_dict_next : TomlDecode, TomlDecode.State -> Try([Entry(TomlDecode.State), Done(TomlDecode.State)], [TomlDecode(Str)])
+	parse_dict_next : TomlDecode, TomlDecode.State -> Try([Entry(TomlDecode.State), Done(TomlDecode.State)], [TomlDecode(Str), MissingRequiredField(Str)])
 	parse_dict_next = |_, state| Err(failure(top_path(state), "internal error: uncounted table"))
 
-	parse_dict_after_key : TomlDecode, TomlDecode.State -> Try(TomlDecode.State, [TomlDecode(Str)])
+	parse_dict_after_key : TomlDecode, TomlDecode.State -> Try(TomlDecode.State, [TomlDecode(Str), MissingRequiredField(Str)])
 	parse_dict_after_key = |_, state| Ok(state)
 
-	parse_dict_after_entry : TomlDecode, TomlDecode.State -> Try([Continue(TomlDecode.State), Done(TomlDecode.State)], [TomlDecode(Str)])
+	parse_dict_after_entry : TomlDecode, TomlDecode.State -> Try([Continue(TomlDecode.State), Done(TomlDecode.State)], [TomlDecode(Str), MissingRequiredField(Str)])
 	parse_dict_after_entry = |_, state| Err(failure(top_path(state), "internal error: uncounted table"))
 
-	parse_key_str : TomlDecode, TomlDecode.State -> Try({ value : Str, rest : TomlDecode.State }, [TomlDecode(Str)])
+	parse_key_str : TomlDecode, TomlDecode.State -> Try({ value : Str, rest : TomlDecode.State }, [TomlDecode(Str), MissingRequiredField(Str)])
 	parse_key_str = |_, state| {
 		(name, rest) = take_entry(state)?
 		Ok({ value: name, rest })
@@ -173,7 +176,7 @@ TomlDecode := [Default].{
 	## without a payload is a string, as in `level = "info"`. A tag with
 	## payloads is a table with one key, as in `mode = { fixed = 3 }`; several
 	## payloads are an array.
-	parse_tag_union : TomlDecode, Encoding.ParseTagUnionSpec(a), TomlDecode.State -> Try({ value : a, rest : TomlDecode.State }, [TomlDecode(Str)])
+	parse_tag_union : TomlDecode, Encoding.ParseTagUnionSpec(a, TomlDecode, TomlDecode.State, [TomlDecode(Str), MissingRequiredField(Str)]), TomlDecode.State -> Try({ value : a, rest : TomlDecode.State }, [TomlDecode(Str), MissingRequiredField(Str)])
 	parse_tag_union = |format, spec, state| {
 		(next, rest) = take_value(state)?
 		unknown = failure(next.path, "unknown variant")
