@@ -1121,6 +1121,9 @@ fn addHostBuild(b: *std.Build, roc_target: []const u8, contract_alloc: bool, opt
     build_tls.addFileArg(b.path("tools/build-mbedtls.sh"));
     build_tls.addFileArg(archive);
     build_tls.addArgs(&.{ b.graph.zig_exe, zigTargetOf(roc_target).? });
+    build_tls.addDirectoryArg(b.path("platform/host/inbound_tls"));
+    build_tls.addFileInput(b.path("platform/host/inbound_tls/credentials.c"));
+    build_tls.addFileInput(b.path("platform/host/inbound_tls/credentials.h"));
     const tls = build_tls.addOutputDirectoryArg("tls");
     const archive_host = b.addSystemCommand(&.{"bash"});
     archive_host.addFileArg(b.path("tools/archive-host.sh"));

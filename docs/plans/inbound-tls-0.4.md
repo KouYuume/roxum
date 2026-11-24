@@ -39,6 +39,10 @@ host's readiness and deadline machinery. The existing
 
 ## 3. Configure credentials and admit connections
 
+The packaged host includes a worker-owned credential configuration. The
+[trial listener](inbound-tls-packaging.md#intact-host-trial) exercises startup
+failure and reuses the validated pair across sessions.
+
 Add an opt-in TCP listener setting with certificate chain and private key paths.
 Define the protocol choice alongside existing cleartext settings, handshake
 timeout and concurrency limit, their defaults and valid ranges. Validate

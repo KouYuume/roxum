@@ -13,6 +13,7 @@ trap 'rm -rf "$work"' EXIT
     ln -s "$tls" tls
     "$zig" ar -M <<'MRI'
 create libhost.a
+addmod tls/credentials.o
 addmod host.o
 addmod nghttp2.o
 addlib tls/libmbedtls.a

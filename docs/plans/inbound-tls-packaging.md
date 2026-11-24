@@ -34,7 +34,10 @@ and inserts one hook after TCP accept. With trial credentials, the worker
 drives a handshake on the accepted socket and closes it. Without credentials,
 the same executable serves the hello route. The app uses the complete archive
 from the extracted bundle, including its normal host entry point and the TLS
-engine. The test hook polls synchronously and loads credentials per connection.
+engine. The trial worker loads its certificate chain and matching private key before
+reporting readiness. Its TLS sessions borrow that configuration until worker
+shutdown. Replacing credential files takes effect on the next worker start.
+The test hook polls synchronously.
 Production admission, readiness scheduling and encrypted HTTP remain separate
 steps in the [0.4 plan](inbound-tls-0.4.md).
 

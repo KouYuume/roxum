@@ -70,6 +70,11 @@ for target in arm64mac arm64musl x64musl; do
         fi
         probe_flags=(-Wall -Wextra -Werror -Os $c_flags -I"$src/include" -I"$src/tf-psa-crypto/include"
                      -I"$src/tf-psa-crypto/drivers/builtin/include" -I"$PWD/build/tf-psa-crypto/include")
+        adapter="$probe_dir/../../platform/host/inbound_tls"
+        probe_flags+=(-I"$adapter")
+        if ! "$host_trial"; then
+            ./cc "${probe_flags[@]}" -c "$adapter/credentials.c" -o credentials.o
+        fi
         ./cc "${probe_flags[@]}" -c "$probe_dir/mbedtls-server.c" -o server.o
         if "$host_trial"; then
             ./cc "${probe_flags[@]}" -DROXUM_TRIAL_HOST -c "$probe_dir/mbedtls-server.c" -o tls-trial.o

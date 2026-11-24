@@ -21,5 +21,8 @@ for target in "${targets[@]}"; do
     # private link copy; hello above uses the complete extracted archive.
     cp "extracted/targets/$target/libhost.a" "$target/probe.a"
     zig ar d "$target/probe.a" host.o
-    zig cc "${link_flags[@]}" "$target/server.o" "$target/probe.a" -o "$target/server"
+    probe_objects=("$target/server.o")
+    # The baseline 0.3 archive predates the credential adapter.
+    if [[ -f "$target/credentials.o" ]]; then probe_objects+=("$target/credentials.o"); fi
+    zig cc "${link_flags[@]}" "${probe_objects[@]}" "$target/probe.a" -o "$target/server"
 done
