@@ -8,6 +8,8 @@ HTTP/2 I/O and all four uncompressed gRPC server call forms.
 
 ## 0.4 — inbound TLS
 
+See the [0.4 implementation and acceptance plan](inbound-tls-0.4.md).
+
 Add TLS to TCP listeners and negotiate HTTP/1.1 or HTTP/2 through ALPN.
 Define certificate and key configuration, startup failures, certificate
 renewal procedures, handshake deadlines and concurrent handshake limits.
