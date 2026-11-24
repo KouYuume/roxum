@@ -31,7 +31,7 @@ See the OpenSSL [handshake](https://docs.openssl.org/3.5/man3/SSL_accept/) and
 
 ## 2. Select and package the server engine
 
-Use OpenSSL as the first candidate. Reuse the host's readiness and deadline
+The [static packaging trial](inbound-tls-packaging.md) evaluates OpenSSL as the first candidate. Reuse the host's readiness and deadline
 machinery; its [outbound TLS module](../../platform/host/tls.zig) wraps a
 client session. Before committing to an engine, pin the source and verify
 licensing, update procedure, randomness, cross-builds and static linking into

@@ -1,4 +1,5 @@
 """Run the isolated TLS server probe with the pinned Zig and a local OpenSSL."""
+import argparse
 import pathlib
 import select
 import shlex
@@ -53,14 +54,20 @@ def check(server, cert, key, offers, expected):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--server", type=pathlib.Path, help="exercise a previously linked probe executable")
+    args = parser.parse_args()
     with tempfile.TemporaryDirectory() as directory:
         root = pathlib.Path(directory)
         server, cert, key = (root / name for name in ("server", "cert.pem", "key.pem"))
-        flags = "-lssl -lcrypto"
-        if shutil.which("pkg-config"):
-            flags = subprocess.check_output(["pkg-config", "--cflags", "--libs", "openssl"], text=True)
-        subprocess.run(["zig", "cc", "-Wall", "-Wextra", "-Werror", str(SOURCE),
-                        *shlex.split(flags), "-o", server], check=True)
+        if args.server:
+            server = args.server.resolve()
+        else:
+            flags = "-lssl -lcrypto"
+            if shutil.which("pkg-config"):
+                flags = subprocess.check_output(["pkg-config", "--cflags", "--libs", "openssl"], text=True)
+            subprocess.run(["zig", "cc", "-Wall", "-Wextra", "-Werror", str(SOURCE),
+                            *shlex.split(flags), "-o", server], check=True)
         subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
                         "-keyout", key, "-out", cert, "-days", "1", "-subj", "/CN=localhost",
                         "-addext", "subjectAltName=DNS:localhost"], check=True, stdout=subprocess.DEVNULL,
