@@ -29,6 +29,7 @@ These documents describe the current implementation, its invariants, and the pro
 These documents describe implementation plans, acceptance evidence, and remaining
 gates. Completed evidence is distinguished from proposed capabilities.
 
+- [Roadmap to 1.0](plans/roadmap-to-1.0.md) covers inbound TLS, HTTP feature completion, performance, refactoring and release criteria.
 - [gRPC server support](plans/grpc.md): host/integration boundaries, transport, codec, and service milestones
 - [0.3 gRPC streaming](plans/grpc-streaming-0.3.md): production acceptance, distribution, and release gates
 - [Protobuf codec and generator assessment](plans/protobuf-codegen.md): reuse inventory, design decision, and codec acceptance evidence
