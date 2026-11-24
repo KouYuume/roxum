@@ -1015,13 +1015,23 @@ fn RequestFiber(comptime Environment: type) type {
             return if (protocol.streams.leases.runningStream(ticket) == null) 3 else 0;
         }
 
-        fn decodeExhausted(ptr: *anyopaque, response: bridge.HttpResponse) void {
+        fn decodeExhausted(ptr: *anyopaque, fallback: abi.HostRequestExecutionDecodeFallback) void {
             const self: *Self = @ptrCast(@alignCast(ptr));
-            if (self.http2_stream_attempted) {
-                response.decref(&self.roc_host);
-                return;
+            switch (fallback.tag) {
+                abi.HostRequestExecutionDecodeFallbackTag.Finite => {
+                    if (self.http2_stream_attempted) return;
+                    const response = fallback.payload_finite();
+                    response.incref(1);
+                    self.submitFiniteHttp2(response, null) catch return;
+                },
+                abi.HostRequestExecutionDecodeFallbackTag.Stream => {
+                    if (!self.http2_stream_started or self.http2_stream_finished) return;
+                    const completion = fallback.payload_stream();
+                    const remaining = completion.remaining.items();
+                    if (remaining.len != 0 and !writeHttp2Stream(self, remaining)) return;
+                    if (finishHttp2Writer(self, completion.trailers.items()) != 0) return;
+                },
             }
-            self.submitFiniteHttp2(response, null) catch return;
             self.decode_response_sent = true;
         }
 

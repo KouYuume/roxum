@@ -94,7 +94,7 @@ pub fn rocCrashed(
     len: usize,
 ) callconv(std.builtin.CallingConvention.c) noreturn {
     if (fiber_wait.onFiber()) {
-        @import("effect/request_execution.zig").discardDecodeResponse();
+        @import("effect/request_execution.zig").discardDecodeFallback();
         diagnostics.requestCrashed(bytes, len);
         fiber_wait.abandonCurrent();
     }
@@ -276,6 +276,18 @@ test "retained decoder allocations use their owner across scopes and fiber suspe
             allocator_context.endDecode();
             rocDealloc(kept, 8);
             try std.testing.expect(target.locals.decoders.heaps.first == null);
+
+            // A fallback can retain an earlier message while stalled on output.
+            try allocator_context.beginDecode();
+            const retained = rocAlloc(16, 8);
+            allocator_context.endDecode();
+            const budget = &@import("allocator/http2_memory.zig").shared;
+            const baseline = budget.used.load(std.builtin.AtomicOrder.monotonic);
+            try allocator_context.beginDecode();
+            _ = rocAlloc(1024, 8);
+            allocator_context.abandonDecode();
+            try std.testing.expectEqual(baseline, budget.used.load(std.builtin.AtomicOrder.monotonic));
+            rocDealloc(retained, 8);
 
             // Cancellation can leave both a retained message and an active one.
             try allocator_context.beginDecode();

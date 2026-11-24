@@ -10,8 +10,8 @@ pub const Active = struct {
     /// Null duration reads elapsed time; a duration also tightens the deadline.
     /// Null result means execution ended and must not return to application code.
     apply: *const fn (*anyopaque, ?u64) ?u64,
-    decode_response: ?abi.HttpResponse = null,
-    on_decode_exhausted: ?*const fn (*anyopaque, abi.HttpResponse) void = null,
+    decode_fallback: ?abi.HostRequestExecutionDecodeFallback = null,
+    on_decode_exhausted: ?*const fn (*anyopaque, abi.HostRequestExecutionDecodeFallback) void = null,
     limit_trailers: ?*const fn (*anyopaque, u64, []const abi.HttpResponseHeader) u8 = null,
     limit_response: ?*const fn (*anyopaque, u64, abi.HttpResponse, *abi.RocHost) Result = null,
 };
@@ -58,45 +58,44 @@ pub fn hostedBeginDecode(bytes: abi.RocListWith(u8, false)) callconv(std.builtin
     return result;
 }
 
-pub fn hostedBeginDecodeWithResponse(bytes: abi.RocListWith(u8, false), response: abi.HttpResponse) callconv(std.builtin.CallingConvention.c) abi.HostRequestExecutionDecodeInput {
+pub fn hostedBeginDecodeWithFallback(bytes: abi.RocListWith(u8, false), fallback: abi.HostRequestExecutionDecodeFallback) callconv(std.builtin.CallingConvention.c) abi.HostRequestExecutionDecodeInput {
     const result = hostedBeginDecode(bytes);
     if (result.tag == abi.HostRequestExecutionDecodeInputTag.Input) {
-        fiber.currentLocals().?.request_execution.?.decode_response = response;
-    } else releaseResponse(response);
+        fiber.currentLocals().?.request_execution.?.decode_fallback = fallback;
+    } else releaseFallback(fallback);
     return result;
 }
 
-fn releaseResponse(response: abi.HttpResponse) void {
+fn releaseFallback(fallback: abi.HostRequestExecutionDecodeFallback) void {
     const context = @import("../allocator/context.zig").current().?;
     var host = @import("../runtime.zig").makeRocHost(@ptrCast(context.host_allocator));
-    response.decref(&host);
+    fallback.decref(&host);
 }
 
-fn takeDecodeResponse() ?abi.HttpResponse {
-    const locals = fiber.currentLocals() orelse return null;
-    const execution = if (locals.request_execution) |*value| value else return null;
-    const response = execution.decode_response;
-    execution.decode_response = null;
-    return response;
-}
-
-pub fn discardDecodeResponse() void {
-    if (takeDecodeResponse()) |response| releaseResponse(response);
+pub fn discardDecodeFallback() void {
+    const locals = fiber.currentLocals() orelse return;
+    const execution = if (locals.request_execution) |*value| value else return;
+    const fallback = execution.decode_fallback orelse return;
+    execution.decode_fallback = null;
+    releaseFallback(fallback);
 }
 
 pub fn decodeExhausted() void {
-    const response = takeDecodeResponse() orelse return;
-    @import("../allocator/context.zig").endDecode();
-    const execution = active().?;
+    const execution = active() orelse return;
+    const fallback = execution.decode_fallback orelse return;
+    @import("../allocator/context.zig").abandonDecode();
     if (execution.on_decode_exhausted) |send| {
-        send(execution.context, response);
+        // The fiber owns the borrowed completion through writer waits. A
+        // cancellation drops it before abandoning the stack.
+        send(execution.context, fallback);
+        discardDecodeFallback();
         fiber_wait.abandonCurrent();
     }
-    releaseResponse(response);
+    discardDecodeFallback();
 }
 
 pub fn hostedEndDecode() callconv(std.builtin.CallingConvention.c) void {
-    discardDecodeResponse();
+    discardDecodeFallback();
     @import("../allocator/context.zig").endDecode();
 }
 

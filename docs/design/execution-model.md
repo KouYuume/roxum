@@ -20,9 +20,13 @@ releases the heap, and request teardown reclaims any remaining heaps.
 `RequestExecution.decode_bytes_with_response!` gives the host a finite HTTP/2
 response before the pure callback runs. On an allocation failure inside the
 callback the host leaves the decode scope, submits that response if output
-has not started, and abandons the fiber. Request teardown reclaims partially
-constructed values. A normal return drops the fallback. A codec crash and
+has not started, and abandons the fiber. The host releases the failed message heap before sending the fallback. A normal return drops the fallback. A codec crash and
 an expired or closed stream retain their existing termination behavior.
+
+`decode_bytes_with_completion!` registers remaining output bytes and trailers
+for a streamed response. The request fiber retains both across writer waits,
+then releases them on completion or cancellation. Only storage from before
+the failed callback can be referenced by the completion.
 
 Only allocation chooses a domain from the active context. Reallocation and deallocation use the pointer's recorded domain, never the current execution phase. Reallocation preserves domain and generation. A stale request generation detects use after reset. Contract tests exercise power-of-two alignments 1, 2, 4, 8, 16, and 32.
 

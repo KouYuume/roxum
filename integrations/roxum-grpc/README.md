@@ -8,10 +8,10 @@ the [wire reference](WIRE.md).
 
 All four method forms copy each request payload into an 8 MiB decoder heap
 before calling the Protobuf codec. The input and fresh decode allocations
-share this limit. Admission or input-copy exhaustion returns
-`RESOURCE_EXHAUSTED`. Unary, server-streaming and client-streaming RPCs also return
-this status for allocation failure inside the codec. Such a failure abandons
-a bidirectional RPC. Codec validation errors return `INVALID_ARGUMENT`.
+share this limit. Heap admission, input-copy or codec allocation failure returns
+`RESOURCE_EXHAUSTED`. A bidirectional RPC completes any partially written
+outbound message before sending the error trailers. Delivery remains subject
+to cancellation, deadlines and transport capacity. Codec validation errors return `INVALID_ARGUMENT`.
 
 ## Typed Unary services
 Generate codecs alone with the existing `wire=<path>` option. To also generate

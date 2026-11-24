@@ -3,7 +3,8 @@ import Http
 HostRequestExecution := [].{
 	DecodeInput := [Input(List(U8)), Unavailable, Exhausted]
 	begin_decode! : List(U8) => HostRequestExecution.DecodeInput
-	begin_decode_with_response! : List(U8), Http.Response => HostRequestExecution.DecodeInput
+	DecodeFallback := [Finite(Http.Response), Stream({ remaining : List(U8), trailers : List(Http.ResponseHeader) })]
+	begin_decode_with_fallback! : List(U8), HostRequestExecution.DecodeFallback => HostRequestExecution.DecodeInput
 	end_decode! : {} => {}
 	Elapsed := [Elapsed(U64), Unavailable]
 	elapsed_nanoseconds! : {} => HostRequestExecution.Elapsed

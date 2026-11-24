@@ -41,7 +41,7 @@ The [gRPC roadmap](grpc.md) records responsibilities and excluded features.
 
 ## Release completion
 
-**Open allocation limit.** The target is an 8 MiB allocation budget per decoded
+Each decoder has an 8 MiB allocation budget per decoded
 message, including nested values and temporary copies, with retained decoder
 storage charged against the shared worker ceiling. The
 [decoder heap](../../platform/host/allocator/decode_heap.zig) charges value buffers
@@ -55,9 +55,11 @@ All four RPC forms copy the payload into the heap before invoking the codec,
 including when a decoder retains its input. Failure to create the heap or
 copy the input yields `RESOURCE_EXHAUSTED`. Unary, server-streaming and
 client-streaming handlers also supply a finite error response for allocation
-failure inside the codec, before output starts. Duplex may already have sent
-part of an envelope. Completing that envelope and reporting codec exhaustion,
-and validating the distributed service, remain open release criteria.
+failure inside the codec, before output starts. A bidirectional handler supplies
+the unsent suffix of an already started envelope and terminal status fields. On codec exhaustion
+the writer drains that suffix under flow control and sends `RESOURCE_EXHAUSTED`.
+The [distribution check](../../tests/release/verify_grpc.py) exercises all four
+forms against the extracted packages.
 
 0.3 is ready for release preparation only when all four RPC forms meet these
 acceptance gates, unsupported features are explicit, and migration/compatibility

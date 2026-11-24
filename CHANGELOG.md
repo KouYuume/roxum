@@ -22,7 +22,7 @@ Changes to the roxum platform and its integrations, newest first. The platform a
 
 ### Added
 
-- `RequestExecution.decode_bytes!` runs a pure HTTP/2 request decoder with an owned input copy. Failure to allocate the heap or copy the input returns `RESOURCE_EXHAUSTED` for all four RPC forms. Unary, server-streaming and client-streaming decoders use `decode_bytes_with_response!` to send this status on allocation failure inside the codec.
+- `RequestExecution.decode_bytes!` runs a pure HTTP/2 request decoder with an owned input copy. Failure to allocate the heap or copy the input returns `RESOURCE_EXHAUSTED` for all four RPC forms. Unary, server-streaming and client-streaming decoders use `decode_bytes_with_response!` to send this status on allocation failure inside the codec. Bidirectional decoders use `decode_bytes_with_completion!` to finish an already started outbound message before sending the error trailers.
 
 - A `Handler.typed` field that holds the reply of a field that failed can be typed `Try(_, Reply)`, so `?` sends that reply. `[Ok(_), Err(Reply)]` still works.
 - HTTP/2 supports incremental request and response bodies, explicit response trailers, deadline trailers and independent input/output readiness through `Handler.duplex`.

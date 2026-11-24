@@ -22,7 +22,16 @@ RequestExecution := [].{
 	## Delivery is subject to cancellation, deadlines and transport capacity.
 	decode_bytes_with_response! : List(U8), Http.Response, (List(U8) -> value) => Try(value, [Unavailable, Exhausted])
 	decode_bytes_with_response! = |bytes, response, decode|
-		run_decode!(HostRequestExecution.begin_decode_with_response!(bytes, response), decode)
+		run_decode!(HostRequestExecution.begin_decode_with_fallback!(bytes, HostRequestExecution.DecodeFallback.Finite(response)), decode)
+
+	## On allocation failure inside the codec, finish an active HTTP/2 writer
+	## with the unsent bytes of an already started message and then its trailers.
+	## Supply empty remaining bytes at a message boundary. Output obeys normal
+	## flow control, cancellation and deadlines. With no open writer, exhaustion
+	## abandons the request. In either case the failed callback never resumes.
+	decode_bytes_with_completion! : List(U8), { remaining : List(U8), trailers : List(Http.ResponseHeader) }, (List(U8) -> value) => Try(value, [Unavailable, Exhausted])
+	decode_bytes_with_completion! = |bytes, completion, decode|
+		run_decode!(HostRequestExecution.begin_decode_with_fallback!(bytes, HostRequestExecution.DecodeFallback.Stream(completion)), decode)
 
 	## Elapsed monotonic nanoseconds since initial headers completed.
 	## An expired or closed request stops instead of returning to application code.
