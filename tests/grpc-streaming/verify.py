@@ -29,15 +29,32 @@ def verify_decoder_exhaustion(channel):
     submit = channel.stream_unary('/heap/streaming.Uploads/Submit',
                                   request_serializer=messages.Request.SerializeToString,
                                   response_deserializer=messages.Update.FromString)
+    def expect_exhaustion(call):
+        try:
+            call()
+        except grpc.RpcError as exc:
+            assert exc.code() == grpc.StatusCode.RESOURCE_EXHAUSTED and exc.details() == 'message allocation limit', exc
+        else:
+            raise AssertionError('expected decoder allocation limit')
+
     # The frame fits the route limit. Copying its payload exceeds the decoder heap.
-    try:
-        submit(iter([messages.Request(mode='x' * (8 * 1024 * 1024))]), timeout=30)
-    except grpc.RpcError as exc:
-        assert exc.code() == grpc.StatusCode.RESOURCE_EXHAUSTED and exc.details() == 'message allocation limit', exc
-    else:
-        raise AssertionError('decoder accepted an oversized input copy')
+    oversized = messages.Request(mode='x' * (8 * 1024 * 1024))
+    expect_exhaustion(lambda: submit(iter([oversized]), timeout=30))
     result = submit(iter([messages.Request(count=1)]), timeout=5)
     assert result == messages.Update(sequence=1, text='total')
+
+    # These small frames fit the input heap. Only the codec expansion can fail.
+    options = dict(request_serializer=messages.Request.SerializeToString,
+                   response_deserializer=messages.Update.FromString)
+    request = messages.Request(count=8 * 1024 * 1024)
+    calls = [
+        lambda: channel.unary_unary('/heap/echo', **options)(request, timeout=5),
+        lambda: list(channel.unary_stream('/heap/watch', **options)(request, timeout=5)),
+        lambda: channel.stream_unary('/heap/submit', **options)(iter([request]), timeout=5),
+    ]
+    for call in calls:
+        expect_exhaustion(call)
+        assert submit(iter([messages.Request(count=1)]), timeout=5) == result
 
 
 def verify_duplex(channel):

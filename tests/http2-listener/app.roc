@@ -83,7 +83,7 @@ routes : Router(Model, [], {})
 routes = {
 	handler = Handler.effectful(wait_and_answer!)
 	methods = MethodRouter.methods([MethodRouter.get(handler), MethodRouter.post(handler)])
-	Router.new.route("/stream-finish-http1", methods).route("/stream-finish", methods).route("/stream-finish-empty", methods).route("/stream-terminal-expiry", methods).route("/stream-terminal-pending", methods).route("/stream-terminal-wins", methods).route("/stream-no-content", methods).route("/stream-reset-content", methods).route("/stream-not-modified", methods).route("/stream-options", methods).route("/stream-output", methods).route("/stream-empty", methods).route("/stream-large", methods).route("/stream-expiry", methods).route("/stream-crash", methods).route("/stream-cancel", methods).route("/trailers", methods).route("/empty-trailers", methods).route("/invalid-trailers", methods).route("/echo", methods).route("/reject", methods).route("/invalid-response", methods).route("/sleep", methods).route("/cancel", methods).route("/permit", methods).route("/tcp", methods).route("/tcp-cancel", methods).route("/id", methods).route("/debug", methods).route("/debug-many", methods).route("/crash", methods).route("/decode-input", methods).route("/execution-elapsed", methods).route("/execution-zero", methods).route("/execution-stale", methods).route("/execution-limit", methods).route("/execution-cap", methods).route("/execution-unavailable", methods).route("/expiry-zero", methods).route("/expiry-invalid", methods).route("/expiry-replace", methods).route("/expiry-normal", methods)
+	Router.new.route("/stream-finish-http1", methods).route("/stream-finish", methods).route("/stream-finish-empty", methods).route("/stream-terminal-expiry", methods).route("/stream-terminal-pending", methods).route("/stream-terminal-wins", methods).route("/stream-no-content", methods).route("/stream-reset-content", methods).route("/stream-not-modified", methods).route("/stream-options", methods).route("/stream-output", methods).route("/stream-empty", methods).route("/stream-large", methods).route("/stream-expiry", methods).route("/stream-crash", methods).route("/stream-cancel", methods).route("/trailers", methods).route("/empty-trailers", methods).route("/invalid-trailers", methods).route("/echo", methods).route("/reject", methods).route("/invalid-response", methods).route("/sleep", methods).route("/cancel", methods).route("/permit", methods).route("/tcp", methods).route("/tcp-cancel", methods).route("/id", methods).route("/debug", methods).route("/debug-many", methods).route("/crash", methods).route("/decode-crash", methods).route("/decode-input", methods).route("/execution-elapsed", methods).route("/execution-zero", methods).route("/execution-stale", methods).route("/execution-limit", methods).route("/execution-cap", methods).route("/execution-unavailable", methods).route("/expiry-zero", methods).route("/expiry-invalid", methods).route("/expiry-replace", methods).route("/expiry-normal", methods)
 		.route("/metadata-reject", MethodRouter.post(handler).layer([Middleware.Stage.BeforeBody(|_model, _head| Err(Reply.status(403)))]))
 		.route("/metadata-reject-body", MethodRouter.post(handler).layer([Middleware.Stage.BeforeBody(|_model, _head| Err(Reply.text("denied").with_status(403)))]))
 		.route("/metadata-reject-trailers", MethodRouter.post(handler).layer([Middleware.Stage.BeforeBody(|_model, _head| Err(Reply.text("denied").with_status(403).with_trailers([ResponseHeader.{ name: HeaderName.("x-result"), value: "done" }])))]))
@@ -451,6 +451,17 @@ wait_and_answer! = |Model.(state), context| {
 	if path == "/execution-limit" {
 		RequestExecution.limit_nanoseconds!(500_000_000).map_err(|_| Reply.status(500))?
 		RequestExecution.limit_nanoseconds!(U64.highest).map_err(|_| Reply.status(500))?
+	}
+	if path == "/decode-crash" {
+		response = Respond.to_response(Reply.text("decoder allocation failed").with_status(503))
+		value = RequestExecution.decode_bytes_with_response!(path.to_utf8(), response, |bytes| {
+			if bytes.is_empty() {
+				0.U64
+			} else {
+				crash "HTTP/2 decoder failure"
+			}
+		}).map_err(|_| Reply.status(500))?
+		return Ok(Reply.text(value.to_str()))
 	}
 	if context.request.path == "/crash" {
 		crash "HTTP/2 handler failure"

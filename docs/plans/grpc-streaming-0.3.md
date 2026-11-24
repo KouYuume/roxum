@@ -50,13 +50,14 @@ only toward the worker ceiling. Its tests cover allocation
 headers, overlapping buffers during growth, competition with transport storage
 and request cleanup. The [host allocation context](../design/execution-model.md#allocation-domains)
 routes fresh allocations inside a decode scope to the message heap. Reallocations
-and frees follow the original owner even in a later callback. All four RPC forms call `RequestExecution.decode_bytes!`, which copies the
-payload into the message heap before invoking the codec. This includes storage
-retained by a decoder returning its input. Failure to create the heap or copy
-the input yields `RESOURCE_EXHAUSTED`. Exhaustion during the pure callback
-still follows the Roc allocation failure path and abandons the request.
-Reporting that failure on the RPC path and validating the distributed service
-remain open release criteria.
+and frees follow the original owner even in a later callback.
+All four RPC forms copy the payload into the heap before invoking the codec,
+including when a decoder retains its input. Failure to create the heap or
+copy the input yields `RESOURCE_EXHAUSTED`. Unary, server-streaming and
+client-streaming handlers also supply a finite error response for allocation
+failure inside the codec, before output starts. Duplex may already have sent
+part of an envelope. Completing that envelope and reporting codec exhaustion,
+and validating the distributed service, remain open release criteria.
 
 0.3 is ready for release preparation only when all four RPC forms meet these
 acceptance gates, unsupported features are explicit, and migration/compatibility

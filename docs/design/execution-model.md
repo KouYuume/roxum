@@ -17,6 +17,13 @@ the same prefix size. A request fiber retains its message heaps across suspensio
 a decode scope releases an empty heap immediately. Otherwise its last free
 releases the heap, and request teardown reclaims any remaining heaps.
 
+`RequestExecution.decode_bytes_with_response!` gives the host a finite HTTP/2
+response before the pure callback runs. On an allocation failure inside the
+callback the host leaves the decode scope, submits that response if output
+has not started, and abandons the fiber. Request teardown reclaims partially
+constructed values. A normal return drops the fallback. A codec crash and
+an expired or closed stream retain their existing termination behavior.
+
 Only allocation chooses a domain from the active context. Reallocation and deallocation use the pointer's recorded domain, never the current execution phase. Reallocation preserves domain and generation. A stale request generation detects use after reset. Contract tests exercise power-of-two alignments 1, 2, 4, 8, 16, and 32.
 
 The production request allocator reuses freed capacity. Small values up to 1 KiB with alignment at most 16 use slabs; empty slabs return their pages to the block cache. Larger allocations use page-rounded blocks. Blocks above the cache size or alignment limits return directly to the backing allocator. Reset releases remaining live allocations and advances the generation; deinit releases caches as well. A cloned worker starts with an independent empty cache.

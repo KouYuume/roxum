@@ -15,15 +15,14 @@ RequestExecution := [].{
 	## inside the callback abandons the request under the Roc allocator contract.
 	decode_bytes! : List(U8), (List(U8) -> value) => Try(value, [Unavailable, Exhausted])
 	decode_bytes! = |bytes, decode|
-		match HostRequestExecution.begin_decode!(bytes) {
-			Input(owned) => {
-				value = decode(owned)
-				HostRequestExecution.end_decode!({})
-				Ok(value)
-			}
-			Unavailable => Err(Unavailable)
-			Exhausted => Err(Exhausted)
-		}
+		run_decode!(HostRequestExecution.begin_decode!(bytes), decode)
+
+	## On allocation failure inside the codec, abandon the request and send the
+	## supplied finite response if output has not started.
+	## Delivery is subject to cancellation, deadlines and transport capacity.
+	decode_bytes_with_response! : List(U8), Http.Response, (List(U8) -> value) => Try(value, [Unavailable, Exhausted])
+	decode_bytes_with_response! = |bytes, response, decode|
+		run_decode!(HostRequestExecution.begin_decode_with_response!(bytes, response), decode)
 
 	## Elapsed monotonic nanoseconds since initial headers completed.
 	## An expired or closed request stops instead of returning to application code.
@@ -84,3 +83,14 @@ RequestExecution := [].{
 		}
 
 }
+
+run_decode! = |input, decode|
+	match input {
+		Input(owned) => {
+			value = decode(owned)
+			HostRequestExecution.end_decode!({})
+			Ok(value)
+		}
+		Unavailable => Err(Unavailable)
+		Exhausted => Err(Exhausted)
+	}

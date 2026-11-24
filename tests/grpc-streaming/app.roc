@@ -2,6 +2,7 @@ app [program] { grpc: "../../integrations/roxum-grpc/package/main.roc", pf: plat
 import pf.Config
 import pf.IpAddr
 import service.ExchangeService
+import pf.MethodRouter
 import pf.Router
 import pf.Server
 import pf.RateCounter
@@ -45,7 +46,23 @@ duplex_limits = { ..GrpcServerStream.defaults, messages: 8, payload_bytes: 65544
 
 heap_uploads = UploadsService.register(Router.new, { call_submit!: submit! }, { ..GrpcServerStream.defaults, request_bytes: 9 * 1024 * 1024 }, ProtobufWire.default_limits)
 
-routes = ExchangeService.register(uploads, { duplex_chat: chat }, duplex_limits, ProtobufWire.default_limits).nest("/heap", heap_uploads)
+# A short wire request controls how much memory the pure codec allocates.
+expand_request = |bytes| {
+	Request.(value) = Request.decode(bytes, ProtobufWire.default_limits)?
+	Ok(Request.{ ..value, mode: Str.repeat("x", value.count.to_u64()) })
+}
+
+heap_updates : UpdatesService.Handlers(Model)
+heap_updates = { call_echo!: echo!, call_watch!: watch! }
+heap_submit : UploadsService.Handlers(Model)
+heap_submit = { call_submit!: submit! }
+
+heap_routes = heap_uploads
+	.route("/echo", MethodRouter.post(GrpcUnary.handler(expand_request, Update.encode, heap_updates.call_echo!, { request_bytes: 1024, response_bytes: 1024, status_bytes: 128, metadata: GrpcMetadata.defaults })))
+	.route("/watch", MethodRouter.post(GrpcServerStream.handler(expand_request, Update.encode, heap_updates.call_watch!, GrpcServerStream.defaults)))
+	.route("/submit", MethodRouter.post(GrpcClientStream.handler(expand_request, Update.encode, heap_submit.call_submit!, GrpcServerStream.defaults)))
+
+routes = ExchangeService.register(uploads, { duplex_chat: chat }, duplex_limits, ProtobufWire.default_limits).nest("/heap", heap_routes)
 
 chat = {
 	begin!: |Model.(model), _metadata| Ok({ state: { gate: model.gate, replies: [], count_reads: Bool.False, ended: Bool.False }, initial: [] }),
