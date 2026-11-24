@@ -2361,6 +2361,67 @@ comptime {
     }
 }
 
+/// Tag discriminant for HostRequestExecution.DecodeInput.
+pub const HostRequestExecutionDecodeInputTag = enum(u8) {
+    @"Exhausted" = 0,
+    @"Input" = 1,
+    @"Unavailable" = 2,
+};
+
+/// Payload union for HostRequestExecution.DecodeInput.
+pub const HostRequestExecutionDecodeInputPayload = extern union {
+        @"exhausted": [0]u8,
+        @"input": RocListWith(u8, false),
+        @"unavailable": [0]u8,
+};
+
+/// Tag union: HostRequestExecution.DecodeInput
+pub const HostRequestExecutionDecodeInput = if (@sizeOf(usize) == 4) extern struct {
+    payload: [12]u8 align(4),
+    tag: HostRequestExecutionDecodeInputTag,
+    pub fn payload_input(self: *const @This()) RocListWith(u8, false) {
+        const ptr: *const RocListWith(u8, false) = @ptrCast(@alignCast(&self.payload));
+        return ptr.*;
+    }
+    /// Recursively decrement Roc-owned payloads.
+    pub fn decref(self: @This(), roc_host: *RocHost) void {
+        decrefHostRequestExecutionDecodeInput(self, roc_host);
+    }
+
+    /// Increment Roc-owned payloads.
+    pub fn incref(self: @This(), amount: isize) void {
+        increfHostRequestExecutionDecodeInput(self, amount);
+    }
+} else extern struct {
+    payload: HostRequestExecutionDecodeInputPayload,
+    tag: HostRequestExecutionDecodeInputTag,
+    pub fn payload_input(self: *const @This()) RocListWith(u8, false) {
+        return self.payload.@"input";
+    }
+    /// Recursively decrement Roc-owned payloads.
+    pub fn decref(self: @This(), roc_host: *RocHost) void {
+        decrefHostRequestExecutionDecodeInput(self, roc_host);
+    }
+
+    /// Increment Roc-owned payloads.
+    pub fn incref(self: @This(), amount: isize) void {
+        increfHostRequestExecutionDecodeInput(self, amount);
+    }
+};
+
+comptime {
+    if (@sizeOf(usize) == 8) {
+        if (@sizeOf(HostRequestExecutionDecodeInput) != 32) @compileError("HostRequestExecutionDecodeInput size mismatch");
+        if (@alignOf(HostRequestExecutionDecodeInput) != 8) @compileError("HostRequestExecutionDecodeInput alignment mismatch");
+        if (@offsetOf(HostRequestExecutionDecodeInput, "tag") != 24) @compileError("HostRequestExecutionDecodeInput tag offset mismatch");
+    }
+    if (@sizeOf(usize) == 4) {
+        if (@sizeOf(HostRequestExecutionDecodeInput) != 16) @compileError("HostRequestExecutionDecodeInput size mismatch");
+        if (@alignOf(HostRequestExecutionDecodeInput) != 4) @compileError("HostRequestExecutionDecodeInput alignment mismatch");
+        if (@offsetOf(HostRequestExecutionDecodeInput, "tag") != 12) @compileError("HostRequestExecutionDecodeInput tag offset mismatch");
+    }
+}
+
 /// Tag discriminant for HostRequestExecution.Elapsed.
 pub const HostRequestExecutionElapsedTag = enum(u8) {
     @"Elapsed" = 0,
@@ -3734,6 +3795,30 @@ pub const HostLogWriteArgs = extern struct {
     arg1: RocStr,
 };
 
+/// Arguments for HostRateCounter.add!
+/// Roc signature: U64, Str, U64 => HostRateCounter.Counted
+/// Refcounted fields are owned by the hosted function.
+pub const HostRateCounterAddArgs = extern struct {
+    arg0: u64,
+    arg1: RocStr,
+    arg2: u64,
+};
+
+/// Arguments for HostRateCounter.new!
+/// Roc signature: U64, U64 => HostRateCounter.Made
+/// Refcounted fields are owned by the hosted function.
+pub const HostRateCounterNewArgs = extern struct {
+    arg0: u64,
+    arg1: u64,
+};
+
+/// Arguments for HostRequestExecution.begin_decode!
+/// Roc signature: List(U8) => HostRequestExecution.DecodeInput
+/// Refcounted fields are owned by the hosted function.
+pub const HostRequestExecutionBegin_decodeArgs = extern struct {
+    arg0: RocListWith(u8, false),
+};
+
 /// Arguments for HostRequestExecution.limit_nanoseconds!
 /// Roc signature: U64 => Bool
 /// Refcounted fields are owned by the hosted function.
@@ -3755,23 +3840,6 @@ pub const HostRequestExecutionLimit_with_responseArgs = extern struct {
 pub const HostRequestExecutionLimit_with_trailersArgs = extern struct {
     arg0: u64,
     arg1: RocList(HttpResponseHeader),
-};
-
-/// Arguments for HostRateCounter.add!
-/// Roc signature: U64, Str, U64 => HostRateCounter.Counted
-/// Refcounted fields are owned by the hosted function.
-pub const HostRateCounterAddArgs = extern struct {
-    arg0: u64,
-    arg1: RocStr,
-    arg2: u64,
-};
-
-/// Arguments for HostRateCounter.new!
-/// Roc signature: U64, U64 => HostRateCounter.Made
-/// Refcounted fields are owned by the hosted function.
-pub const HostRateCounterNewArgs = extern struct {
-    arg0: u64,
-    arg1: u64,
 };
 
 /// Arguments for HostSecret.derive!
@@ -3810,6 +3878,21 @@ pub const HostSleepUntil_nanosecondsArgs = extern struct {
     arg0: u64,
 };
 
+/// Arguments for HostStream.abort!
+/// Roc signature: U64 => {}
+/// Refcounted fields are owned by the hosted function.
+pub const HostStreamAbortArgs = extern struct {
+    arg0: u64,
+};
+
+/// Arguments for HostStream.finish!
+/// Roc signature: U64, List(Http.ResponseHeader) => U8
+/// Refcounted fields are owned by the hosted function.
+pub const HostStreamFinishArgs = extern struct {
+    arg0: u64,
+    arg1: RocList(HttpResponseHeader),
+};
+
 /// Arguments for HostStream.start!
 /// Roc signature: Http.Response, U64, List(U8), Bool, U64, Bool, Str => U64
 /// Refcounted fields are owned by the hosted function.
@@ -3821,21 +3904,6 @@ pub const HostStreamStartArgs = extern struct {
     arg4: u64,
     arg5: bool,
     arg6: RocStr,
-};
-
-/// Arguments for HostStream.write!
-/// Roc signature: U64, List(U8) => Bool
-/// Refcounted fields are owned by the hosted function.
-pub const HostStreamWriteArgs = extern struct {
-    arg0: u64,
-    arg1: RocListWith(u8, false),
-};
-
-/// Arguments for HostStream.abort!
-/// Roc signature: U64 => {}
-/// Refcounted fields are owned by the hosted function.
-pub const HostStreamAbortArgs = extern struct {
-    arg0: u64,
 };
 
 /// Arguments for HostStream.try_write!
@@ -3855,12 +3923,12 @@ pub const HostBodyWaitArgs = extern struct {
     arg2: u8,
 };
 
-/// Arguments for HostStream.finish!
-/// Roc signature: U64, List(Http.ResponseHeader) => U8
+/// Arguments for HostStream.write!
+/// Roc signature: U64, List(U8) => Bool
 /// Refcounted fields are owned by the hosted function.
-pub const HostStreamFinishArgs = extern struct {
+pub const HostStreamWriteArgs = extern struct {
     arg0: u64,
-    arg1: RocList(HttpResponseHeader),
+    arg1: RocListWith(u8, false),
 };
 
 /// Arguments for HostTcp.acquire!
@@ -4131,10 +4199,10 @@ pub const HostTcpWrite_derivedArgs = extern struct {
 // Platform Type Aliases
 
 pub const HostFilesFileOpenedOpened = __AnonStruct_ffafd7a563bb9a6a;
+pub const HostRateCounterCountedCounted = __AnonStruct_8fa85c66081ab890;
 pub const HttpResponseHeaders = HttpResponseHeader;
 pub const HttpResponseTrailers = HttpResponseHeader;
 pub const HostRequestExecutionLimit_with_trailersArg1 = HttpResponseHeader;
-pub const HostRateCounterCountedCounted = __AnonStruct_8fa85c66081ab890;
 pub const HostStreamFinishArg1 = HttpResponseHeader;
 pub const HostTcpAcquire_originArg0 = __AnonStruct_7534307d805cbbcd;
 pub const HostTcpConfigure_originsArg0 = __AnonStruct_de1446c11164b88b;
@@ -4386,6 +4454,32 @@ pub const HostRateCounterCountedRelease = struct {
 
 pub const __AnonStruct_8fa85c66081ab890Release = struct {
     pub fn release(value: __AnonStruct_8fa85c66081ab890, roc_host: *RocHost) void {
+        value.decref(roc_host);
+    }
+};
+
+fn decrefHostRequestExecutionDecodeInput(value: HostRequestExecutionDecodeInput, roc_host: *RocHost) void {
+    switch (value.tag) {
+        .@"Exhausted" => {},
+        .@"Input" => {
+        value.payload_input().decref(roc_host);
+        },
+        .@"Unavailable" => {},
+    }
+}
+
+fn increfHostRequestExecutionDecodeInput(value: HostRequestExecutionDecodeInput, amount: isize) void {
+    switch (value.tag) {
+        .@"Exhausted" => {},
+        .@"Input" => {
+        value.payload_input().incref(amount);
+        },
+        .@"Unavailable" => {},
+    }
+}
+
+pub const HostRequestExecutionDecodeInputRelease = struct {
+    pub fn release(value: HostRequestExecutionDecodeInput, roc_host: *RocHost) void {
         value.decref(roc_host);
     }
 };
@@ -4936,6 +5030,7 @@ fn rocReleasePolicy(comptime T: type) type {
     if (T == RocListWith(u8, false)) return RocListSpineRelease(RocListWith(u8, false));
     if (T == HostCompressDecompressed) return HostCompressDecompressedRelease;
     if (T == HostFileRead) return HostFileReadRelease;
+    if (T == HostRequestExecutionDecodeInput) return HostRequestExecutionDecodeInputRelease;
     if (T == HttpResponse) return HttpResponseRelease;
     if (T == HttpResponseBody) return HttpResponseBodyRelease;
     if (T == RocList(HttpResponseHeader)) return RocListRelease(RocList(HttpResponseHeader), HttpResponseHeaderRelease);
@@ -5064,9 +5159,32 @@ pub extern fn roxum_log_write(arg0: u8, arg1: RocStr) callconv(.c) void;
 /// Roc signature: {} => U64
 pub extern fn roxum_random_u64() callconv(.c) u64;
 
+/// Hosted symbol for HostRateCounter.add!
+/// Roc signature: U64, Str, U64 => HostRateCounter.Counted
+/// Owned arguments. Release each exactly once before returning, unless it is
+/// moved into storage or into the result:
+///     arg1.decref(roc_host);
+pub extern fn roxum_rate_counter_add(arg0: u64, arg1: RocStr, arg2: u64) callconv(.c) HostRateCounterCounted;
+
+/// Hosted symbol for HostRateCounter.new!
+/// Roc signature: U64, U64 => HostRateCounter.Made
+pub extern fn roxum_rate_counter_new(arg0: u64, arg1: u64) callconv(.c) HostRateCounterMade;
+
+/// Hosted symbol for HostRequestExecution.begin_decode!
+/// Roc signature: List(U8) => HostRequestExecution.DecodeInput
+/// Owned arguments. Release each exactly once before returning, unless it is
+/// moved into storage or into the result:
+///     arg0.decref(roc_host);
+/// The result is owned by Roc: return exactly one owned reference.
+pub extern fn roxum_request_execution_begin_decode(arg0: RocListWith(u8, false)) callconv(.c) HostRequestExecutionDecodeInput;
+
 /// Hosted symbol for HostRequestExecution.elapsed_nanoseconds!
 /// Roc signature: {} => HostRequestExecution.Elapsed
 pub extern fn roxum_request_execution_elapsed() callconv(.c) HostRequestExecutionElapsed;
+
+/// Hosted symbol for HostRequestExecution.end_decode!
+/// Roc signature: {} => {}
+pub extern fn roxum_request_execution_end_decode() callconv(.c) void;
 
 /// Hosted symbol for HostRequestExecution.limit_nanoseconds!
 /// Roc signature: U64 => Bool
@@ -5085,17 +5203,6 @@ pub extern fn roxum_request_execution_limit_with_response(arg0: u64, arg1: HttpR
 /// moved into storage or into the result:
 ///     decrefListOfHttpResponseHeader(arg1, roc_host);
 pub extern fn roxum_request_execution_limit_with_trailers(arg0: u64, arg1: RocList(HttpResponseHeader)) callconv(.c) u8;
-
-/// Hosted symbol for HostRateCounter.add!
-/// Roc signature: U64, Str, U64 => HostRateCounter.Counted
-/// Owned arguments. Release each exactly once before returning, unless it is
-/// moved into storage or into the result:
-///     arg1.decref(roc_host);
-pub extern fn roxum_rate_counter_add(arg0: u64, arg1: RocStr, arg2: u64) callconv(.c) HostRateCounterCounted;
-
-/// Hosted symbol for HostRateCounter.new!
-/// Roc signature: U64, U64 => HostRateCounter.Made
-pub extern fn roxum_rate_counter_new(arg0: u64, arg1: u64) callconv(.c) HostRateCounterMade;
 
 /// Hosted symbol for HostSecret.derive!
 /// Roc signature: U64, List(U8) => List(U8)
@@ -5127,6 +5234,17 @@ pub extern fn roxum_sleep_milliseconds(arg0: u64) callconv(.c) void;
 /// Roc signature: U64 => {}
 pub extern fn roxum_sleep_until(arg0: u64) callconv(.c) void;
 
+/// Hosted symbol for HostStream.abort!
+/// Roc signature: U64 => {}
+pub extern fn roxum_stream_abort(arg0: u64) callconv(.c) void;
+
+/// Hosted symbol for HostStream.finish!
+/// Roc signature: U64, List(Http.ResponseHeader) => U8
+/// Owned arguments. Release each exactly once before returning, unless it is
+/// moved into storage or into the result:
+///     decrefListOfHttpResponseHeader(arg1, roc_host);
+pub extern fn roxum_stream_finish(arg0: u64, arg1: RocList(HttpResponseHeader)) callconv(.c) u8;
+
 /// Hosted symbol for HostStream.start!
 /// Roc signature: Http.Response, U64, List(U8), Bool, U64, Bool, Str => U64
 /// Owned arguments. Release each exactly once before returning, unless it is
@@ -5135,17 +5253,6 @@ pub extern fn roxum_sleep_until(arg0: u64) callconv(.c) void;
 ///     arg2.decref(roc_host);
 ///     arg6.decref(roc_host);
 pub extern fn roxum_stream_start(arg0: HttpResponse, arg1: u64, arg2: RocListWith(u8, false), arg3: bool, arg4: u64, arg5: bool, arg6: RocStr) callconv(.c) u64;
-
-/// Hosted symbol for HostStream.write!
-/// Roc signature: U64, List(U8) => Bool
-/// Owned arguments. Release each exactly once before returning, unless it is
-/// moved into storage or into the result:
-///     arg1.decref(roc_host);
-pub extern fn roxum_stream_write(arg0: u64, arg1: RocListWith(u8, false)) callconv(.c) bool;
-
-/// Hosted symbol for HostStream.abort!
-/// Roc signature: U64 => {}
-pub extern fn roxum_stream_abort(arg0: u64) callconv(.c) void;
 
 /// Hosted symbol for HostStream.try_write!
 /// Roc signature: U64, List(U8) => U8
@@ -5158,12 +5265,12 @@ pub extern fn roxum_stream_try_write(arg0: u64, arg1: RocListWith(u8, false)) ca
 /// Roc signature: U64, U64, U8 => U8
 pub extern fn roxum_stream_wait(arg0: u64, arg1: u64, arg2: u8) callconv(.c) u8;
 
-/// Hosted symbol for HostStream.finish!
-/// Roc signature: U64, List(Http.ResponseHeader) => U8
+/// Hosted symbol for HostStream.write!
+/// Roc signature: U64, List(U8) => Bool
 /// Owned arguments. Release each exactly once before returning, unless it is
 /// moved into storage or into the result:
-///     decrefListOfHttpResponseHeader(arg1, roc_host);
-pub extern fn roxum_stream_finish(arg0: u64, arg1: RocList(HttpResponseHeader)) callconv(.c) u8;
+///     arg1.decref(roc_host);
+pub extern fn roxum_stream_write(arg0: u64, arg1: RocListWith(u8, false)) callconv(.c) bool;
 
 /// Hosted symbol for HostTcp.acquire!
 /// Roc signature: U64 => HostTcp.Acquired

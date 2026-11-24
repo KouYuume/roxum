@@ -1,6 +1,7 @@
 import StreamFrame
 import pf.Handler
 import pf.Reply
+import GrpcDecode
 import GrpcMetadata
 import GrpcStatus
 import GrpcUnary
@@ -58,7 +59,7 @@ GrpcClientStream := [].{
 }
 
 deliver! = |GrpcClientStream.Consumer.(consumer), bytes, decode, limits| {
-	message = decode(bytes).map_err(|_| error_reply(GrpcStatus.Code.InvalidArgument, "invalid Protobuf message"))?
+	message = GrpcDecode.message!(bytes, decode).map_err(|(code, detail)| error_reply(code, detail))?
 	(consumer.message!)(message).map_err(|problem| failure(problem, limits))
 }
 

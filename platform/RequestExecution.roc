@@ -9,6 +9,22 @@ import Http
 ## a deadline before waiting for input; ordinary handlers run after body EOF.
 RequestExecution := [].{
 
+	## Copies the input into an 8 MiB message heap before calling a pure decoder.
+	## Returned values may retain that copy until request cleanup. Exhausted means
+	## the host could not start the heap or copy the input. Allocation failure
+	## inside the callback abandons the request under the Roc allocator contract.
+	decode_bytes! : List(U8), (List(U8) -> value) => Try(value, [Unavailable, Exhausted])
+	decode_bytes! = |bytes, decode|
+		match HostRequestExecution.begin_decode!(bytes) {
+			Input(owned) => {
+				value = decode(owned)
+				HostRequestExecution.end_decode!({})
+				Ok(value)
+			}
+			Unavailable => Err(Unavailable)
+			Exhausted => Err(Exhausted)
+		}
+
 	## Elapsed monotonic nanoseconds since initial headers completed.
 	## An expired or closed request stops instead of returning to application code.
 	elapsed_nanoseconds! : {} => Try(U64, [Unavailable])

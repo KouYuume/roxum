@@ -606,7 +606,10 @@ def verify_execution_limit(executable, unix, request_limits=False, metadata=Fals
                             request(stream, route)
                             receive(lambda: stream in reset)
                             assert stream not in headers
-                        blocked = 9
+                        request(9, '/decode-input')
+                        receive(lambda: 9 in ended or 9 in reset)
+                        assert 9 in ended and headers[9][':status'] == '200' and bodies[9] == b'/decode-input'
+                        blocked = 11
                     else:
                         # Incomplete input expires before its crashing handler can run.
                         request(1, '/crash', end=False)
