@@ -1,9 +1,9 @@
 # Generated streaming contracts
 
 Run `python3 tools/check.py --only test-grpc-streaming` with the pinned compiler
-and Python 3.13. The check builds Unary, server-streaming, client-streaming and bidirectional services in all
-three backends and both allocator modes, then uses protoc-generated grpcio clients
-against production TCP and Unix listeners. Regenerate the committed service with
+and Python 3.13. Generated grpcio clients exercise all four RPC forms over TCP
+and Unix sockets with both allocator modes. The interpreter runs one server
+thread per process. The dev and speed backends run two. Regenerate the committed service with
 `python3 tests/grpc-streaming/regenerate.py --write` after changing its schema.
 
 The upload fixture checks empty and multiple input messages, fragmented and coalesced envelopes, truncated input, and rejection before client half-close.

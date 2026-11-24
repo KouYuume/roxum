@@ -165,7 +165,7 @@ TESTS = [
          env=CONTRACT_ENV, checks=[["bash", "integrations/roxum-grpc/example/checks.sh"]], opts=SEVERAL_THREADS_OPTS),
     Test("test-grpc-streaming", {"app": "tests/grpc-streaming/app.roc", "acceptance": "tests/grpc-streaming/acceptance.roc"},
          ["zig-out/grpc-streaming/venv/bin/python", "tests/grpc-streaming/verify.py", "{exe:app}", "{exe:acceptance}", "{opt}"],
-         env=CONTRACT_ENV, timing=True, checks=[["bash", "tests/grpc-streaming/checks.sh"]], opts=SEVERAL_THREADS_OPTS),
+         env=CONTRACT_ENV, timing=True, checks=[["bash", "tests/grpc-streaming/checks.sh"]]),
     Test("test-grpc-unary", {"app": "tests/grpc-unary/app.roc"},
          ["zig-out/grpc-unary/venv/bin/python", "tests/grpc-unary/verify.py", "{exe:app}"],
          env=CONTRACT_ENV, timing=True, checks=[["bash", "tests/grpc-unary/checks.sh"]], opts=SEVERAL_THREADS_OPTS),

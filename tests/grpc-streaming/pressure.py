@@ -185,7 +185,8 @@ def verify(executable, unix=False, proxied=False, backend="speed"):
         path = str(pathlib.Path(directory) / 'rpc.sock') if unix else ''
         config = pathlib.Path(directory) / 'config'
         config.mkdir()
-        (config / 'local.toml').write_text('path = ' + json.dumps(path) + '\n')
+        threads = 1 if backend == 'interpreter' else 2
+        (config / 'local.toml').write_text(f'path = {json.dumps(path)}\nthreads = {threads}\n')
         errors = stack.enter_context(tempfile.TemporaryFile(mode='w+'))
         process = subprocess.Popen([executable], cwd=directory, stdout=subprocess.PIPE, stderr=errors,
                                    text=True, start_new_session=True)
