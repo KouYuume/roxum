@@ -62,7 +62,7 @@ Core and integrations are versioned independently. See [versioning](docs/design/
 
 ## Limitations
 
-- Terminate inbound TLS and HTTP/3 at a [reverse proxy](docs/guides/reverse-proxy.md). WebSocket and HTTP/1 trailers are unsupported; CONNECT, TRACE, and arbitrary extension methods are [non-goals](docs/design/non-goals.md).
+- Terminate inbound TLS and HTTP/3 at a [reverse proxy](docs/guides/reverse-proxy.md). HTTP/1 trailers are unsupported. WebSocket server support, CONNECT, TRACE, and arbitrary extension methods are [non-goals](docs/design/non-goals.md).
 - Timeouts cannot forcibly interrupt arbitrary Roc computation.
 - Runtime compression is gzip; precompressed Brotli is supported, multipart byte ranges are not.
 - Sessions, CSRF, OAuth, JWT, and OpenAPI belong in libraries or integrations; see the [scope policy](docs/design/non-goals.md#features-owned-by-libraries-and-integrations).

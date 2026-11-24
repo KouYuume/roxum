@@ -69,5 +69,4 @@ commitments under the [versioning policy](../design/versioning.md).
 
 After 0.4, phase names describe the order of work. Actual public changes
 determine the intervening 0.x version numbers. The [scope policy](../design/non-goals.md)
-records which capabilities belong to other projects and when deferred
-protocols merit reconsideration.
+describes the core boundary. WebSocket server support is outside the 1.0 roadmap.
