@@ -8,7 +8,6 @@ file answers {"rate_percent": 10}; another token gets 401.
 import json
 import sys
 import threading
-import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
@@ -17,8 +16,7 @@ class TaxService:
         service = self
         self.token = token
         self.rate_percent = 10
-        # Seconds each answer waits, for tests that need calls in flight.
-        self.delay_seconds = 0
+        self.before_response = None
 
         class Handler(BaseHTTPRequestHandler):
             protocol_version = "HTTP/1.1"
@@ -27,7 +25,9 @@ class TaxService:
                 pass
 
             def do_GET(self):
-                time.sleep(service.delay_seconds)
+                before_response = service.before_response
+                if before_response is not None:
+                    before_response()
                 if self.headers.get("Authorization") != f"Bearer {service.token}":
                     status, body = 401, b"{}"
                 elif self.path != "/rates/JP":

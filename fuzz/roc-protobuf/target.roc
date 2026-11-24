@@ -1,4 +1,4 @@
-app [target] { fuzz: platform "https://github.com/lukewilliamboswell/roc-fuzz/releases/download/0.4.3/41NK5FShyGC9Z8HNpUdUeXMWwLmLNfFxsfmLvdPL4Fxb.tar.zst" }
+app [target] { fuzz: platform "https://github.com/lukewilliamboswell/roc-fuzz/releases/download/0.7.0/HBigHQhVZWEF2EkLxpYK35u8P6UNsAmPYxpNFTxXK1Br.tar.zst" }
 
 import fuzz.Fuzz
 import ProtobufWire
@@ -6,6 +6,7 @@ import ScopeFuzz
 import ScalarFuzz
 
 target = Fuzz.target_with({
+	examples: [],
 	name: "protobuf-wire",
 	generator: Fuzz.raw_bytes,
 	show: |bytes| Str.inspect(bytes),

@@ -5,21 +5,21 @@ repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 : "${RUNS:=10000}"
 case "$("$repo_root/tools/roc-target.sh")" in
     arm64mac|x64musl) ;;
-    *) echo 'roc-fuzz 0.4.3 supports only arm64mac and x64musl; run the wire unit and differential tests on this target' >&2; exit 1 ;;
+    *) echo 'roc-fuzz 0.7.0 supports only arm64mac and x64musl; run the wire unit and differential tests on this target' >&2; exit 1 ;;
 esac
 temporary_dir="$(mktemp -d "${TMPDIR:-/tmp}/roxum-protobuf-fuzz.XXXXXX")"
 trap 'rm -rf -- "$temporary_dir"' EXIT
 
 # Same pinned runner as the Roc router fuzz target.
-url="https://github.com/lukewilliamboswell/roc-fuzz/releases/download/0.4.3/41NK5FShyGC9Z8HNpUdUeXMWwLmLNfFxsfmLvdPL4Fxb.tar.zst"
+url="https://github.com/lukewilliamboswell/roc-fuzz/releases/download/0.7.0/HBigHQhVZWEF2EkLxpYK35u8P6UNsAmPYxpNFTxXK1Br.tar.zst"
 curl -fsSL "$url" -o "$temporary_dir/runner.tar.zst"
 if command -v sha256sum >/dev/null; then
     actual="$(sha256sum "$temporary_dir/runner.tar.zst" | awk '{print $1}')"
 else
     actual="$(shasum -a 256 "$temporary_dir/runner.tar.zst" | awk '{print $1}')"
 fi
-if [[ "$actual" != d9bae1e93e6e94f3fafb4040861402dbab90af247023461d8e5451db4a3ae0f2 ]]; then
-    echo 'roc-fuzz 0.4.3 checksum mismatch' >&2
+if [[ "$actual" != 94130c93aa2abb204beb21f06338ecc39c5808e1358d905f219769ecf260e5f2 ]]; then
+    echo 'roc-fuzz 0.7.0 checksum mismatch' >&2
     exit 1
 fi
 cp "$repo_root/fuzz/roc-protobuf/target.roc" "$temporary_dir/target.roc"
