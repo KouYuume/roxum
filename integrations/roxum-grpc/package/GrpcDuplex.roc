@@ -37,12 +37,11 @@ GrpcDuplex := [].{
 		ready!: |state, event, writer| {
 			var $state = state
 			if state.deferred == None {
-				match receive!(state, event.input, decode, callbacks.receive!, limits.request_bytes) {
+				match receive!(state, event.input, decode, callbacks.receive!, limits) {
 					Ok(next) => {
 						$state = next
 					}
-					Err(problem) => {
-						fields = failure_fields(problem, limits)
+					Err(fields) => {
 						if !state.partial {
 							return Ok(Handler.DuplexNext.Finish(fields))
 						}
@@ -110,10 +109,11 @@ prepare_output = |value, encode, maximum, messages, payload| {
 	Ok({ frame, size: bytes.len() })
 }
 
-receive! = |state, input, decode, step!, maximum| {
+receive! = |state, input, decode, step!, limits| {
+	fields = |problem| failure_fields(problem, limits)
 	match input {
 		Idle => Ok(state)
-		Failed(reason) => Err(
+		Failed(reason) => Err(fields(
 			GrpcUnary.failure(
 				match reason {
 					TooLarge => GrpcStatus.Code.ResourceExhausted
@@ -123,12 +123,12 @@ receive! = |state, input, decode, step!, maximum| {
 				},
 				"request input failed",
 			),
-		)
+		))
 		End => {
 			if !StreamFrame.at_boundary(state.frame) {
-				return Err(GrpcUnary.failure(GrpcStatus.Code.InvalidArgument, "truncated request envelope"))
+				return Err(fields(GrpcUnary.failure(GrpcStatus.Code.InvalidArgument, "truncated request envelope")))
 			}
-			service = step!(state.service, End)?
+			service = step!(state.service, End).map_err(fields)?
 			Ok({ ..state, service, ended: Bool.True, waiting_for_input: Bool.False })
 		}
 		Chunk(chunk) => {
@@ -137,11 +137,12 @@ receive! = |state, input, decode, step!, maximum| {
 			var $waiting = state.waiting_for_input
 			var $chunk = chunk
 			while !$chunk.is_empty() {
-				match StreamFrame.read($frame, $chunk, maximum).map_err(|(code, msg)| GrpcUnary.failure(code, msg))? {
+				match StreamFrame.read($frame, $chunk, limits.request_bytes).map_err(|(code, msg)| fields(GrpcUnary.failure(code, msg)))? {
 					Partial(frame) => return Ok({ ..state, service: $service, frame, waiting_for_input: $waiting })
 					Message(bytes, frame, rest) => {
-						value = GrpcDecode.duplex_message!(bytes, decode).map_err(|(code, message)| GrpcUnary.failure(code, message))?
-						$service = step!($service, Message(value))?
+						remaining = if state.partial { state.pending } else { [] }
+						value = GrpcDecode.duplex_message!(bytes, remaining, decode).map_err(|(code, message)| terminal(code, message, [], { status_bytes: 128, metadata: GrpcMetadata.defaults }))?
+						$service = step!($service, Message(value)).map_err(fields)?
 						$waiting = Bool.False
 						$frame = frame
 						$chunk = rest

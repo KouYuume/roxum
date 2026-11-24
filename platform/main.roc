@@ -86,7 +86,7 @@ platform "roxum"
 		"roxum_rate_counter_add": HostRateCounter.add!,
 		"roxum_rate_counter_new": HostRateCounter.new!,
 		"roxum_request_execution_begin_decode": HostRequestExecution.begin_decode!,
-		"roxum_request_execution_begin_decode_with_response": HostRequestExecution.begin_decode_with_response!,
+		"roxum_request_execution_begin_decode_with_fallback": HostRequestExecution.begin_decode_with_fallback!,
 		"roxum_request_execution_elapsed": HostRequestExecution.elapsed_nanoseconds!,
 		"roxum_request_execution_end_decode": HostRequestExecution.end_decode!,
 		"roxum_request_execution_limit": HostRequestExecution.limit_nanoseconds!,

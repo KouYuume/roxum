@@ -94,7 +94,7 @@ fn waitGuarded(target: *fiber.Fiber, guard: *fiber.StreamGuard, socket: c_int, e
 /// stops waits for anything but the client socket.
 fn stops(target: *fiber.Fiber, at_least: fiber.Stop) bool {
     const stop = target.stop.load(std.builtin.AtomicOrder.acquire);
-    return stop != fiber.Stop.none and @intFromEnum(stop) <= @intFromEnum(at_least);
+    return stop != fiber.Stop.none and @backingInt(stop) <= @backingInt(at_least);
 }
 
 fn stopWith(target: *fiber.Fiber, stop: fiber.Stop) Outcome {
@@ -142,6 +142,7 @@ pub fn onFiber() bool {
 /// fiber suspends for good, and the scheduler cleans up after it as after
 /// a crash, without a crash's log.
 pub fn cancelCurrent() noreturn {
+    @import("effect/request_execution.zig").discardDecodeFallback();
     const target = fiber.current() orelse unreachable;
     target.cancelled = true;
     target.finished = true;

@@ -44,6 +44,18 @@ pub fn endDecode() void {
     locals.decoders.finish();
 }
 
+/// The pure callback will never return, so none of this message's values
+/// can reach the fallback that was prepared before entering the decoder.
+pub fn abandonDecode() void {
+    const locals = fiber.currentLocals().?;
+    const message = locals.decoders.active.?;
+    std.debug.assert(locals.allocator.?.decoder == message);
+    locals.allocator.?.decoder = null;
+    locals.decoders.active = null;
+    locals.decoders.heaps.remove(&message.node);
+    message.destroy();
+}
+
 pub fn clearCurrent() void {
     const place = slot();
     std.debug.assert(place.* != null);

@@ -9,8 +9,8 @@ GrpcDecode := [].{
 	message! = |bytes, decode|
 		map_result(RequestExecution.decode_bytes_with_response!(bytes, exhausted_response, decode))
 
-	duplex_message! = |bytes, decode|
-		map_result(RequestExecution.decode_bytes!(bytes, decode))
+	duplex_message! = |bytes, remaining, decode|
+		map_result(RequestExecution.decode_bytes_with_completion!(bytes, { remaining, trailers: exhausted_response.trailers }, decode))
 }
 
 map_result = |decoded| {

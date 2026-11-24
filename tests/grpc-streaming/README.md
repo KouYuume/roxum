@@ -8,7 +8,7 @@ against production TCP and Unix listeners. Regenerate the committed service with
 
 The upload fixture checks empty and multiple input messages, fragmented and coalesced envelopes, truncated input, and rejection before client half-close.
 
-The generated duplex client waits for its first acknowledgement before sending its second request. A separate call receives final status while its request iterator is still open. Both half-close orders run on TCP and Unix listeners directly and through the TLS proxy. A direct HTTP/2 peer withholds stream credit after 8 KiB of a large reply. An independent observation confirms that a second request is processed while output is blocked. The peer then resets the stream or restores credit and checks the completed envelope and error trailers.
+The generated duplex client waits for its first acknowledgement before sending its second request. A separate call receives final status while its request iterator is still open. Both half-close orders run on TCP and Unix listeners directly and through the TLS proxy. A direct HTTP/2 peer withholds stream credit after 8 KiB of a large reply. An independent observation confirms that a second request is processed while output is blocked. The peer then resets the stream or restores credit and checks the completed envelope and error trailers. A small input also forces a codec allocation failure while output is stalled, exercising both reset and successful delivery of the remaining bytes followed by status 8.
 
 The server-streaming fixture covers ordered output, zero-message success, initial/trailing metadata,
 application failure before and after output, invalid success-as-failure status,

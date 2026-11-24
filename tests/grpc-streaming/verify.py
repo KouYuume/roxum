@@ -46,15 +46,31 @@ def verify_decoder_exhaustion(channel):
     # These small frames fit the input heap. Only the codec expansion can fail.
     options = dict(request_serializer=messages.Request.SerializeToString,
                    response_deserializer=messages.Update.FromString)
-    request = messages.Request(count=8 * 1024 * 1024)
+    request = messages.Request(count=8 * 1024 * 1024, mode='expand')
+    chat = channel.stream_stream('/heap/chat', **options)
+    # The duplex route has a zero application status-message budget.
+    expect_exhaustion(lambda: list(chat(iter([oversized]), timeout=30)))
     calls = [
         lambda: channel.unary_unary('/heap/echo', **options)(request, timeout=5),
         lambda: list(channel.unary_stream('/heap/watch', **options)(request, timeout=5)),
         lambda: channel.stream_unary('/heap/submit', **options)(iter([request]), timeout=5),
+        lambda: list(chat(iter([request]), timeout=5)),
     ]
     for call in calls:
         expect_exhaustion(call)
         assert submit(iter([messages.Request(count=1)]), timeout=5) == result
+
+    raw_chat = channel.stream_stream('/heap/chat')
+    for payload, code, detail in (
+        (b'\xff', grpc.StatusCode.INVALID_ARGUMENT, 'invalid Protobuf message'),
+        (messages.Request(mode='deny').SerializeToString(), grpc.StatusCode.INTERNAL, 'invalid application status'),
+    ):
+        try:
+            list(raw_chat(iter([payload]), timeout=5))
+        except grpc.RpcError as exc:
+            assert exc.code() == code and exc.details() == detail, exc
+        else:
+            raise AssertionError('expected duplex failure')
 
 
 def verify_duplex(channel):
@@ -126,30 +142,48 @@ def verify_duplex_pressure(channel, address, unix):
         return stub.Echo(messages.Request(mode='observed'), timeout=3).sequence
 
     # A direct peer controls the production listener's stream window.
-    for cancel in (False, True):
+    for scenario in ('deny', 'reset', 'exhaust', 'exhaust-reset'):
+        exhaust = scenario.startswith('exhaust')
+        cancel = scenario.endswith('reset')
         before = observed()
         with socket.socket(socket.AF_UNIX if unix else socket.AF_INET) as sock:
             sock.settimeout(5)
             sock.connect(address)
             peer = Peer(sock, False)
             peer.h2.send_headers(1, [(':method', 'POST'), (':scheme', 'http'), (':authority', 'localhost'),
-                (':path', '/streaming.Exchange/Chat'), ('content-type', 'application/grpc'), ('te', 'trailers')])
-            def send(mode, end_stream=False):
-                payload = messages.Request(count=7, mode=mode).SerializeToString()
-                peer.h2.send_data(1, b'\0' + len(payload).to_bytes(4, 'big') + payload, end_stream=end_stream)
+                (':path', '/heap/chat' if exhaust else '/streaming.Exchange/Chat'), ('content-type', 'application/grpc'), ('te', 'trailers')])
+            def frame(mode, count=7):
+                payload = messages.Request(count=count, mode=mode).SerializeToString()
+                return b'\0' + len(payload).to_bytes(4, 'big') + payload
+            def send(data, end_stream=False):
+                peer.h2.send_data(1, data, end_stream=end_stream)
                 peer.flush()
-            send('large')
+            send(frame('large'))
             data = bytearray()
             while len(data) < 8192:
                 for event in peer.receive():
                     if isinstance(event, DataReceived):
                         data.extend(event.data)
             assert len(data) == 8192
-            send('observe' if cancel else 'deny', end_stream=not cancel)
+            if exhaust:
+                # Both messages enter the same read callback while output is blocked.
+                send(frame('observe') + frame('expand', 8 * 1024 * 1024), end_stream=True)
+            else:
+                send(frame('observe' if cancel else 'deny'), end_stream=not cancel)
             deadline = time.monotonic() + 5
             while observed() == before:
                 assert time.monotonic() < deadline, 'duplex input stalled behind output'
             if cancel:
+                if exhaust:
+                    # Drain beyond the first accepted 16 KiB chunk, then cancel
+                    # while the completion is still waiting to send its suffix.
+                    peer.h2.increment_flow_control_window(32768, stream_id=1)
+                    peer.flush()
+                    while len(data) < 40960:
+                        for event in peer.receive():
+                            assert not isinstance(event, (TrailersReceived, StreamEnded, StreamReset)), event
+                            if isinstance(event, DataReceived):
+                                data.extend(event.data)
                 peer.h2.reset_stream(1)
                 peer.flush()
                 peer.echo()
@@ -165,12 +199,14 @@ def verify_duplex_pressure(channel, address, unix):
                     if isinstance(event, DataReceived):
                         data.extend(event.data)
                     elif isinstance(event, TrailersReceived):
-                        statuses.append(dict(event.headers)['grpc-status'])
+                        statuses.append(dict(event.headers))
                     elif isinstance(event, StreamEnded):
                         ended = True
             expected = messages.Update(sequence=7, text='x' * 65536).SerializeToString()
             assert data == b'\0' + len(expected).to_bytes(4, 'big') + expected
-            assert statuses == ['7']
+            assert [entry['grpc-status'] for entry in statuses] == ['8' if exhaust else '7'], statuses
+            if exhaust:
+                assert statuses[0]['grpc-message'] == 'message%20allocation%20limit', statuses
             peer.echo()
 
 

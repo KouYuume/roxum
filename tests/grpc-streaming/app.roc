@@ -7,6 +7,7 @@ import pf.Router
 import pf.Server
 import pf.RateCounter
 import pf.Sleep
+import grpc.GrpcDuplex
 import grpc.GrpcClientStream
 import service.UploadsService
 import service.UpdatesService
@@ -49,7 +50,11 @@ heap_uploads = UploadsService.register(Router.new, { call_submit!: submit! }, { 
 # A short wire request controls how much memory the pure codec allocates.
 expand_request = |bytes| {
 	Request.(value) = Request.decode(bytes, ProtobufWire.default_limits)?
-	Ok(Request.{ ..value, mode: Str.repeat("x", value.count.to_u64()) })
+	if value.mode == "expand" {
+		Ok(Request.{ ..value, mode: Str.repeat("x", value.count.to_u64()) })
+	} else {
+		Ok(Request.(value))
+	}
 }
 
 heap_updates : UpdatesService.Handlers(Model)
@@ -58,6 +63,7 @@ heap_submit : UploadsService.Handlers(Model)
 heap_submit = { call_submit!: submit! }
 
 heap_routes = heap_uploads
+	.route("/chat", MethodRouter.post(GrpcDuplex.handler(expand_request, Update.encode, chat, { ..duplex_limits, request_bytes: 9 * 1024 * 1024, payload_bytes: 9 * 1024 * 1024, status_bytes: 0 })))
 	.route("/echo", MethodRouter.post(GrpcUnary.handler(expand_request, Update.encode, heap_updates.call_echo!, { request_bytes: 1024, response_bytes: 1024, status_bytes: 128, metadata: GrpcMetadata.defaults })))
 	.route("/watch", MethodRouter.post(GrpcServerStream.handler(expand_request, Update.encode, heap_updates.call_watch!, GrpcServerStream.defaults)))
 	.route("/submit", MethodRouter.post(GrpcClientStream.handler(expand_request, Update.encode, heap_submit.call_submit!, GrpcServerStream.defaults)))
