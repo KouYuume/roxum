@@ -10,6 +10,8 @@ pub const Active = struct {
     /// Null duration reads elapsed time; a duration also tightens the deadline.
     /// Null result means execution ended and must not return to application code.
     apply: *const fn (*anyopaque, ?u64) ?u64,
+    decode_response: ?abi.HttpResponse = null,
+    on_decode_exhausted: ?*const fn (*anyopaque, abi.HttpResponse) void = null,
     limit_trailers: ?*const fn (*anyopaque, u64, []const abi.HttpResponseHeader) u8 = null,
     limit_response: ?*const fn (*anyopaque, u64, abi.HttpResponse, *abi.RocHost) Result = null,
 };
@@ -56,7 +58,45 @@ pub fn hostedBeginDecode(bytes: abi.RocListWith(u8, false)) callconv(std.builtin
     return result;
 }
 
+pub fn hostedBeginDecodeWithResponse(bytes: abi.RocListWith(u8, false), response: abi.HttpResponse) callconv(std.builtin.CallingConvention.c) abi.HostRequestExecutionDecodeInput {
+    const result = hostedBeginDecode(bytes);
+    if (result.tag == abi.HostRequestExecutionDecodeInputTag.Input) {
+        fiber.currentLocals().?.request_execution.?.decode_response = response;
+    } else releaseResponse(response);
+    return result;
+}
+
+fn releaseResponse(response: abi.HttpResponse) void {
+    const context = @import("../allocator/context.zig").current().?;
+    var host = @import("../runtime.zig").makeRocHost(@ptrCast(context.host_allocator));
+    response.decref(&host);
+}
+
+fn takeDecodeResponse() ?abi.HttpResponse {
+    const locals = fiber.currentLocals() orelse return null;
+    const execution = if (locals.request_execution) |*value| value else return null;
+    const response = execution.decode_response;
+    execution.decode_response = null;
+    return response;
+}
+
+pub fn discardDecodeResponse() void {
+    if (takeDecodeResponse()) |response| releaseResponse(response);
+}
+
+pub fn decodeExhausted() void {
+    const response = takeDecodeResponse() orelse return;
+    @import("../allocator/context.zig").endDecode();
+    const execution = active().?;
+    if (execution.on_decode_exhausted) |send| {
+        send(execution.context, response);
+        fiber_wait.abandonCurrent();
+    }
+    releaseResponse(response);
+}
+
 pub fn hostedEndDecode() callconv(std.builtin.CallingConvention.c) void {
+    discardDecodeResponse();
     @import("../allocator/context.zig").endDecode();
 }
 

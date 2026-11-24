@@ -10,6 +10,7 @@ comptime {
     @export(&host.response_writer.hostedStreamFinish, .{ .name = "roxum_stream_finish", .visibility = std.builtin.SymbolVisibility.hidden });
     @export(&host.request_execution_effect.hostedLimitWithTrailers, .{ .name = "roxum_request_execution_limit_with_trailers", .visibility = std.builtin.SymbolVisibility.hidden });
     @export(&host.request_execution_effect.hostedBeginDecode, .{ .name = "roxum_request_execution_begin_decode", .visibility = std.builtin.SymbolVisibility.hidden });
+    @export(&host.request_execution_effect.hostedBeginDecodeWithResponse, .{ .name = "roxum_request_execution_begin_decode_with_response", .visibility = std.builtin.SymbolVisibility.hidden });
     @export(&host.request_execution_effect.hostedEndDecode, .{ .name = "roxum_request_execution_end_decode", .visibility = std.builtin.SymbolVisibility.hidden });
     @export(&host.request_execution_effect.hostedElapsed, .{ .name = "roxum_request_execution_elapsed", .visibility = std.builtin.SymbolVisibility.hidden });
     @export(&host.request_execution_effect.hostedLimit, .{ .name = "roxum_request_execution_limit", .visibility = std.builtin.SymbolVisibility.hidden });

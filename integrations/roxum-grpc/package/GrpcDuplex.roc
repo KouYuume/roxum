@@ -140,7 +140,7 @@ receive! = |state, input, decode, step!, maximum| {
 				match StreamFrame.read($frame, $chunk, maximum).map_err(|(code, msg)| GrpcUnary.failure(code, msg))? {
 					Partial(frame) => return Ok({ ..state, service: $service, frame, waiting_for_input: $waiting })
 					Message(bytes, frame, rest) => {
-						value = GrpcDecode.message!(bytes, decode).map_err(|(code, message)| GrpcUnary.failure(code, message))?
+						value = GrpcDecode.duplex_message!(bytes, decode).map_err(|(code, message)| GrpcUnary.failure(code, message))?
 						$service = step!($service, Message(value))?
 						$waiting = Bool.False
 						$frame = frame

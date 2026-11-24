@@ -5,8 +5,8 @@ const host_allocator = @import("allocator/host_allocator.zig");
 const allocator_context = @import("allocator/context.zig");
 const fiber_wait = @import("fiber_wait.zig");
 
-/// Roc writes through the result without checking it, so running out of
-/// memory stops the worker the same way `roc_crashed` does.
+/// Roc writes through the result without checking it. Allocation failure
+/// terminates the current request, or the worker outside a request.
 pub fn rocAlloc(
     length: usize,
     alignment: usize,
@@ -57,6 +57,7 @@ pub fn rocRealloc(
 }
 
 fn outOfMemory() noreturn {
+    @import("effect/request_execution.zig").decodeExhausted();
     const message = "out of memory";
     rocCrashed(message.ptr, message.len);
 }
@@ -93,6 +94,7 @@ pub fn rocCrashed(
     len: usize,
 ) callconv(std.builtin.CallingConvention.c) noreturn {
     if (fiber_wait.onFiber()) {
+        @import("effect/request_execution.zig").discardDecodeResponse();
         diagnostics.requestCrashed(bytes, len);
         fiber_wait.abandonCurrent();
     }

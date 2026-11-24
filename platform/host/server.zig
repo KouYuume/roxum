@@ -519,6 +519,7 @@ fn RequestFiber(comptime Environment: type) type {
                 request.dispatch = dispatch;
                 request.heap = null;
                 request.failure = null;
+                request.decode_response_sent = false;
                 request.http2_stream_attempted = false;
                 request.http2_stream_started = false;
                 request.http2_stream_head = null;
@@ -561,6 +562,7 @@ fn RequestFiber(comptime Environment: type) type {
         failure: ?anyerror = null,
         /// When the Roc thread took the request from the queue.
         started_at: u64 = 0,
+        decode_response_sent: bool = false,
         http2_stream_attempted: bool = false,
         http2_stream_started: bool = false,
         http2_stream_head: ?@import("http2/deferred_response.zig").Response = null,
@@ -614,7 +616,7 @@ fn RequestFiber(comptime Environment: type) type {
                 self.releaseHttp2Stream();
                 if (self.heap) |*heap| environment.abandonStream(heap) else try environment.abandonRequest();
                 self.heap = null;
-                self.thread.io.finishHttp2(self.dispatch, switch (stop) {
+                self.thread.io.finishHttp2(self.dispatch, if (self.decode_response_sent) null else switch (stop) {
                     fiber.Stop.none => access_log.Outcome.crashed,
                     fiber.Stop.client_gone => access_log.Outcome.client_closed,
                     fiber.Stop.drained => access_log.Outcome.drained,
@@ -1013,6 +1015,16 @@ fn RequestFiber(comptime Environment: type) type {
             return if (protocol.streams.leases.runningStream(ticket) == null) 3 else 0;
         }
 
+        fn decodeExhausted(ptr: *anyopaque, response: bridge.HttpResponse) void {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            if (self.http2_stream_attempted) {
+                response.decref(&self.roc_host);
+                return;
+            }
+            self.submitFiniteHttp2(response, null) catch return;
+            self.decode_response_sent = true;
+        }
+
         fn requestExecutionResponse(ptr: *anyopaque, duration: u64, response: bridge.HttpResponse, roc_host: *bridge.RocHost) @import("effect/request_execution.zig").Result {
             const Result = @import("effect/request_execution.zig").Result;
             const self: *Self = @ptrCast(@alignCast(ptr));
@@ -1184,7 +1196,7 @@ fn RequestFiber(comptime Environment: type) type {
             self.http2_semantics = semantics;
             const writer = @import("effect/response_writer.zig");
             const locals = fiber.currentLocals() orelse unreachable;
-            locals.request_execution = .{ .context = self, .apply = requestExecution, .limit_response = requestExecutionResponse, .limit_trailers = requestExecutionTrailers };
+            locals.request_execution = .{ .context = self, .apply = requestExecution, .on_decode_exhausted = decodeExhausted, .limit_response = requestExecutionResponse, .limit_trailers = requestExecutionTrailers };
             defer locals.request_execution = null;
             writer.activate(.{ .context = self, .start = startHttp2Stream, .write = writeHttp2Stream, .abort = abortHttp2Stream, .finish = finishHttp2Writer, .route = setHttp2Route, .try_write = tryHttp2Write, .wait = waitHttp2Duplex });
             const answered = bridge.rocHandle(self.shared.model_root.retainForHandle(), request);
@@ -1205,26 +1217,36 @@ fn RequestFiber(comptime Environment: type) type {
                 return !self.http2_stream_started or !self.finishHttp2Stream();
             }
             defer answered.route.decref(&self.roc_host);
+            try self.submitFiniteHttp2(answered.response, answered.route.asSlice());
+            return false;
+        }
+
+        /// Consumes the Roc response on success, expiry, and transport failure.
+        fn submitFiniteHttp2(self: *Self, response: bridge.HttpResponse, route: ?[]const u8) !void {
+            const item = &self.shared.handoff.connections[self.dispatch.slot];
             item.lock.lock();
             defer item.lock.unlock();
-            const protocol = item.http2 orelse unreachable;
+            const protocol = item.http2 orelse {
+                response.decref(&self.roc_host);
+                return error.Closed;
+            };
+            const ticket = self.dispatch.http2.?;
             // Expiry may already have submitted its response while pure Roc
             // computation continued. Its access fields belong to that response.
             if (protocol.streams.leases.runningStream(ticket) != null) {
                 if (protocol.access[ticket.slot]) |*entry| {
-                    entry.route.set(answered.route.asSlice());
-                    entry.status = answered.response.status;
-                    entry.body_bytes = if (semantics == bridge.ResponseRequestSemantics.head) 0 else switch (answered.response.body.tag) {
-                        bridge.HttpResponseBodyTag.Bytes => answered.response.body.payload_bytes().items().len,
+                    if (route) |value| entry.route.set(value);
+                    entry.status = response.status;
+                    entry.body_bytes = if (self.http2_semantics == bridge.ResponseRequestSemantics.head) 0 else switch (response.body.tag) {
+                        bridge.HttpResponseBodyTag.Bytes => response.body.payload_bytes().items().len,
                         else => 0,
                     };
                 }
             }
-            try protocol.owner.respondOwnedWithDebug(&protocol.streams, ticket, answered.response, &self.roc_host, semantics, true);
+            try protocol.owner.respondOwnedWithDebug(&protocol.streams, ticket, response, &self.roc_host, self.http2_semantics, true);
             protocol.terminals[ticket.slot].deinit();
             protocol.deadlines[ticket.slot] = (net.monotonicNanoseconds() catch 0) +| protocol.write_timeout;
             protocol.writing[ticket.slot] = true;
-            return false;
         }
 
         fn serve(self: *Self) !void {

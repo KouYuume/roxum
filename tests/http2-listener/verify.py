@@ -266,13 +266,15 @@ def verify(executable, unix, debug=False):
                         assert len(values) == (expected_count if debug else 0), values
                         truncated = headers[stream].get('x-roxum-dbg-truncated')
                         assert truncated == ('5' if debug and route == '/debug-many' else None)
-                    stream += 2
-                    request(stream, '/crash')
-                    receive([], [stream])
-                    stream += 2
-                    request(stream, body=b'after crash')
-                    receive([stream])
-                    assert bodies[stream] == b'42|h2|after crash'
+                    for route in ('/crash', '/decode-crash'):
+                        stream += 2
+                        request(stream, route)
+                        receive([], [stream])
+                        assert stream not in headers and stream not in trailers
+                        stream += 2
+                        request(stream, body=b'after crash')
+                        receive([stream])
+                        assert bodies[stream] == b'42|h2|after crash'
                     # HEADERS without END_HEADERS must expire even before
                     # the first HPACK field arrives (empty header block).
                     with socket.socket(socket.AF_UNIX if unix else socket.AF_INET) as unfinished:
