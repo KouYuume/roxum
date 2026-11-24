@@ -25,6 +25,7 @@ mkdir -p zig-out/release
 # its port.
 # Not `python3 -m http.server`: binding, it looks up the host's name with
 # `socket.getfqdn`, which can stall on a CI runner's resolver.
+: >"$task_tmp/http.log"
 python3 -u -c '
 import functools, http.server, socketserver, sys
 

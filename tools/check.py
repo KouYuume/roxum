@@ -219,7 +219,7 @@ COMMANDS = [
     Command("test-http1-release", ["zig", "build", "test-http1-release"], "zig"),
     Command("fuzz", ["tools/fuzz.sh", "10000"], "zig"),
 ]
-# roc-fuzz 0.4.3 ships arm64mac and x64musl hosts only. The pure module and
+# roc-fuzz 0.7.0 ships arm64mac and x64musl hosts only. The pure module and
 # differential tests still run on every supported roxum target.
 if ((sys.platform == "darwin" and os.uname().machine == "arm64") or
         (sys.platform.startswith("linux") and os.uname().machine == "x86_64")):
