@@ -5,44 +5,14 @@ by row, or [server-sent events](https://html.spec.whatwg.org/multipage/server-se
 While the body waits, for a sleep or an outbound call, the request's thread serves other requests. It can also read
 a large request body, such as an upload, in parts as it arrives.
 
-`zig build test-stream-limit` and `zig build test-graceful-shutdown` check the streams themselves, and
-`zig build test-m9p4` runs the server-sent events example in
-[`integrations/roxum-sse/example`](../../integrations/roxum-sse/example/app.roc).
+Choose the API according to which side produces data incrementally:
 
-HTTP/2 runs routing and `BeforeBody` stages before input EOF. `Handler.streaming`
-receives parts as they arrive, suspending its request fiber when no input is ready.
-The host queues bounded input and replenishes receive credit as it is consumed.
-Streamed reads use `maximum_streamed_body_bytes`; `BodyLimit.streamed` can replace
-that default, including with `Unlimited`. Ordinary handlers still wait for the
-complete body and retain the hard HTTP/2 `maximum_body_bytes` cap. A tighter route
-limit returns 413. The HTTP/2 body timeout covers the entire input from metadata
-completion, including callback execution; reset and timeout cancel the request
-without invoking its Roc abort callback. HTTP/2 supports `Reply.stream`
-with default writer options and uncompressed output. Large writes are split into
-bounded chunks, and blocked writes yield the request fiber. Successful callback
-return ends the response after pending DATA with an empty terminal section.
-Returning Err(StreamClosed) aborts unfinished output; on HTTP/1 it closes the
-connection without the terminal chunk, and on HTTP/2 it resets the stream. Use
-`ResponseWriter.finish!(writer, trailers)` inside the callback to attach trailers
-and wait until terminal output is written to the socket. Invalid trailers can be
-corrected and retried; successful finish closes the writer. The operation returns
-`Unavailable` on HTTP/1. It does not acknowledge peer receipt. Keep-alive payloads,
-`ends_on_drain`, compression and file streams remain unsupported on HTTP/2 and
-reset the attempted stream. Use `Handler.duplex` to continue reading while producing output.
-For execution expiry after partial output, register generic trailers with
-`RequestExecution.limit_with_trailers!` before returning the streamed reply.
-The host copies the fields, stops the callback on expiry, and drains accepted DATA
-before the terminal section, subject to the write timeout. Normal finish and
-expiry select their terminal once. The integration chooses status fields such as
-`grpc-status`; the host does not.
-If an HTTP/2 streamed response finishes before request EOF, the host sends its
-terminal output first, then closes the unfinished input with `RST_STREAM(NO_ERROR)`.
-This includes callback return and execution-expiry trailers. Input EOF first does
-not end output. Complete application I/O before finishing: further waits after
-completion may be cancelled. Early finite replies retain their bounded input-drain
-behavior.
-
-The SSE example below requires HTTP/1; incremental request handlers also work on HTTP/2.
+| Use case | API | Protocol |
+|---|---|---|
+| Upload a request in parts | [`Handler.streaming`](#reading-a-large-request-body) | HTTP/1 and HTTP/2 |
+| Send a response in parts | [`Reply.stream`](#writing-a-body) | HTTP/1 and HTTP/2 |
+| Send events with keep-alive comments | [`roxum-sse`](#server-sent-events) | HTTP/1 |
+| Keep reading while response output is blocked | [`Handler.duplex`](#independent-http2-input-and-output) | HTTP/2 |
 
 ## Independent HTTP/2 input and output
 
@@ -110,9 +80,16 @@ wait: the code after it never runs, and what the request held is given back. The
 
 `Reply.json_lines` is the same for [JSON Lines](responses.md#json-lines).
 
+On HTTP/2, use default writer options and uncompressed output. To attach trailers,
+call `ResponseWriter.finish!(writer, trailers)` inside the callback. Invalid
+trailers can be corrected and retried. Successful finish closes the writer after
+terminal output is written to the socket. Returning `Err(StreamClosed)` aborts
+unfinished output on either protocol. For execution expiry after headers, see
+[HTTP/2 streaming](../design/http2-streaming.md).
+
 ### Options
 
-`Reply.stream_with` takes `ResponseWriter.Options`:
+On HTTP/1, `Reply.stream_with` accepts the following writer options:
 
 | field | default | |
 |---|---|---|
@@ -249,5 +226,4 @@ Router.route(
 )
 ```
 
-A streaming handler that answers before the whole body arrived (from `begin!`, or a `chunk!` that returns a reply)
-closes the connection after its response, unless the rest is already received.
+On HTTP/1, an early reply from `begin!` or `chunk!` closes the connection after the response unless the remaining input has already arrived. On HTTP/2, early replies affect only the request stream. A finite reply discards unfinished input within transport limits. A streamed reply sends its terminal output before closing unfinished input with `RST_STREAM(NO_ERROR)`.

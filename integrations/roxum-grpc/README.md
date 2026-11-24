@@ -170,7 +170,7 @@ Run a group with `python3 tools/check.py --only <group>`; prefix the command wit
 
 | Group | Coverage |
 |---|---|
-| `test-grpc-example` | Runnable generated greeting service across backends and allocators. |
+| `test-grpc-example` | Generated greeting service on dev and speed with both allocators. |
 | `test-grpc-wire` | Finite framing/metadata helpers, independent grpcio and HTTP/2 clients, boundary and invalid inputs, parser corpora against Python models, and connection survival. |
 | `test-grpc-unary` | [Generated-client acceptance](../../tests/grpc-unary/README.md), including deadlines, cancellation and TLS proxy deployment. |
 | `test-grpc-streaming` | [Streaming acceptance](../../tests/grpc-streaming/README.md), including backpressure, half-close, cancellation, bounded memory and shutdown. |

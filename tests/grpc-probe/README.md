@@ -1,14 +1,10 @@
 # Fixed-byte gRPC interoperability probe
 
 Run `python3 tools/check.py --only test-grpc-probe` or `zig build test-grpc-probe`.
-The gate builds the Roc fixture with all three backends and both allocators, then
+The gate builds the Roc fixture on dev and speed with both allocators, then
 uses an independent native gRPC client over TCP and filesystem Unix sockets.
 
-The client uses the official Python `grpcio` implementation, pinned to 1.78.2
-with wheel hashes. This patched release supports the repository's Python 3.9
-environment and provides wheels through CPython 3.14. `typing-extensions` is pinned
-separately; installation uses a private venv and refuses source builds or
-unhashed downloads. The hashes cover macOS and glibc Linux x86_64/arm64 wheels;
+The client uses the official Python `grpcio` implementation. The [dependency pins](requirements.txt) include wheel hashes for grpcio and typing-extensions. Setup uses a private venv and refuses source builds or unhashed downloads. The hashes cover macOS and glibc Linux x86_64/arm64 wheels;
 the Linux test container uses glibc Python even though the Roc app targets musl.
 
 [`probe.proto`](probe.proto) describes the fixed payloads, without introducing a

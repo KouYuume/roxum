@@ -15,7 +15,7 @@ Its focus is independently deployable HTTP APIs and backend services. See [scope
 - **Build-time route checks.** Invalid patterns and duplicate routes fail compilation when routers are top-level values.
 - **Tags and staged middleware.** Filter by application-defined typed tags and place work at `BeforeBody`, `OnChunk`, `AfterBody`, or `AfterHandler`. See [middleware](docs/guides/middleware.md) and the [tags and middleware example](examples/middleware/README.md).
 
-The host also provides request-scoped memory reuse and cleanup. HTTP/1 supports streaming, SSE, and file serving. Gzip, PostgreSQL, and outbound HTTPS are also supported. See the [architecture](docs/design/architecture.md) and [memory model](docs/design/execution-model.md).
+HTTP/1.1 is the default and supports streaming, SSE, and file serving. [Opt-in cleartext HTTP/2](docs/guides/deployment.md#opt-in-http2) supports incremental input and output, trailers, and all four uncompressed gRPC forms. Both listeners support IPv4/IPv6 TCP and filesystem Unix sockets.
 
 ## Comparison with axum and Go
 
@@ -62,7 +62,6 @@ Core and integrations are versioned independently. See [versioning](docs/design/
 
 ## Limitations
 
-- IPv4/IPv6 TCP and filesystem Unix sockets; HTTP/1.1 by default. [Opt-in cleartext HTTP/2](docs/guides/deployment.md#opt-in-http2) supports incremental input and output, trailers, and all four uncompressed gRPC forms.
 - Terminate inbound TLS and HTTP/3 at a [reverse proxy](docs/guides/reverse-proxy.md). WebSocket and HTTP/1 trailers are unsupported; CONNECT, TRACE, and arbitrary extension methods are [non-goals](docs/design/non-goals.md).
 - Timeouts cannot forcibly interrupt arbitrary Roc computation.
 - Runtime compression is gzip; precompressed Brotli is supported, multipart byte ranges are not.
