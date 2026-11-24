@@ -3,7 +3,8 @@ set -euo pipefail
 source_archive=$(realpath "$1")
 export ROXUM_ZIG=$2
 export ROXUM_TLS_TARGET=$3
-out=$(realpath "$4")
+adapter=$(realpath "$4")
+out=$(realpath "$5")
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 cd "$work"
@@ -18,5 +19,8 @@ cmake -S . -B build -G Ninja -DCMAKE_SYSTEM_NAME=Generic \
     -DCMAKE_BUILD_TYPE=MinSizeRel -DCMAKE_C_FLAGS="-g0 -fPIC -DMBEDTLS_THREADING_C -DMBEDTLS_THREADING_PTHREAD" \
     -DCMAKE_ARCHIVE_OUTPUT_DIRECTORY="$out" -DENABLE_TESTING=OFF -DENABLE_PROGRAMS=OFF
 cmake --build build --target mbedtls --parallel 4
+./cc -Os -g0 -fPIC -Wall -Wextra -Werror -DMBEDTLS_THREADING_C -DMBEDTLS_THREADING_PTHREAD \
+    -Iinclude -Itf-psa-crypto/include -Itf-psa-crypto/drivers/builtin/include -Ibuild/tf-psa-crypto/include \
+    -c "$adapter/credentials.c" -o "$out/credentials.o"
 cp LICENSE "$out/MBEDTLS-LICENSE"
 cp tf-psa-crypto/LICENSE "$out/TF-PSA-CRYPTO-LICENSE"

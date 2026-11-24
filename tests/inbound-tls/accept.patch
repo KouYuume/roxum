@@ -11,3 +11,13 @@
 +                    if (roxum_trial_accept(accepted.socket) != 0) continue;
                      if (reject_new) self.openRejected(accepted) else self.open(accepted);
                  },
+--- a/platform/host/main.zig
++++ b/platform/host/main.zig
+@@ -29,2 +29,7 @@
++extern "c" fn roxum_trial_start() c_int;
++extern "c" fn roxum_trial_stop() void;
++
+ fn workerMain(port_override: ?u16) c_int {
++    if (roxum_trial_start() != 0) return 1;
++    defer roxum_trial_stop();
+     var environment = arena.ArenaEnvironment.production();
