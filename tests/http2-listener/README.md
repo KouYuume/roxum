@@ -2,8 +2,7 @@
 
 Run `python3 tools/check.py --only test-http2-listener` (or
 `zig build test-http2-listener`) with the pinned toolchain. The standard runner
-builds the current production host and application in all three Roc backends and
-both allocator modes. Linux uses the same command through `tools/linux/test.sh`.
+builds the production listener fixture on dev and speed with both allocator modes. Linux uses the same command through `tools/linux/test.sh`.
 
 The independent client uses the hashed `tests/http2-engine/requirements.txt`
 dependencies installed into a dedicated venv by the setup check. Checks run after
@@ -59,7 +58,7 @@ continue, and a committed response can finish after the execution cap. Access
 logs retain one timeout for the cancelled handler. Startup rejects zero and the
 first duration beyond the nanosecond representation; a valid HTTP/2 cap leaves an
 HTTP/1 handler running past that cap unaffected. Existing cases omit the cap and
-exercise the default `Unlimited` branch in every backend and allocator mode.
+exercise the default `Unlimited` branch.
 
 Request-execution checks additionally run without a listener cap. They verify that
 elapsed time includes a delayed body and remains monotonic across effect suspension,
@@ -100,8 +99,7 @@ sends EOF, then count a 256 KiB body without accumulating it in the application.
 This exceeds the fixture's 1 KiB finite-body cap and crosses repeated receive
 windows. Eighteen resets reuse all stream slots while the callback is asleep with
 queued input; an unrelated stream completes each time. Another reset cancels a
-reader waiting for more input. TCP/Unix, all three backends and both allocator
-modes check worker identity, cleanup and continued peer progress.
+reader waiting for more input. The TCP and Unix checks verify worker identity, cleanup and continued peer progress.
 
 Streamed half-close checks hold response credit at 1024 bytes while an unrelated
 stream completes, then release it and assert all DATA/trailers precede exactly one
@@ -121,4 +119,4 @@ middleware. With only 1 KiB of response credit, a 128 KiB upload must still
 progress through receive-window updates while an unrelated request completes.
 Empty input and 16 KiB chunk boundaries verify counts and terminal trailers;
 reset while both directions wait must release the native permit without a
-worker restart. The same probes run over TCP and Unix in every backend/allocator.
+worker restart. The same probes run over TCP and Unix.

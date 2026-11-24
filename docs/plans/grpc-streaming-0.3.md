@@ -41,25 +41,15 @@ The [gRPC roadmap](grpc.md) records responsibilities and excluded features.
 
 ## Release completion
 
-Each decoder has an 8 MiB allocation budget per decoded
-message, including nested values and temporary copies, with retained decoder
-storage charged against the shared worker ceiling. The
-[decoder heap](../../platform/host/allocator/decode_heap.zig) charges value buffers
-and their allocation headers to both ceilings. The fixed heap descriptor counts
-only toward the worker ceiling. Its tests cover allocation
-headers, overlapping buffers during growth, competition with transport storage
-and request cleanup. The [host allocation context](../design/execution-model.md#allocation-domains)
-routes fresh allocations inside a decode scope to the message heap. Reallocations
-and frees follow the original owner even in a later callback.
-All four RPC forms copy the payload into the heap before invoking the codec,
-including when a decoder retains its input. Failure to create the heap or
-copy the input yields `RESOURCE_EXHAUSTED`. Unary, server-streaming and
-client-streaming handlers also supply a finite error response for allocation
-failure inside the codec, before output starts. A bidirectional handler supplies
-the unsent suffix of an already started envelope and terminal status fields. On codec exhaustion
-the writer drains that suffix under flow control and sends `RESOURCE_EXHAUSTED`.
-The [distribution check](../../tests/release/verify_grpc.py) exercises all four
-forms against the extracted packages.
+All four RPC forms charge the input copy and codec allocations to an 8 MiB
+per-message budget. Allocation failure yields `RESOURCE_EXHAUSTED`. For
+bidirectional calls with a partially written reply, verify the rest of that
+message arrives before the error trailers when the peer restores credit.
+The [allocation contract](../design/execution-model.md#allocation-domains)
+defines ownership and cleanup. The [streaming fixture](../../tests/grpc-streaming/README.md)
+checks failure during blocked output, and the
+[distribution check](../../tests/release/verify_grpc.py) exercises all four forms
+against extracted packages.
 
 0.3 is ready for release preparation only when all four RPC forms meet these
 acceptance gates, unsupported features are explicit, and migration/compatibility

@@ -41,8 +41,8 @@ regenerate them with:
 zig-out/grpc-example/venv/bin/python integrations/roxum-grpc/example/generate.py
 ```
 
-Use `python3 tools/check.py --only test-grpc-example` to build and run all three
-backends with both allocators. The more exhaustive protocol, deadline and
+Use `python3 tools/check.py --only test-grpc-example` to run the two-thread server on
+dev and speed with both allocators. The more exhaustive protocol, deadline and
 cancellation matrices remain in `tests/grpc-unary` and `tests/grpc-streaming`.
 
 For the released packages and generator, follow the

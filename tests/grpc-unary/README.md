@@ -23,6 +23,6 @@ on Debian). The Linux test image includes these dependencies. The fixture also
 uses the `openssl` command to create temporary certificates. These are test-only
 dependencies, not dependencies of the roxum host or integration package.
 
-Run `python3 tools/check.py --only test-grpc-unary` for all backend/allocator
-combinations. `test_generator.py` covers opt-in generation and atomic rejection
+Run `python3 tools/check.py --only test-grpc-unary` for dev and speed
+with both allocators. `test_generator.py` covers opt-in generation and atomic rejection
 of unsupported descriptors; codec-only generation must stay platform-free.

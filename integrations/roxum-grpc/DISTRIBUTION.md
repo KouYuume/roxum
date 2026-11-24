@@ -12,8 +12,7 @@ Install the Roc compiler named by the release's `protobuf.roc_release` (built fr
 location, verify artifact SHA-256 hashes before extraction, and use the generator
 and wire library from the same release. The integration's version and
 `platform_versions` are recorded in `release.json`; compiler identity is stricter
-than the version range. Existing releases without these artifacts do not acquire
-Unary support from this guide.
+than the version range.
 
 ## Build a service outside the checkout
 
@@ -51,24 +50,19 @@ In another terminal, use the printed port:
 .venv/bin/python client.py 127.0.0.1:PORT --bindings python-client
 ```
 
-Python, protoc and grpcio are build/client tools, not dependencies of the resulting
-server executable. The generated codecs use the pure Roc wire library; request
-handling and status policy live in the integration. The host owns HTTP/2 transport
-and execution lifetimes. See [TLS deployment](../../docs/guides/reverse-proxy.md#native-grpc-over-tls)
+Python, protoc and grpcio are needed for generation and the example client. The
+built server runs independently. See [TLS deployment](../../docs/guides/reverse-proxy.md#native-grpc-over-tls)
 for production ingress.
 
-## Supported scope and release evidence
+## Release compatibility and verification
 
-The 0.3 example exercises Unary, server-streaming, client-streaming and
-bidirectional RPC. The 0.2 release supports Unary only. Server reflection, gRPC-Web and compressed messages are not provided. The
-[schema contract](../../libraries/roc-protobuf/DISTRIBUTION.md#compatibility) applies
-to generated messages; supplying `grpc` and `pf` explicitly enables typed service
-registration. Codec-only generation continues to ignore services.
+The core 0.3 example calls Unary, server-streaming, client-streaming and
+bidirectional methods. The core 0.2 example supports Unary only. For supported
+message types, see the [schema contract](../../libraries/roc-protobuf/DISTRIBUTION.md#compatibility).
 
-`zig build test-m13a` builds actual release artifacts, checks metadata and hashes,
-installs the generator from its extracted source archive, generates this service
-outside the checkout, and runs its client against all three compiler backends.
-Each build uses fresh caches and must fetch platform, gRPC and wire bundles by
-URL. `test-grpc-example` verifies the source example across both allocators;
-`test-grpc-unary` and `test-grpc-streaming` cover direct and TLS-proxied protocol
-behavior. Publishing and release version selection remain maintainer operations.
+`zig build test-m13a` verifies the release metadata and hashes, installs the
+extracted generator, and builds this service outside the checkout. It runs the
+client against dev and speed builds, each with a fresh cache so that all three
+bundles must be fetched by URL. The example requests two server threads.
+For interpreter coverage with a single thread, see the
+[streaming acceptance suite](../../tests/grpc-streaming/README.md).

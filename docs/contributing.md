@@ -1,6 +1,6 @@
 # Contributing
 
-The full checks build every test application in every Roc backend and allocator mode. They run on your machine before you push, so pull request CI only needs a fast subset.
+The full checks run each test group with the backends and allocators configured in [the runner](../tools/check.py). The default matrix covers speed, dev and interpreter with both allocators. Fixtures that require multiple server threads run on speed and dev. They run on your machine before you push, so pull request CI only needs a fast subset.
 
 ## Setup
 
