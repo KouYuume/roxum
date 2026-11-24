@@ -19,6 +19,7 @@ import sys
 import tempfile
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -33,9 +34,6 @@ from tax_service import TaxService  # noqa: E402
 CLIENTS = 8
 QUOTE = "/products/tea/quote/1"
 QUOTE_ROUTE = "/products/{sku}/quote/{quantity}"
-# Requests sent this long before SIGTERM must succeed; one sent closer may
-# still be in the kernel's buffer when the drain closes idle connections.
-MARGIN_SECONDS = 0.05
 
 
 def free_port():
@@ -80,53 +78,22 @@ def wait_for(condition, label, timeout=15):
     raise AssertionError(f"timed out waiting for {label}")
 
 
-def ready(port):
+def readiness_status(port):
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
     try:
-        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
         connection.request("GET", "/ready")
-        return connection.getresponse().status == 200
+        return connection.getresponse().status
     except OSError:
-        return False
+        return None
+    finally:
+        connection.close()
 
 
-def wait_between_responses(clients, delay_seconds):
-    """Every quote waits on the tax service, so the clients' responses come
-    together, one burst per delay. A scrape in a burst finds a request counted in
-    one series and not yet in the next, and a signal after one finds none in
-    flight, so wait for the middle of the delay."""
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline:
-        latest = max(result[1] for client in clients for result in client.results)
-        if time.monotonic() - latest >= delay_seconds / 2:
-            return
-        time.sleep(0.005)
-    raise AssertionError("the responses did not come together")
-
-
-class Client(threading.Thread):
-    """Sends quotes on one keep-alive connection until it closes, noting
-    when each was sent, when it finished, and how."""
-
-    def __init__(self, port, stop):
-        super().__init__(daemon=True)
-        self.port = port
-        self.stop = stop
-        self.results = []
-
-    def run(self):
-        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)
-        while not self.stop.is_set():
-            sent = time.monotonic()
-            try:
-                connection.request("GET", QUOTE)
-                response = connection.getresponse()
-                response.read()
-                self.results.append((sent, time.monotonic(), response.status))
-                if response.getheader("Connection") == "close":
-                    return
-            except (OSError, http.client.HTTPException) as error:
-                self.results.append((sent, time.monotonic(), type(error).__name__))
-                return
+def quote(connection):
+    connection.request("GET", QUOTE)
+    response = connection.getresponse()
+    response.read()
+    return response.status
 
 
 def start(executable, directory, local_text):
@@ -179,37 +146,39 @@ def verify(executable, directory, opt, database, tax):
         # restarted and counted.
         os.kill(children(server.pid)[0], signal.SIGKILL)
         wait_for(lambda: scrape(metrics_port).get(("roxum_worker_restarts_total", ())) == 1, "the restart")
-        wait_for(lambda: len(children(server.pid)) == 1 and ready(metrics_port), "the restarted worker")
+        wait_for(lambda: len(children(server.pid)) == 1 and readiness_status(metrics_port) == 200, "the restarted worker")
 
-        # Load, with every quote waiting on the tax service, then SIGTERM.
-        tax.delay_seconds = 0.3
-        stop = threading.Event()
-        clients = [Client(port, stop) for _ in range(CLIENTS)]
-        for client in clients:
-            client.start()
-        time.sleep(1.0)
-        wait_between_responses(clients, tax.delay_seconds)
-        samples = scrape(metrics_port)
-        terminated_at = time.monotonic()
-        os.kill(server.pid, signal.SIGTERM)
-        stop.set()
-        for client in clients:
-            client.join(timeout=30)
+        connections = [http.client.HTTPConnection("127.0.0.1", port, timeout=30) for _ in range(CLIENTS)]
+        waiting_for_tax = threading.Barrier(CLIENTS + 1, timeout=15)
+        release_tax = threading.Event()
+
+        def hold_response():
+            waiting_for_tax.wait()
+            release_tax.wait()
+
+        try:
+            with ThreadPoolExecutor(max_workers=CLIENTS) as pool:
+                assert list(pool.map(quote, connections)) == [200] * CLIENTS, opt
+                # Keep the completed quote count fixed while /metrics reads
+                # the request counter and the duration histogram separately.
+                tax.before_response = hold_response
+                pending = [pool.submit(quote, connection) for connection in connections]
+                try:
+                    waiting_for_tax.wait()
+                    samples = scrape(metrics_port)
+                    os.kill(server.pid, signal.SIGTERM)
+                    wait_for(lambda: readiness_status(metrics_port) == 503, "the supervisor to start draining")
+                finally:
+                    release_tax.set()
+                assert [request.result() for request in pending] == [200] * CLIENTS, opt
+        finally:
+            for connection in connections:
+                connection.close()
         status = server.wait(timeout=30)
     finally:
-        tax.delay_seconds = 0
         logs = finish(server, stderr)
 
     assert status == 0, (opt, status, logs)
-    results = [result for client in clients for result in client.results]
-    before = [result for result in results if result[0] < terminated_at - MARGIN_SECONDS]
-    failed = [result for result in before if result[2] != 200]
-    assert before and not failed, (opt, failed, logs)
-    in_flight = [result for result in before if result[1] > terminated_at]
-    assert in_flight, (opt, "no request was in flight at SIGTERM", logs)
-    server_errors = [result for result in results if isinstance(result[2], int) and result[2] >= 500]
-    assert not server_errors, (opt, server_errors, logs)
-
     expected = {
         requests_total("/products", "POST", "201"): 1,
         requests_total("/products/{sku}", "PUT", "200"): 1,
@@ -217,19 +186,18 @@ def verify(executable, directory, opt, database, tax):
         requests_total("/products/{sku}", "DELETE", "204"): 1,
         requests_total("", "", "400", "bad_request"): 1,
         ("roxum_worker_restarts_total", ()): 1,
+        requests_total(QUOTE_ROUTE, "GET", "200"): CLIENTS,
+        ("roxum_http_request_duration_seconds_count", (("route", QUOTE_ROUTE),)): CLIENTS,
     }
     for key, value in expected.items():
-        assert samples.get(key) == value, (opt, key, samples.get(key))
-    quotes = samples.get(requests_total(QUOTE_ROUTE, "GET", "200"), 0)
-    assert quotes > 0, (opt, "no quote counted")
-    assert samples.get(("roxum_http_request_duration_seconds_count", (("route", QUOTE_ROUTE),))) == quotes, opt
+        assert samples.get(key) == value, (opt, key, samples.get(key), value)
     for origin in (f"127.0.0.1:{tax.port}", f"127.0.0.1:{database.port}"):
         assert samples.get(("roxum_tcp_pool_wait_seconds_count", (("origin", origin),)), 0) > 0, (opt, origin)
     # One worker process: its gauges add up its threads.
     assert ("roxum_requests_in_progress", (("worker", "0"),)) in samples, opt
     assert ("roxum_requests_in_progress", (("worker", "1"),)) not in samples, opt
     print(f"{opt}: CRUD, metrics, a restart, and SIGTERM under load "
-          f"({len(before)} requests, {len(in_flight)} in flight): PASS")
+          f"({CLIENTS} completed quotes, {CLIENTS} in flight): PASS")
 
 
 def main(opt, executable):
