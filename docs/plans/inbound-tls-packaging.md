@@ -1,15 +1,13 @@
 # Inbound TLS packaging trials
 
-Mbed TLS 4.1.2 is the smaller candidate for the next intact-host handshake
-trial. Shipping its complete static libraries adds 4,096,316 expanded bytes
-across three targets. Both candidates exceed the current
-[13,000,000-byte release limit](../../tools/release-bundle.sh).
-Before adoption, measure the host configuration needed to serve TLS and use
-that result to decide the distribution budget.
+The intact-host trial uses Mbed TLS 4.1.2 on all three release targets.
+The next packaging decision is whether to raise the
+[13,000,000-byte expanded release limit](../../tools/release-bundle.sh)
+or change how the engine is distributed before adding the public listener API.
 
 ## Measurements
 
-Both trials started from the same locally built 0.3.0 platform bundle, SHA-256
+The standalone trials started from the same locally built 0.3.0 platform bundle, SHA-256
 `af01b5c411b94845ea9cf380a512cd0747aca73cdbdb7019ce2fd2b3124f650a`.
 Each candidate includes the engine archives and upstream licenses.
 
@@ -26,7 +24,32 @@ certificate-verifying client on Apple silicon, Linux arm64 and emulated Linux
 x86_64. On macOS the probe links only libSystem. Both musl probes are static.
 On all three targets the hello Roc application linked against the complete
 extracted host archive and served the expected cleartext HTTP/1.1 response.
-An HTTPS handshake through that application's host is the next integration check.
+
+## Intact-host trial
+
+The trial builds the release host in a disposable copy of the source tree
+and inserts one hook after TCP accept. With trial credentials, the worker
+drives a handshake on the accepted socket and closes it. Without credentials,
+the same executable serves the hello route. The app uses the complete archive
+from the extracted bundle, including its normal host entry point and the TLS
+engine. The test hook polls synchronously and loads credentials per connection.
+Production admission, readiness scheduling and encrypted HTTP remain separate
+steps in the [0.4 plan](inbound-tls-0.4.md).
+
+The bundle measured **16,496,190 bytes expanded** and **5,112,110 bytes
+compressed**, 3,496,190 bytes above the expanded limit. The intermediate
+release build with the accept hook measured 12,748,768 bytes expanded.
+On Apple silicon, Linux arm64 and emulated Linux x86_64, a verifying client
+exercised all seven ALPN cases for each of TLS 1.2 and TLS 1.3. The verifier
+checked the worker’s result for each connection, including the HTTP/1.1
+fallback when the client omitted ALPN. The same
+hello binary served its cleartext route on each target. The macOS executable
+links only libSystem and both Linux executables are static PIE.
+
+The server build disables the TLS client, X.509 certificate writing, and
+certificate signing request parsing and writing. It retains the default cryptographic
+algorithms. Compile the musl libraries and adapter with `-fPIC` for Roc's
+static PIE linker. The standalone static probe can link without this flag.
 
 ## Reproduce
 
@@ -55,6 +78,19 @@ entry object from a private link copy. The hello binaries use the whole
 extracted archive. Start each hello binary and check that `GET /` returns
 HTTP 200 and `Hello, Roc!` followed by a newline. Use `otool -L` on macOS
 and `readelf -l -d` on Linux to inspect the probe's runtime dependencies.
+
+To reproduce the intact-host trial, run these commands in the checkout with
+Git and patch installed. The script builds the committed host at HEAD in the
+new work directory. The verifier supplies temporary credentials and checks
+the cleartext route and all seven ALPN cases separately for TLS 1.2 and 1.3.
+
+```sh
+bash tests/inbound-tls/package-mbedtls.sh --host-trial mbedtls-4.1.2.tar.bz2 "$host_trial"
+python3 tests/inbound-tls/verify-host.py "$host_trial/arm64mac/hello"
+```
+
+Run the same verifier with the extracted application's `arm64musl/hello` and
+`x64musl/hello` binaries on their respective Linux architectures.
 
 ## Engine configurations and updates
 

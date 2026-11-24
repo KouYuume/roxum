@@ -11,6 +11,19 @@ import tempfile
 
 SOURCE = pathlib.Path(__file__).with_name("server.c").resolve()
 
+ALPN_CASES = (
+    (["http/1.1", "h2"], "h2"), (["h2", "http/1.1"], "h2"),
+    (["other", "h2"], "h2"), (["h2"], "h2"), (["http/1.1"], "http/1.1"),
+    ([], "http/1.1"), (["other"], None),
+)
+
+
+def create_credentials(cert, key):
+    subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                    "-keyout", key, "-out", cert, "-days", "1", "-subj", "/CN=localhost",
+                    "-addext", "subjectAltName=DNS:localhost"], check=True, stdout=subprocess.DEVNULL,
+                   stderr=subprocess.PIPE)
+
 
 def check(server, cert, key, offers, expected):
     context = ssl.create_default_context(cafile=str(cert))
@@ -68,15 +81,8 @@ def main():
                 flags = subprocess.check_output(["pkg-config", "--cflags", "--libs", "openssl"], text=True)
             subprocess.run(["zig", "cc", "-Wall", "-Wextra", "-Werror", str(SOURCE),
                             *shlex.split(flags), "-o", server], check=True)
-        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
-                        "-keyout", key, "-out", cert, "-days", "1", "-subj", "/CN=localhost",
-                        "-addext", "subjectAltName=DNS:localhost"], check=True, stdout=subprocess.DEVNULL,
-                       stderr=subprocess.PIPE)
-        for offers, expected in [
-            (["http/1.1", "h2"], "h2"), (["h2", "http/1.1"], "h2"),
-            (["other", "h2"], "h2"), (["h2"], "h2"), (["http/1.1"], "http/1.1"),
-            ([], "http/1.1"), (["other"], None),
-        ]:
+        create_credentials(cert, key)
+        for offers, expected in ALPN_CASES:
             check(server, cert, key, offers, expected)
             print(f"{offers} -> {expected or 'rejected'}")
 

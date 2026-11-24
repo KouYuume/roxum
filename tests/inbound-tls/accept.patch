@@ -1,0 +1,13 @@
+--- a/platform/host/event_loop.zig
++++ b/platform/host/event_loop.zig
+@@ -1,2 +1,4 @@
++extern "c" fn roxum_trial_accept(socket: c_int) c_int;
++
+ const std = @import("std");
+ const h2 = @import("http2/connection.zig");
+@@ -1011,4 +1013,5 @@
+                 net.PendingAccept.accepted => |accepted| {
+                     self.accept_warned = false;
++                    if (roxum_trial_accept(accepted.socket) != 0) continue;
+                     if (reject_new) self.openRejected(accepted) else self.open(accepted);
+                 },

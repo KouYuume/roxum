@@ -31,15 +31,13 @@ See the OpenSSL [handshake](https://docs.openssl.org/3.5/man3/SSL_accept/) and
 
 ## 2. Select and package the server engine
 
-The [static packaging trials](inbound-tls-packaging.md) favor Mbed TLS for
-the intact-host handshake check. Its full static build still exceeds the
-release budget. Reuse the host's readiness and deadline
-machinery; its [outbound TLS module](../../platform/host/tls.zig) wraps a
-client session. Before committing to an engine, pin the source and verify
-licensing, update procedure, randomness, cross-builds and static linking into
-the released host for Apple silicon macOS and both Linux musl architectures.
-Measure expanded bundle size against the current release budget. Require an
-extracted application to handshake without a system TLS development package.
+The [packaging trials](inbound-tls-packaging.md) exercise Mbed TLS in the
+extracted Roc application on all three targets. Settle the distribution
+budget before integrating it into the release build. Carry the verified source
+pin, license files and musl PIC flags into that build and retain the
+extracted-application handshake test. Production connections should use the
+host's readiness and deadline machinery. The existing
+[outbound TLS module](../../platform/host/tls.zig) wraps a client session.
 
 ## 3. Configure credentials and admit connections
 
