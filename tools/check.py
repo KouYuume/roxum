@@ -202,7 +202,8 @@ TESTS = [
          ["bash", "-c", 'python3 tests/guide/verify.py routing "$1" && python3 tests/guide/verify.py extractors "$2" '
           '&& python3 tests/guide/verify.py middleware "$3"', "guide", "{exe:routing}", "{exe:extractors}", "{exe:middleware}"],
          allocators=ARENA,
-         checks=[["bash", "-c", f'{ROC} docs platform/main.roc --output="$(mktemp -d)" >/dev/null']]),
+         checks=[[ROC, "test", "tests/guide/routing.roc"],
+                 ["bash", "-c", f'{ROC} docs platform/main.roc --output="$(mktemp -d)" >/dev/null']]),
     Test("test-e2e", {"echo": "tests/e2e/app.roc"},
          ["zig", "build", "test-e2e", "-Dopt={opt}", "-Dcontract-alloc={contract_bool}", "-De2e-readiness=false"],
          env={"ROXUM_PREBUILT_EXE": "{exe:echo}"}, timing=True, alone=True),
