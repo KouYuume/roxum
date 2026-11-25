@@ -25,6 +25,23 @@ def create_credentials(cert, key):
                    stderr=subprocess.PIPE)
 
 
+def expect_no_application_protocol(context, peer):
+    # CPython's error text varies with OpenSSL. Inspect the received TLS alert.
+    alerts = []
+
+    def observe(_connection, direction, _version, content_type, _message_type, data):
+        if direction == "read" and content_type == 21:  # TLS Alert
+            alerts.append(data)
+
+    context._msg_callback = observe
+    try:
+        with context.wrap_socket(peer, server_hostname="localhost"):
+            raise AssertionError("unsupported ALPN offer accepted")
+    except ssl.SSLError as error:
+        if alerts != [bytes((2, 120))]:  # fatal no_application_protocol
+            raise AssertionError(f"expected fatal no_application_protocol, received {alerts!r}") from error
+
+
 def check(server, cert, key, offers, expected, mode=None):
     context = ssl.create_default_context(cafile=str(cert))
     if offers:
@@ -46,18 +63,15 @@ def check(server, cert, key, offers, expected, mode=None):
                 raise TimeoutError("server startup timeout")
             if process.stdout.readline().strip() != "waiting for ClientHello":
                 raise AssertionError("server did not signal a read wait")
-            try:
+            if expected is None:
+                expect_no_application_protocol(context, client)
+                output, errors = process.communicate(timeout=5)
+            else:
                 with context.wrap_socket(client, server_hostname="localhost") as channel:
-                    if expected is None:
-                        raise AssertionError(f"unsupported offer accepted: {offers}")
                     negotiated = channel.selected_alpn_protocol()
                     if negotiated != (expected if offers else None):
                         raise AssertionError(f"unexpected ALPN for {offers}: {negotiated!r}")
                     output, errors = process.communicate(timeout=5)
-            except ssl.SSLError as error:
-                if expected is not None or "no application protocol" not in str(error).lower().replace("_", " "):
-                    raise
-                output, errors = process.communicate(timeout=5)
             if expected is None:
                 if process.returncode == 0 or output:
                     raise AssertionError((process.returncode, output, errors))
