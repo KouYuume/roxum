@@ -51,8 +51,9 @@ In another terminal, use the printed port:
 ```
 
 Python, protoc and grpcio are needed for generation and the example client. The
-built server runs independently. See [TLS deployment](../../docs/guides/reverse-proxy.md#native-grpc-over-tls)
-for production ingress.
+built server runs independently. See the [example](example/README.md) for direct
+TLS on the 0.4 development branch and the [reverse proxy guide](../../docs/guides/reverse-proxy.md#native-grpc-over-tls)
+for TLS termination in front of a cleartext listener.
 
 ## Release compatibility and verification
 
@@ -62,7 +63,8 @@ message types, see the [schema contract](../../libraries/roc-protobuf/DISTRIBUTI
 
 `zig build test-m13a` verifies the release metadata and hashes, installs the
 extracted generator, and builds this service outside the checkout. It runs the
-client against dev and speed builds, each with a fresh cache so that all three
+client over both cleartext HTTP/2 and direct TLS with dev and speed builds.
+Each build uses a fresh cache so that all three
 bundles must be fetched by URL. The example requests two server threads.
 For interpreter coverage with a single thread, see the
 [streaming acceptance suite](../../tests/grpc-streaming/README.md).

@@ -77,8 +77,11 @@ the cleartext and proxy deployments under test.
 
 ## 5. Accept and distribute 0.4
 
-Run the [toolchain matrix](../toolchain.md) and exercise direct TLS from
-extracted bundles on supported targets. Publish the listener examples,
-certificate rotation procedure, operational limits, updated compatibility
+The [release bundle check](inbound-tls-packaging.md#reproduce) exercises
+HTTPS and negotiated HTTP/2 on the current target. The [distributed gRPC
+example](../../integrations/roxum-grpc/DISTRIBUTION.md#release-compatibility-and-verification)
+runs all four RPC forms over direct TLS and cleartext HTTP/2. Run the checks across the supported
+targets as part of the [toolchain matrix](../toolchain.md). Publish the listener
+examples, certificate rotation procedure, operational limits, updated compatibility
 manifest, migration guidance and changelog. Review the public API and versions
 under the [release policy](../design/versioning.md) before promoting develop.

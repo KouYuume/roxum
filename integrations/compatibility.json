@@ -300,7 +300,7 @@
         "tests/grpc-streaming/pressure.py",
         "tests/grpc-streaming/transport.py"
       ],
-      "compatibility_sha256": "956c43c1400567b9434c0ec61b9d90409007823c74422283b7e95925136f7a43",
+      "compatibility_sha256": "61c875104fa8c16d9f60fe05366fcad33c77ae583c7f8ca29caaff8b569f12ee",
       "max_unpacked_bytes": 65536
     }
   ]
