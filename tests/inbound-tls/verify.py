@@ -130,7 +130,7 @@ def check_write_wait(server, cert, key, *, disconnect):
             process.communicate()
 
 
-def check_records(server, cert, key, version, truncated):
+def check_records(server, cert, key, version, mode):
     context = ssl.create_default_context(cafile=str(cert))
     context.minimum_version = context.maximum_version = version
     client, peer = socket.socketpair()
@@ -138,7 +138,8 @@ def check_records(server, cert, key, version, truncated):
         client.settimeout(5)
         peer.setblocking(False)
         peer.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
-        mode = "truncated" if truncated else "records"
+        if mode == "duplex":
+            context.set_alpn_protocols(["h2"])
         process = subprocess.Popen([server, str(peer.fileno()), cert, key, mode], pass_fds=(peer.fileno(),),
                                    stdout=subprocess.PIPE, bufsize=0)
         def expect_line(expected):
@@ -148,16 +149,19 @@ def check_records(server, cert, key, version, truncated):
             peer.close()
             expect_line(b"waiting for ClientHello")
             with context.wrap_socket(client, server_hostname="localhost", suppress_ragged_eofs=False) as channel:
-                expect_line(b"http/1.1")
+                expect_line(b"h2" if mode == "duplex" else b"http/1.1")
                 expect_line(b"waiting for plaintext")
                 channel.sendall(b"ab")
                 expect_line(b"waiting to write plaintext")
+                if mode == "duplex":
+                    channel.sendall(b"c")
+                    expect_line(b"read while blocked")
                 received = bytearray()
                 while chunk := channel.recv(16384):
                     received.extend(chunk)
                 if received != b"b" + bytes(i % 251 for i in range(256 * 1024)):
                     raise AssertionError("partial writes lost or duplicated plaintext")
-                if not truncated:
+                if mode != "truncated":
                     channel.unwrap().close()
             if process.wait(timeout=5) != 0:
                 raise AssertionError(f"wrong peer closure result for {mode}")
@@ -191,8 +195,8 @@ def main():
             for mode in ("empty-read", "empty-write"):
                 check(server, cert, key, ["http/1.1"], "http/1.1", mode)
             for version in (ssl.TLSVersion.TLSv1_2, ssl.TLSVersion.TLSv1_3):
-                for truncated in (False, True):
-                    check_records(server, cert, key, version, truncated)
+                for mode in ("records", "truncated", "duplex"):
+                    check_records(server, cert, key, version, mode)
             print("PASS TLS records, buffered reads, partial writes, backpressure and shutdown")
         if args.check_write_wait:
             check_write_wait(server, cert, key, disconnect=False)

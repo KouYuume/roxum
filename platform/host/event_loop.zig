@@ -1195,17 +1195,21 @@ pub const Loop = struct {
                 self.readClock();
                 if (item.timeout.hasPassedAt(self.now) or self.drainingNow()) return self.close(slot);
                 if (config.finished) |finished| finished(result);
-                if (result == tls.Result.http1) {
-                    item.records = .{ .session = item.handshake.?, .ops = config.records };
-                    item.handshake = null;
-                    _ = self.handoff.pending_handshakes.fetchSub(1, std.builtin.AtomicOrder.release);
-                    item.watching_writable = false;
-                    item.state = Connection.State.reading;
-                    item.timeout = self.after(self.limits.initial_request_timeout_milliseconds);
-                    self.poller.restoreReadable(item.accepted.socket, token(slot, item.generation)) catch return self.close(slot);
-                    return self.advance(slot);
+                if (result == tls.Result.failed) return self.close(slot);
+                item.records = .{ .session = item.handshake.?, .ops = config.records };
+                item.handshake = null;
+                _ = self.handoff.pending_handshakes.fetchSub(1, std.builtin.AtomicOrder.release);
+                item.watching_writable = false;
+                item.state = Connection.State.reading;
+                item.timeout = self.after(self.limits.initial_request_timeout_milliseconds);
+                if (result == tls.Result.http2) {
+                    const protocol = h2.Connection.create(item.accepted.socket, self.poller, token(slot, item.generation), self.limits) catch return self.close(slot);
+                    item.http2 = protocol;
+                    protocol.owner.tls = &item.records.?;
+                    return self.advanceHttp2(slot);
                 }
-                self.close(slot);
+                self.poller.restoreReadable(item.accepted.socket, token(slot, item.generation)) catch return self.close(slot);
+                return self.advance(slot);
             },
         }
     }
@@ -1224,7 +1228,7 @@ pub const Loop = struct {
             if (protocol.failed) return self.close(slot);
             protocol.recordCompleted();
             protocol.wakeClosed();
-            if (progress == @import("http2/owner.zig").Progress.closed) return self.close(slot);
+            if (progress == @import("http2/owner.zig").Progress.closed) return self.finishIdle(slot);
             while (protocol.streams.nextMetadata()) |work| {
                 switch (work) {
                     h2_streams.Work.cancel => |id| protocol.completeExpired(id) catch return self.close(slot),
@@ -1252,7 +1256,7 @@ pub const Loop = struct {
                     },
                 }
             }
-            if (protocol.draining and !protocol.busy() and protocol.owner.engine.activeStreams() == 0 and (protocol.owner.engine.output() catch return self.close(slot)).len == 0) return self.close(slot);
+            if (protocol.draining and !protocol.busy() and protocol.owner.engine.activeStreams() == 0 and (protocol.owner.engine.output() catch return self.close(slot)).len == 0) return self.finishIdle(slot);
             if (progress == @import("http2/owner.zig").Progress.waiting) break;
         }
     }
@@ -1583,7 +1587,7 @@ pub const Loop = struct {
             protocol.expire(self.now);
             if (protocol.owner.runnable) self.advanceHttp2(slot);
             if (item.http2 == null) return;
-            if (!protocol.busy() and protocol.owner.engine.activeStreams() == 0 and protocol.owner.engine.pending.len == 0 and item.timeout.hasPassedAt(self.now)) self.close(slot);
+            if (!protocol.busy() and protocol.owner.engine.activeStreams() == 0 and protocol.owner.engine.pending.len == 0 and item.timeout.hasPassedAt(self.now)) self.finishIdle(slot);
             return;
         }
         switch (item.state) {
@@ -1733,6 +1737,15 @@ pub const Loop = struct {
 
     fn finishIdle(self: *Loop, slot: u32) void {
         const item = &self.handoff.connections[slot];
+        if (item.http2) |protocol| {
+            if (item.records == null or protocol.closed or protocol.busy() or protocol.owner.engine.activeStreams() != 0 or protocol.owner.retry_tls_read) return self.close(slot);
+            // Output has drained. Transfer the open socket back to the slot
+            // so the normal bounded TLS shutdown can finish the connection.
+            item.watching_writable = protocol.owner.watching_writable;
+            protocol.destroy();
+            item.http2 = null;
+            self.watchTls(slot, false) catch return self.close(slot);
+        }
         if (item.records != null and !item.watching_writable) return self.startLinger(slot, 0);
         self.close(slot);
     }
@@ -1766,6 +1779,7 @@ pub const Loop = struct {
     fn close(self: *Loop, slot: u32) void {
         const item = &self.handoff.connections[slot];
         if (item.records) |stream| {
+            if (item.http2 == null) self.poller.unwatchReadable(item.accepted.socket) catch {};
             self.handoff.tls_config.?.free(stream.session);
             item.records = null;
         }
@@ -1934,6 +1948,35 @@ test "TLS handshake re-arms the socket from writable to readable and releases it
     const Driver = struct {
         steps: usize = 0,
         frees: usize = 0,
+        writes: usize = 0,
+        reads: usize = 0,
+        pending: []const u8 = &.{},
+        blocked: bool = false,
+        incoming: []const u8 = &.{},
+
+        fn write(session: *tls.Session, data: [*]const u8, len: usize) callconv(std.builtin.CallingConvention.c) c_int {
+            const self: *@This() = @ptrCast(@alignCast(session));
+            self.writes += 1;
+            if (self.blocked) return 0;
+            if (self.writes == 1) {
+                self.pending = data[0..len];
+                return -2;
+            }
+            if (self.writes == 2) std.debug.assert(self.pending.ptr == data and self.pending.len == len);
+            return @intCast(len);
+        }
+
+        fn read(session: *tls.Session, dest: [*]u8, len: usize) callconv(std.builtin.CallingConvention.c) c_int {
+            const self: *@This() = @ptrCast(@alignCast(session));
+            self.reads += 1;
+            if (self.incoming.len != 0) {
+                const count = @min(len, self.incoming.len);
+                @memcpy(dest[0..count], self.incoming[0..count]);
+                self.incoming = self.incoming[count..];
+                return @intCast(count);
+            }
+            return if (self.reads == 1) -3 else -2;
+        }
 
         fn open(credentials: *const tls.Credentials, _: c_int) callconv(std.builtin.CallingConvention.c) ?*tls.Session {
             return @ptrCast(@constCast(credentials));
@@ -1963,9 +2006,10 @@ test "TLS handshake re-arms the socket from writable to readable and releases it
     defer std.heap.page_allocator.free(handoff.connections);
     defer std.heap.page_allocator.free(handoff.free_slots);
     handoff.poller = &poller;
+    const ops = tls_records.Ops{ .write = Driver.write, .read = Driver.read, .shutdown = undefined };
     handoff.tls_config = .{
         .credentials = @ptrCast(&driver),
-        .records = undefined,
+        .records = &ops,
         .maximum_pending = 1,
         .timeout_milliseconds = 5000,
         .open = Driver.open,
@@ -2010,6 +2054,29 @@ test "TLS handshake re-arms the socket from writable to readable and releases it
                     loop.onEvent(batch[0]);
                 }
                 try std.testing.expectEqual(@as(usize, 3), driver.steps);
+                try std.testing.expectEqual(@as(usize, 0), handoff.pending_handshakes.load(std.builtin.AtomicOrder.acquire));
+                const protocol = item.http2.?;
+                try std.testing.expectEqual(@as(usize, 1), driver.writes);
+                try std.testing.expectEqual(@as(usize, 0), driver.reads);
+                loop.onEvent(.{ .kind = poller_backend.Event.Kind.readable, .token = protocol.owner.token });
+                try std.testing.expect(protocol.owner.retry_tls_read and protocol.owner.watching_writable);
+                loop.onEvent(.{ .kind = poller_backend.Event.Kind.writable, .token = protocol.owner.token });
+                try std.testing.expect(!protocol.owner.retry_tls_read and !protocol.owner.watching_writable);
+                try std.testing.expect(driver.reads >= 2);
+                // Hold the SETTINGS acknowledgement in the socket send queue.
+                // The owner must still deliver a peer reset to the stream.
+                const headers = "\x82\x87\x84\x01\x09localhost";
+                try protocol.owner.engine.receive("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" ++
+                    "\x00\x00\x00\x04\x00\x00\x00\x00\x00" ++
+                    "\x00\x00\x0e\x01\x04\x00\x00\x00\x01" ++ headers);
+                try std.testing.expectEqual(@as(usize, 1), protocol.owner.engine.activeStreams());
+                driver.blocked = true;
+                driver.incoming = "\x00\x00\x04\x03\x00\x00\x00\x00\x01\x00\x00\x00\x08";
+                protocol.owner.runnable = true;
+                _ = try protocol.owner.step();
+                try std.testing.expect(protocol.owner.ciphertext_pending and protocol.owner.watching_writable);
+                try std.testing.expectEqual(@as(usize, 0), protocol.owner.engine.activeStreams());
+                loop.close(0);
             },
         }
         try std.testing.expectEqual(@as(usize, 1), driver.frees);
