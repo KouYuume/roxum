@@ -1,3 +1,4 @@
+const tls_records = @import("../inbound_tls/records.zig");
 const std = @import("std");
 const raw_bytes = @import("../raw_bytes.zig");
 const chunked = @import("../http1/chunked.zig");
@@ -356,7 +357,7 @@ pub const BodyStream = struct {
         };
         if (self.send_continue) {
             self.send_continue = false;
-            net.sendAllUntil(self.socket, continue_response, deadline) catch |err| switch (err) {
+            tls_records.sendAllUntil(self.reader.records, self.socket, continue_response, deadline) catch |err| switch (err) {
                 error.SendTimeout => return error.RequestBodyTimeout,
                 else => |send_error| return send_error,
             };
@@ -387,7 +388,8 @@ pub const BodyStream = struct {
             self.reader.end = remaining;
             self.wire_offset = 0;
         }
-        const received = net.receiveUntil(
+        const received = tls_records.receiveUntil(
+            self.reader.records,
             self.socket,
             self.reader.wire_buffer[self.reader.end..],
             deadline,
@@ -477,6 +479,7 @@ pub const initial_wire_bytes: usize = 4 * 1024;
 pub const retained_wire_bytes: usize = 64 * 1024;
 
 pub const Reader = struct {
+    records: ?*tls_records.Stream = null,
     wire_buffer: []u8 = &.{},
     start: usize = 0,
     end: usize = 0,
@@ -812,7 +815,8 @@ pub const Reader = struct {
                     return error.RequestHeadTooLarge;
                 }
             }
-            const received = net.receiveUntil(
+            const received = tls_records.receiveUntil(
+                self.records,
                 socket,
                 self.wire_buffer[self.end..],
                 receive_deadline,

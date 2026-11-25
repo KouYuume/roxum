@@ -565,7 +565,7 @@ pub fn sendIovecsUntil(
     }
 }
 
-fn waitFor(
+pub fn waitFor(
     socket_fd: Socket,
     events: i16,
     io_deadline: Deadline,

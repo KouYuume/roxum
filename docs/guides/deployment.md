@@ -13,7 +13,7 @@ client ──HTTPS / HTTP/2──> proxy / load balancer ──HTTP/1.1──> r
 
 | | in front of roxum | in roxum |
 |---|---|---|
-| HTTPS and HTTP/3 traffic | the proxy | TLS negotiation in the 0.4 development build |
+| HTTPS and HTTP/3 traffic | the proxy | HTTPS over HTTP/1.1 in the 0.4 development build |
 | HTTP/2 | the proxy can terminate it or use an HTTP/2 upstream | explicit cleartext prior-knowledge listener with incremental I/O |
 | Static files | the proxy or a CDN, for a site mostly made of them | `Files.serve` and `Reply.file`, for files the app's routes own or check access to ([Files](files.md)) |
 | Compression | the proxy's `gzip` / `brotli`, for everything at once | `Compression.layer`, for the routes you choose, and precompressed `.br` / `.gz` files ([Files](files.md#compressing-responses)) |
@@ -41,8 +41,10 @@ replace both files and restart the server.
 Each handshake also occupies a connection slot. At capacity new peers wait
 on the listener. The timeout starts when the worker accepts the connection.
 
-This development version closes the connection after ALPN negotiation.
-Continue terminating TLS at the proxy to serve HTTPS and gRPC requests.
+This development version serves HTTPS when the client offers only `http/1.1`
+or omits ALPN. A client offering `h2` selects HTTP/2 and the connection closes
+after negotiation. Keep terminating TLS at the proxy for those clients and for
+native gRPC.
 
 ## Opt-in HTTP/2
 

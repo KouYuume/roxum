@@ -1,5 +1,6 @@
 const std = @import("std");
 const tls = @import("inbound_tls/handshake.zig");
+const tls_records = @import("inbound_tls/records.zig");
 const h2 = @import("http2/connection.zig");
 const h2_streams = @import("http2/streams.zig");
 const builtin = @import("builtin");
@@ -124,6 +125,7 @@ pub const Connection = struct {
     open: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     accepted: net.AcceptedSocket = undefined,
     handshake: ?*tls.Session = null,
+    records: ?tls_records.Stream = null,
     http2: ?*h2.Connection = null,
     generation: u32 = 0,
     state: State = State.free,
@@ -896,6 +898,18 @@ pub const Loop = struct {
             _ = protocol.owner.ready(event);
             return self.advanceHttp2(slot);
         }
+        if (item.records != null and item.state != Connection.State.dispatched) {
+            const expected = if (item.watching_writable) poller_backend.Event.Kind.writable else poller_backend.Event.Kind.readable;
+            if (event.kind != expected) return;
+            switch (item.state) {
+                Connection.State.reading => self.advance(slot),
+                Connection.State.reading_body => self.advanceBody(slot),
+                Connection.State.writing => self.flush(slot),
+                Connection.State.lingering => self.drainLinger(slot),
+                else => unreachable,
+            }
+            return;
+        }
         switch (event.kind) {
             poller_backend.Event.Kind.readable => {
                 item.read_exhausted = false;
@@ -1084,8 +1098,9 @@ pub const Loop = struct {
         defer item.lock.unlock();
         // A request may have arrived on it meanwhile.
         if (!isIdle(item)) return false;
-        self.close(slot);
-        return true;
+        self.finishIdle(slot);
+        // A TLS alert that met backpressure still owns this slot.
+        return item.state == Connection.State.free;
     }
 
     fn isIdle(item: *const Connection) bool {
@@ -1177,8 +1192,18 @@ pub const Loop = struct {
                 self.poller.watchOnce(item.accepted.socket, !item.watching_writable, token(slot, item.generation)) catch return self.close(slot);
             },
             tls.Result.failed, tls.Result.http1, tls.Result.http2 => {
-                if (config.finished) |finished| {
-                    if (!item.timeout.hasPassedAt(net.monotonicNanoseconds() catch return self.close(slot))) finished(result);
+                self.readClock();
+                if (item.timeout.hasPassedAt(self.now) or self.drainingNow()) return self.close(slot);
+                if (config.finished) |finished| finished(result);
+                if (result == tls.Result.http1) {
+                    item.records = .{ .session = item.handshake.?, .ops = config.records };
+                    item.handshake = null;
+                    _ = self.handoff.pending_handshakes.fetchSub(1, std.builtin.AtomicOrder.release);
+                    item.watching_writable = false;
+                    item.state = Connection.State.reading;
+                    item.timeout = self.after(self.limits.initial_request_timeout_milliseconds);
+                    self.poller.restoreReadable(item.accepted.socket, token(slot, item.generation)) catch return self.close(slot);
+                    return self.advance(slot);
                 }
                 self.close(slot);
             },
@@ -1281,6 +1306,37 @@ pub const Loop = struct {
         self.advanceHttp2(request.slot);
     }
 
+    fn watchTls(self: *Loop, slot: u32, writable: bool) !void {
+        const item = &self.handoff.connections[slot];
+        if (item.watching_writable == writable) return;
+        if (writable) {
+            try self.poller.watchWritable(item.accepted.socket, token(slot, item.generation));
+        } else {
+            try self.poller.unwatchWritable(item.accepted.socket, token(slot, item.generation));
+        }
+        item.watching_writable = writable;
+    }
+
+    fn tlsProgress(self: *Loop, slot: u32, progress: tls_records.Progress) !?usize {
+        switch (progress) {
+            tls_records.Progress.bytes => |count| {
+                try self.watchTls(slot, false);
+                return count;
+            },
+            tls_records.Progress.failed => return error.TlsFailed,
+            tls_records.Progress.want_read, tls_records.Progress.want_write => {
+                try self.watchTls(slot, progress == tls_records.Progress.want_write);
+                return null;
+            },
+        }
+    }
+
+    fn receive(self: *Loop, slot: u32, buffer: []u8) !?usize {
+        const item = &self.handoff.connections[slot];
+        if (item.records) |*stream| return self.tlsProgress(slot, stream.read(buffer));
+        return net.receiveAvailable(item.accepted.socket, buffer);
+    }
+
     /// Reads until the socket would block, dispatching once the buffered
     /// bytes hold a request head or cannot become a valid one.
     fn advance(self: *Loop, slot: u32) void {
@@ -1299,21 +1355,21 @@ pub const Loop = struct {
                 item.buffer = raw_bytes.realloc(item.buffer, grown) catch return self.close(slot);
             }
 
-            const received = net.receiveAvailable(
-                item.accepted.socket,
+            const received = self.receive(
+                slot,
                 item.buffer[item.length..],
             ) catch return self.close(slot);
             const count = received orelse return;
             if (count == 0) {
                 // A clean close between requests needs no response; a close
                 // inside a head is reported by the Roc thread's reader.
-                if (item.length == 0) return self.close(slot);
+                if (item.length == 0) return self.finishIdle(slot);
                 return self.dispatch(slot);
             }
 
             // epoll(7): a short stream read exhausts the current readable
             // bytes. Notifications received while dispatched are retained.
-            item.read_exhausted = headReadExhausted(count, item.buffer.len - item.length);
+            item.read_exhausted = item.records == null and headReadExhausted(count, item.buffer.len - item.length);
 
             const first_bytes = item.length == 0;
             item.length += count;
@@ -1390,8 +1446,8 @@ pub const Loop = struct {
         while (item.length < item.body_end) {
             if (item.length == item.buffer.len and !self.growBody(item, item.body_end))
                 return self.dispatchBody(slot, connection.BodyPrefetch.over_budget);
-            const received = net.receiveAvailable(
-                item.accepted.socket,
+            const received = self.receive(
+                slot,
                 item.buffer[item.length..@min(item.buffer.len, item.body_end)],
             ) catch return self.close(slot);
             const count = received orelse return;
@@ -1431,8 +1487,8 @@ pub const Loop = struct {
             // budget.
             if (item.length == item.buffer.len and !self.growBody(item, request_limits.maximum_wire_bytes))
                 return self.dispatchBody(slot, connection.BodyPrefetch.over_budget);
-            const received = net.receiveAvailable(
-                item.accepted.socket,
+            const received = self.receive(
+                slot,
                 item.buffer[item.length..],
             ) catch return self.close(slot);
             const count = received orelse return;
@@ -1540,6 +1596,9 @@ pub const Loop = struct {
             Connection.State.free, Connection.State.dispatched => return,
         }
         if (!item.timeout.hasPassedAt(self.now)) return;
+        // A TLS read waiting to flush protocol output must finish before
+        // another operation can write. Its deadline ends the session.
+        if (item.records != null and item.watching_writable) return self.close(slot);
         // A body that did not arrive in time: the Roc thread answers 408.
         if (item.state == Connection.State.reading_body) return self.dispatchBody(slot, connection.BodyPrefetch.timed_out);
         // A response write that outlives its deadline closes the connection,
@@ -1639,7 +1698,12 @@ pub const Loop = struct {
                 };
                 protocol.owner.runnable = true;
                 self.advanceHttp2(@intCast(index));
-            } else if (item.state == Connection.State.handshaking or isIdle(item)) {
+            } else if (isIdle(item)) {
+                self.finishIdle(@intCast(index));
+            } else if (item.state == Connection.State.lingering and item.records != null and item.records.?.shutdown_sent) {
+                // The peer owes no more application data after the response.
+                self.close(@intCast(index));
+            } else if (item.state == Connection.State.handshaking) {
                 self.close(@intCast(index));
             } else {
                 drainStream(item);
@@ -1667,11 +1731,17 @@ pub const Loop = struct {
         std.c._exit(1);
     }
 
+    fn finishIdle(self: *Loop, slot: u32) void {
+        const item = &self.handoff.connections[slot];
+        if (item.records != null and !item.watching_writable) return self.startLinger(slot, 0);
+        self.close(slot);
+    }
+
     fn expire(self: *Loop, slot: u32) void {
         const item = &self.handoff.connections[slot];
         // No bytes: an idle connection closes silently. Partial head: the
         // Roc thread sees the expired deadline and answers 408.
-        if (item.length == 0) return self.close(slot);
+        if (item.length == 0) return self.finishIdle(slot);
         self.dispatch(slot);
     }
 
@@ -1695,6 +1765,10 @@ pub const Loop = struct {
 
     fn close(self: *Loop, slot: u32) void {
         const item = &self.handoff.connections[slot];
+        if (item.records) |stream| {
+            self.handoff.tls_config.?.free(stream.session);
+            item.records = null;
+        }
         if (item.handshake) |session| {
             self.handoff.tls_config.?.free(session);
             item.handshake = null;
@@ -1743,7 +1817,7 @@ pub const Loop = struct {
             item.state = Connection.State.writing;
             return self.flush(slot);
         }
-        if (item.close_after_output) return self.startLinger(slot);
+        if (item.close_after_output) return self.startLinger(slot, linger_maximum_bytes);
         self.resumeReading(slot);
     }
 
@@ -1752,6 +1826,12 @@ pub const Loop = struct {
     fn flush(self: *Loop, slot: u32) void {
         const item = &self.handoff.connections[slot];
         while (item.output_sent < item.output_length) {
+            if (item.records) |*stream| {
+                const result = stream.write(item.output[item.output_sent..item.output_length]);
+                const written = self.tlsProgress(slot, result) catch return self.close(slot);
+                item.output_sent += written orelse return;
+                continue;
+            }
             const sent = net.sendAvailable(
                 item.accepted.socket,
                 item.output[item.output_sent..item.output_length],
@@ -1778,7 +1858,7 @@ pub const Loop = struct {
         }
         item.releaseOutput();
         item.recordAccess(true);
-        if (item.close_after_output) return self.startLinger(slot);
+        if (item.close_after_output) return self.startLinger(slot, linger_maximum_bytes);
         self.resumeReading(slot);
     }
 
@@ -1786,13 +1866,13 @@ pub const Loop = struct {
     /// until it closes, the byte budget runs out, or the linger deadline
     /// passes. Closing with unread bytes would make the kernel send a reset,
     /// which can destroy the response before the client reads it.
-    fn startLinger(self: *Loop, slot: u32) void {
+    fn startLinger(self: *Loop, slot: u32, unread_budget: usize) void {
         const item = &self.handoff.connections[slot];
         item.release();
-        if (!net.shutdownWrite(item.accepted.socket)) return self.close(slot);
+        if (item.records == null and !net.shutdownWrite(item.accepted.socket)) return self.close(slot);
         item.state = Connection.State.lingering;
         item.timeout = self.after(linger_milliseconds);
-        item.linger_remaining = linger_maximum_bytes;
+        item.linger_remaining = unread_budget;
         // Bytes that arrived while the Roc thread owned the socket raised no
         // event the loop acted on, so read them now.
         self.drainLinger(slot);
@@ -1800,6 +1880,25 @@ pub const Loop = struct {
 
     fn drainLinger(self: *Loop, slot: u32) void {
         const item = &self.handoff.connections[slot];
+        if (item.records) |*stream| {
+            if (!stream.shutdown_sent) {
+                const sent = self.tlsProgress(slot, stream.shutdown()) catch return self.close(slot);
+                if (sent == null) return;
+                stream.shutdown_sent = true;
+                if (!net.shutdownWrite(item.accepted.socket)) return self.close(slot);
+            }
+            while (item.linger_remaining > 0) {
+                const buffer = self.scratch[0..@min(self.scratch.len, item.linger_remaining)];
+                const received = self.receive(slot, buffer) catch return self.close(slot);
+                const count = received orelse {
+                    if (self.drainingNow()) return self.close(slot);
+                    return;
+                };
+                if (count == 0) break;
+                item.linger_remaining -= count;
+            }
+            return self.close(slot);
+        }
         switch (lingerStep(item.accepted.socket, &self.scratch, &item.linger_remaining)) {
             LingerStep.would_block => {},
             LingerStep.finished => self.close(slot),
@@ -1809,7 +1908,7 @@ pub const Loop = struct {
     fn resumeReading(self: *Loop, slot: u32) void {
         // A response that left before the drain began keeps its connection
         // until here; no next request is read.
-        if (self.drainingNow()) return self.startLinger(slot);
+        if (self.drainingNow()) return self.startLinger(slot, linger_maximum_bytes);
         const item = &self.handoff.connections[slot];
         item.state = Connection.State.reading;
         item.prefetch = .{};
@@ -1866,6 +1965,7 @@ test "TLS handshake re-arms the socket from writable to readable and releases it
     handoff.poller = &poller;
     handoff.tls_config = .{
         .credentials = @ptrCast(&driver),
+        .records = undefined,
         .maximum_pending = 1,
         .timeout_milliseconds = 5000,
         .open = Driver.open,
@@ -1916,6 +2016,65 @@ test "TLS handshake re-arms the socket from writable to readable and releases it
         try std.testing.expectEqual(@as(usize, 0), handoff.pending_handshakes.load(std.builtin.AtomicOrder.acquire));
         try std.testing.expectEqual(@as(usize, 0), handoff.openConnections());
     }
+}
+
+test "TLS response writes can wait for reads and the next request read can wait for writes" {
+    const Driver = struct {
+        writes: u8 = 0,
+        reads: u8 = 0,
+        pending: ?[*]const u8 = null,
+
+        fn write(session: *tls.Session, ptr: [*]const u8, len: usize) callconv(std.builtin.CallingConvention.c) c_int {
+            const self: *@This() = @ptrCast(@alignCast(session));
+            self.writes += 1;
+            std.debug.assert(len == 2);
+            if (self.pending) |previous| {
+                std.debug.assert(previous == ptr);
+                return 2;
+            }
+            self.pending = ptr;
+            return -2;
+        }
+        fn read(session: *tls.Session, _: [*]u8, _: usize) callconv(std.builtin.CallingConvention.c) c_int {
+            const self: *@This() = @ptrCast(@alignCast(session));
+            self.reads += 1;
+            return if (self.reads == 1) -3 else -2;
+        }
+    };
+    var driver = Driver{};
+    const ops = tls_records.Ops{ .read = Driver.read, .write = Driver.write, .shutdown = undefined };
+    var poller = try poller_backend.Poller.init();
+    defer poller.deinit();
+    var handoff = try Handoff.init(1);
+    defer std.heap.page_allocator.free(handoff.free_slots);
+    defer std.heap.page_allocator.free(handoff.connections);
+    handoff.poller = &poller;
+    var loop = Loop.init(&handoff);
+    var pair: [2]c_int = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), std.c.socketpair(std.c.AF.UNIX, std.c.SOCK.STREAM, 0, &pair));
+    defer net.closeSocket(pair[0]);
+    defer net.closeSocket(pair[1]);
+    const item = &handoff.connections[0];
+    defer item.release();
+    item.accepted.socket = pair[0];
+    item.records = .{ .session = @ptrCast(&driver), .ops = &ops };
+    item.output = try raw_bytes.dupe("ok");
+    item.output_length = item.output.len;
+    item.state = Connection.State.writing;
+    try poller.watchReadable(pair[0], 0);
+    loop.flush(0);
+    try std.testing.expectEqual(@as(u8, 1), driver.writes);
+    try std.testing.expect(!item.watching_writable);
+    try std.testing.expectEqual(@as(isize, 1), std.c.send(pair[1], "x", 1, 0));
+    var raw: [4]poller_backend.RawEvent = undefined;
+    var events: [4 * poller_backend.events_per_raw]poller_backend.Event = undefined;
+    for (try poller.wait(&raw, &events, 1000)) |event| loop.onEvent(event);
+    try std.testing.expectEqual(@as(u8, 2), driver.writes);
+    try std.testing.expectEqual(Connection.State.reading, item.state);
+    try std.testing.expect(item.watching_writable);
+    for (try poller.wait(&raw, &events, 1000)) |event| loop.onEvent(event);
+    try std.testing.expect(driver.reads >= 2);
+    try std.testing.expect(!item.watching_writable);
 }
 
 test "released connection does not retain an exhausted socket observation" {
