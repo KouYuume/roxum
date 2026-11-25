@@ -13,8 +13,7 @@ from roxum_process import stop
 BINARY = pathlib.Path(__file__).resolve().parents[2] / 'zig-out/grpc-unary/proxy/nginx'
 
 
-@contextmanager
-def start(upstream, directory):
+def make_credentials(directory):
     directory = pathlib.Path(directory)
     cert, key = directory / 'cert.pem', directory / 'key.pem'
     certificate_config = directory / 'certificate.cnf'
@@ -25,6 +24,14 @@ def start(upstream, directory):
                    check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     context = ssl.create_default_context(cafile=str(cert))
     context.set_alpn_protocols(['h2'])
+    return context, cert.read_bytes()
+
+
+@contextmanager
+def start(upstream, directory):
+    directory = pathlib.Path(directory)
+    context, certificate = make_credentials(directory)
+    cert, key = directory / 'cert.pem', directory / 'key.pem'
     with socket.socket() as reservation:
         reservation.bind(('127.0.0.1', 0))
         port = reservation.getsockname()[1]
@@ -72,7 +79,7 @@ http {
                 except (ConnectionRefusedError, TimeoutError):
                     assert time.monotonic() < deadline, 'nginx readiness timed out'
                     time.sleep(.02)
-            yield f'localhost:{port}', ('127.0.0.1', port), context, cert.read_bytes()
+            yield f'localhost:{port}', ('127.0.0.1', port), context, certificate
             assert stop(process) == 0, 'nginx did not stop cleanly'
         except BaseException:
             stop(process)
