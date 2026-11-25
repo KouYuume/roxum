@@ -17,7 +17,7 @@ import time
 from h2.connection import H2Connection
 from h2.events import ConnectionTerminated, DataReceived, ResponseReceived, StreamEnded, StreamReset
 
-from verify import ALPN_CASES, create_credentials
+from verify import ALPN_CASES, create_credentials, expect_no_application_protocol
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
 from roxum_process import read_port, ready_workers, stop
@@ -29,7 +29,10 @@ def create_server_chain(directory, chain, key):
                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
     trust = directory / "root.pem"
-    openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+    # OpenSSL 1.1.1 appends -addext to the default CA extensions.
+    root_config = directory / "root.cnf"
+    root_config.write_text("[req]\ndistinguished_name=dn\n[dn]\n")
+    openssl("req", "-config", root_config, "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
             "-subj", "/CN=Trial Root", "-keyout", "root.key", "-out", trust,
             "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign",
             "-addext", "subjectKeyIdentifier=hash")
@@ -147,19 +150,18 @@ def check_tls(port, cert, version, worker_output):
         if offers:
             context.set_alpn_protocols(offers)
         with socket.create_connection(("127.0.0.1", port), timeout=5) as peer:
-            try:
-                with context.wrap_socket(peer, server_hostname="localhost") as tls:
-                    if expected is None or tls.selected_alpn_protocol() != (expected if offers else None):
-                        raise AssertionError(f"unexpected ALPN for {offers}")
-                    if expected == "http/1.1":
-                        check_https(tls)
-                    else:
-                        check_http2(tls)
-                    check_worker_result(worker_output, expected)
-            except ssl.SSLError as error:
-                if expected is not None or "no application protocol" not in str(error).lower().replace("_", " "):
-                    raise
+            if expected is None:
+                expect_no_application_protocol(context, peer)
                 check_worker_result(worker_output, "failed")
+                continue
+            with context.wrap_socket(peer, server_hostname="localhost") as tls:
+                if tls.selected_alpn_protocol() != (expected if offers else None):
+                    raise AssertionError(f"unexpected ALPN for {offers}")
+                if expected == "http/1.1":
+                    check_https(tls)
+                else:
+                    check_http2(tls)
+                check_worker_result(worker_output, expected)
 
 
 def check_worker_result(output, expected):
