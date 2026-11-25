@@ -19,8 +19,10 @@ cmake -S . -B build -G Ninja -DCMAKE_SYSTEM_NAME=Generic \
     -DCMAKE_BUILD_TYPE=MinSizeRel -DCMAKE_C_FLAGS="-g0 -fPIC -DMBEDTLS_THREADING_C -DMBEDTLS_THREADING_PTHREAD" \
     -DCMAKE_ARCHIVE_OUTPUT_DIRECTORY="$out" -DENABLE_TESTING=OFF -DENABLE_PROGRAMS=OFF
 cmake --build build --target mbedtls --parallel 4
-./cc -Os -g0 -fPIC -Wall -Wextra -Werror -DMBEDTLS_THREADING_C -DMBEDTLS_THREADING_PTHREAD \
-    -Iinclude -Itf-psa-crypto/include -Itf-psa-crypto/drivers/builtin/include -Ibuild/tf-psa-crypto/include \
-    -c "$adapter/credentials.c" -o "$out/credentials.o"
+for unit in credentials session; do
+    ./cc -Os -g0 -fPIC -Wall -Wextra -Werror -DMBEDTLS_THREADING_C -DMBEDTLS_THREADING_PTHREAD \
+        -Iinclude -Itf-psa-crypto/include -Itf-psa-crypto/drivers/builtin/include -Ibuild/tf-psa-crypto/include \
+        -c "$adapter/$unit.c" -o "$out/$unit.o"
+done
 cp LICENSE "$out/MBEDTLS-LICENSE"
 cp tf-psa-crypto/LICENSE "$out/TF-PSA-CRYPTO-LICENSE"

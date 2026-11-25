@@ -23,6 +23,6 @@ for target in "${targets[@]}"; do
     zig ar d "$target/probe.a" host.o
     probe_objects=("$target/server.o")
     # The baseline 0.3 archive predates the credential adapter.
-    if [[ -f "$target/credentials.o" ]]; then probe_objects+=("$target/credentials.o"); fi
+    if [[ -f "$target/credentials.o" ]]; then probe_objects+=("$target/credentials.o" "$target/session.o"); fi
     zig cc "${link_flags[@]}" "${probe_objects[@]}" "$target/probe.a" -o "$target/server"
 done
