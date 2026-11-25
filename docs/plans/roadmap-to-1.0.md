@@ -13,7 +13,7 @@ credentials, bounds concurrent handshakes and negotiates HTTP/1.1 or HTTP/2.
 See the [deployment guide](../guides/deployment.md#inbound-tls) for configuration
 and the [0.4 acceptance checks](inbound-tls-0.4.md) for verification.
 
-## Complete the HTTP feature set
+## 0.5 target — complete the HTTP feature set
 
 - Support file responses and SSE writer options over HTTP/2. Exercise the same
   application routes over HTTP/1.1 and HTTP/2, including a slow reader and a
@@ -22,7 +22,8 @@ and the [0.4 acceptance checks](inbound-tls-0.4.md) for verification.
   Check delivery and cleanup when the subscriber leaves. The application or an
   external service owns subscriptions and history.
 - Give application authors a supported way to exercise finite HTTP routes
-  without opening a port. Start with the existing `Router.dispatch!` and a
+  without opening a port. The [routing guide](../guides/routing.md#testing-route-selection)
+  covers pure route selection. For response tests, start with the existing `Router.dispatch!` and a
   runnable example covering a successful response, extractor rejection and
   middleware short-circuit. Add public API only if the example requires it.
 
@@ -62,6 +63,6 @@ Run the [release verification matrix](../toolchain.md) on the supported macOS
 and Linux targets. Publish the supported combination and its compatibility
 commitments under the [versioning policy](../design/versioning.md).
 
-After 0.4, phase names describe the order of work. Actual public changes
-determine the intervening 0.x version numbers. The [scope policy](../design/non-goals.md)
+Later phases describe the order of work. Public changes determine release
+versions under the versioning policy. The [scope policy](../design/non-goals.md)
 describes the core boundary. WebSocket server support is outside the 1.0 roadmap.

@@ -1,5 +1,8 @@
 app [program] { pf: platform "../../platform/main.roc" }
 
+import pf.Method
+import pf.PathParam
+import pf.RouteProbe
 import pf.Handler
 import pf.MethodRouter
 import pf.Reply
@@ -69,3 +72,7 @@ param = |context, name|
 		Err(_) => ""
 	}
 # ANCHOR_END: params
+
+expect Router.probe(routes, Method.GET, "/users/me") == RouteProbe.Found([])
+expect Router.probe(routes, Method.GET, "/users/42") == RouteProbe.Found([PathParam.{ name: "id", value: "42" }])
+expect Router.probe(routes, Method.POST, "/users/42") == RouteProbe.MethodNotAllowed("GET, HEAD, DELETE")
