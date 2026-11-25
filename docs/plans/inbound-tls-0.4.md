@@ -68,10 +68,12 @@ streamed output and TLS shutdown. The worker releases the handshake slot
 before dispatch and owns the session until connection cleanup.
 
 Negotiated h2 sessions use the existing HTTP/2 engine. The listener tests
-exercise concurrent streams and authenticated TLS shutdown. Next, check HTTP/2
-with an independent gRPC client, including streaming, backpressure,
-cancellation, trailers and graceful shutdown. Retain cleartext and proxy
-regressions and run the lifecycle checks with both allocators.
+exercise concurrent streams and authenticated TLS shutdown. The
+[gRPC streaming suite](../../tests/grpc-streaming/README.md) exercises direct
+TLS with generated clients and a peer that controls HTTP/2 stream credit.
+It checks cancellation, final trailers, bounded memory and active RPCs during
+drain across the configured backends and both allocators. The same suite keeps
+the cleartext and proxy deployments under test.
 
 ## 5. Accept and distribute 0.4
 

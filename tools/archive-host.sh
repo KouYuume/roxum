@@ -15,6 +15,7 @@ trap 'rm -rf "$work"' EXIT
 create libhost.a
 addmod tls/credentials.o
 addmod tls/session.o
+addmod tls/tls_memory.o
 addmod host.o
 addmod nghttp2.o
 addlib tls/libmbedtls.a

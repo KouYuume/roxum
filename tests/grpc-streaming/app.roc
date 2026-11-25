@@ -24,8 +24,8 @@ program = { init!, routes: Router.build(routes, {}) }
 
 init! : {} => Try({ model : Model, listen : Server.ListenOptions }, [StartupErr(Str)])
 init! = |{}| {
-	settings : { path : Str, threads : U16 }
-	settings = Config.load!("path = \"\"\nthreads = 2").map_err(|ConfigErr(message)| StartupErr(message))?
+	settings : { path : Str, threads : U16, tls : Bool }
+	settings = Config.load!("path = \"\"\nthreads = 2\ntls = false").map_err(|ConfigErr(message)| StartupErr(message))?
 	gate = RateCounter.new!({ window_seconds: 3600, max_keys: 3 }).map_err(|_| StartupErr("gate unavailable"))?
 	Ok({
 		model: Model.{ gate },
@@ -35,7 +35,11 @@ init! = |{}| {
 			} else {
 				Server.Endpoint.Unix({ path: settings.path })
 			},
-			protocol: Server.Protocol.Http2,
+			protocol: if settings.tls {
+				Server.Protocol.Tls({ certificate_chain_path: "cert.pem", private_key_path: "key.pem" })
+			} else {
+				Server.Protocol.Http2
+			},
 			threads: Server.Threads.Fixed(settings.threads),
 			timeouts: Server.Timeouts.defaults,
 			limits: { maximum_body_bytes: 4096 },

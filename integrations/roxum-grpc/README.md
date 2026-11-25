@@ -161,8 +161,11 @@ cleanup, including while the request body is incomplete. Response delivery remai
 subject to connection memory limits, peer cancellation, and I/O timeouts. A server
 execution cap that expires before the layer runs still resets the stream because
 no integration response has been registered. A client reset never triggers this
-response. See [reverse proxy deployment](../../docs/guides/reverse-proxy.md#native-grpc-over-tls)
-for the tested TLS-termination configuration.
+response.
+
+On the 0.4 development branch, configure a [TCP TLS listener](../../docs/guides/deployment.md#inbound-tls-on-the-04-development-branch)
+to serve native gRPC directly. Clients trust the server certificate and negotiate
+`h2` via ALPN. For TLS termination at nginx, see [reverse proxy deployment](../../docs/guides/reverse-proxy.md#native-grpc-over-tls).
 
 ## Verification
 Run a group with `python3 tools/check.py --only <group>`; prefix the command with

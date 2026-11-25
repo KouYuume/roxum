@@ -1,10 +1,6 @@
 """Generated streaming interoperability on production TCP and Unix listeners."""
 from contextlib import ExitStack
-import json
 import pathlib
-import select
-import socket
-import subprocess
 import sys
 import tempfile
 import threading
@@ -22,7 +18,7 @@ import streaming_pb2_grpc as services
 sys.path.insert(0, str(ROOT / 'tests/support'))
 from roxum_process import stop
 sys.path.insert(0, str(ROOT / "tests/grpc-unary"))
-import proxy
+from transport import listener, scheme
 
 
 def verify_decoder_exhaustion(channel):
@@ -135,7 +131,7 @@ def verify_duplex(channel):
         raise AssertionError('duplex accepted invalid protobuf')
 
 
-def verify_duplex_pressure(channel, address, unix):
+def verify_duplex_pressure(channel, transport):
     from pressure import Peer
     stub = services.UpdatesStub(channel)
     def observed():
@@ -146,11 +142,9 @@ def verify_duplex_pressure(channel, address, unix):
         exhaust = scenario.startswith('exhaust')
         cancel = scenario.endswith('reset')
         before = observed()
-        with socket.socket(socket.AF_UNIX if unix else socket.AF_INET) as sock:
-            sock.settimeout(5)
-            sock.connect(address)
-            peer = Peer(sock, False)
-            peer.h2.send_headers(1, [(':method', 'POST'), (':scheme', 'http'), (':authority', 'localhost'),
+        with transport.connect() as sock:
+            peer = Peer(sock)
+            peer.h2.send_headers(1, [(':method', 'POST'), (':scheme', scheme(sock)), (':authority', 'localhost'),
                 (':path', '/heap/chat' if exhaust else '/streaming.Exchange/Chat'), ('content-type', 'application/grpc'), ('te', 'trailers')])
             def frame(mode, count=7):
                 payload = messages.Request(count=count, mode=mode).SerializeToString()
@@ -210,7 +204,7 @@ def verify_duplex_pressure(channel, address, unix):
             peer.echo()
 
 
-def verify_upload(channel, address, unix, tls_context):
+def verify_upload(channel, transport):
     submit = services.UploadsStub(channel).Submit
     for count in (0, 1, 3, 4):
         result = submit((messages.Request(count=i) for i in range(count)), timeout=5)
@@ -252,15 +246,10 @@ def verify_upload(channel, address, unix, tls_context):
         ([b'\0\0\0\0\x21'], False, '8'),
         ([rejected], False, '7'),
     ):
-        sock = socket.socket(socket.AF_UNIX if unix and not tls_context else socket.AF_INET)
-        if tls_context:
-            sock = tls_context.wrap_socket(sock, server_hostname='localhost')
-        with sock:
-            sock.settimeout(5)
-            sock.connect(address)
+        with transport.connect() as sock:
             client = H2Connection(config=H2Configuration(header_encoding='utf-8'))
             client.initiate_connection()
-            client.send_headers(1, [(':method', 'POST'), (':scheme', 'https' if tls_context else 'http'),
+            client.send_headers(1, [(':method', 'POST'), (':scheme', scheme(sock)),
                 (':authority', 'localhost'), (':path', '/streaming.Uploads/Submit'),
                 ('content-type', 'application/grpc'), ('te', 'trailers')])
             for index, part in enumerate(parts):
@@ -287,37 +276,19 @@ def verify_upload(channel, address, unix, tls_context):
                 assert not output
 
 
-def verify(executable, unix, proxied, backend):
+def verify(executable, unix, transport_mode, backend):
     with tempfile.TemporaryDirectory(prefix='roxum-grpc-stream-', dir='/tmp') as directory:
-        path = str(pathlib.Path(directory) / 'rpc.sock') if unix else ''
-        config = pathlib.Path(directory) / 'config'
-        config.mkdir()
-        threads = 1 if backend == 'interpreter' else 2
-        (config / 'local.toml').write_text(f'path = {json.dumps(path)}\nthreads = {threads}\n')
         with tempfile.TemporaryFile(mode='w+') as errors, ExitStack() as stack:
-            process = subprocess.Popen([executable], cwd=directory, stdout=subprocess.PIPE,
-                                       stderr=errors, text=True, start_new_session=True)
             try:
-                assert select.select([process.stdout], [], [], 30)[0], 'startup timeout'
-                endpoint = process.stdout.readline().strip()
-                target = endpoint if unix else '127.0.0.1:' + endpoint
-                address = path if unix else ('127.0.0.1', int(endpoint))
-                tls_context = None
-                if proxied:
-                    upstream = 'unix:' + path if unix else 'grpc://' + target
-                    target, address, tls_context, certificate = stack.enter_context(proxy.start(upstream, directory))
-                def channel_for_target():
-                    credentials = grpc.ssl_channel_credentials(certificate) if proxied else None
-                    options = (('grpc.enable_retries', 0), ('grpc.enable_http_proxy', 0))
-                    return grpc.secure_channel(target, credentials, options=options) if proxied else grpc.insecure_channel(target, options=options)
-                with channel_for_target() as channel:
+                process, transport = stack.enter_context(listener(executable, directory, errors, unix, transport_mode, backend))
+                with transport.channel() as channel:
                     grpc.channel_ready_future(channel).result(timeout=10)
-                    if not proxied and not unix:
+                    if transport_mode == 'cleartext' and not unix:
                         verify_decoder_exhaustion(channel)
                     verify_duplex(channel)
-                    if not proxied:
-                        verify_duplex_pressure(channel, address, unix)
-                    verify_upload(channel, address, unix, tls_context)
+                    if transport_mode != 'proxy':
+                        verify_duplex_pressure(channel, transport)
+                    verify_upload(channel, transport)
                     stub = services.UpdatesStub(channel)
                     def stream(count, mode='', metadata=()):
                         call = stub.Watch(messages.Request(count=count, mode=mode), timeout=5, metadata=metadata)
@@ -368,13 +339,11 @@ def verify(executable, unix, proxied, backend):
                 # The producer is held by an explicit peer-observation latch.
                 # It cannot finish until this client has received a full message.
                 for mode in ('gated', 'deadline'):
-                    with (tls_context.wrap_socket(socket.socket(), server_hostname='localhost') if proxied else socket.socket(socket.AF_UNIX if unix else socket.AF_INET)) as sock:
-                        sock.settimeout(5)
-                        sock.connect(address)
+                    with transport.connect() as sock:
                         client = H2Connection(config=H2Configuration(client_side=True, header_encoding='utf-8'))
                         client.initiate_connection()
                         body = messages.Request(count=2, mode=mode).SerializeToString()
-                        headers = [(':method', 'POST'), (':scheme', 'https' if proxied else 'http'), (':authority', 'localhost'),
+                        headers = [(':method', 'POST'), (':scheme', scheme(sock)), (':authority', 'localhost'),
                                    (':path', '/streaming.Updates/Watch'), ('content-type', 'application/grpc'), ('te', 'trailers')]
                         if mode == 'deadline':
                             headers.append(('grpc-timeout', '1S'))
@@ -399,7 +368,7 @@ def verify(executable, unix, proxied, backend):
                                 first_seen = True
                                 if mode == 'gated':
                                     assert not ended, 'producer completed before peer observation'
-                                    with channel_for_target() as release_channel:
+                                    with transport.channel() as release_channel:
                                         reply = services.UpdatesStub(release_channel).Echo(messages.Request(mode='release', count=42), timeout=5)
                                         assert reply.sequence == 42
                             sock.sendall(client.data_to_send())
@@ -422,14 +391,10 @@ def verify(executable, unix, proxied, backend):
                 diagnostic = errors.read()
                 assert 'panic' not in diagnostic.lower(), diagnostic
             except BaseException:
-                stop(process)
                 errors.seek(0)
                 print(errors.read(), file=sys.stderr)
                 raise
-            finally:
-                stop(process)
-                process.stdout.close()
-    print('PASS generated client/server streaming: messages, metadata, terminal errors, limits, expiry and Unary coexistence ' + ('TLS proxy -> ' if proxied else '') + ('Unix' if unix else 'TCP'))
+    print('PASS generated client/server streaming: messages, metadata, terminal errors, limits, expiry and Unary coexistence ' + transport_mode + ' ' + ('Unix' if unix else 'TCP'))
 
 
 if __name__ == '__main__':
@@ -437,9 +402,6 @@ if __name__ == '__main__':
     acceptance = str(pathlib.Path(sys.argv[2]).resolve())
     backend = sys.argv[3]
     import pressure
-    for unix in (False, True):
-        for proxied in (False, True):
-            verify(executable, unix, proxied, backend)
-    for unix in (False, True):
-        for proxied in (False, True):
-            pressure.verify(acceptance, unix, proxied, backend)
+    for unix, mode in ((False, 'cleartext'), (True, 'cleartext'), (False, 'proxy'), (True, 'proxy'), (False, 'tls')):
+        verify(executable, unix, mode, backend)
+        pressure.verify(acceptance, unix, mode, backend)
