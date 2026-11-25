@@ -54,7 +54,16 @@ describes credential paths, rotation and handshake limits. Only paths cross the 
 
 ## 4. Serve HTTP and gRPC through the negotiated transport
 
-Dispatch each connection to the existing HTTP engine after negotiation.
+The host's TLS session adapter supports nonblocking application reads, writes
+and `close_notify`. A partial write consumes only the reported plaintext bytes.
+After a readiness wait, the caller retries the same write buffer and length.
+Before idling after a successful read, it checks the session for buffered data.
+A peer's `close_notify` ends inbound plaintext cleanly. A bare socket EOF
+reports failure. Run `zig build test-inbound-tls-records` to exercise this
+contract with a verifying TLS 1.2 and 1.3 client.
+
+The listener still closes after negotiation. The next step is to dispatch
+each connection to its HTTP engine.
 Route all reads and writes through its TLS session, accounting for buffered
 plaintext, partial writes, opposite-direction readiness and terminal output.
 Check HTTP/1.1 keep-alive and an HTTPS route with a verifying client. Check

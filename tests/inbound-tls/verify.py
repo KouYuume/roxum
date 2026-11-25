@@ -25,7 +25,7 @@ def create_credentials(cert, key):
                    stderr=subprocess.PIPE)
 
 
-def check(server, cert, key, offers, expected):
+def check(server, cert, key, offers, expected, mode=None):
     context = ssl.create_default_context(cafile=str(cert))
     if offers:
         context.set_alpn_protocols(offers)
@@ -33,8 +33,11 @@ def check(server, cert, key, offers, expected):
     with client, peer:
         client.settimeout(5)
         peer.setblocking(False)
+        command = [server, str(peer.fileno()), cert, key]
+        if mode is not None:
+            command.append(mode)
         process = subprocess.Popen(
-            [server, str(peer.fileno()), cert, key], pass_fds=(peer.fileno(),),
+            command, pass_fds=(peer.fileno(),),
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
         try:
@@ -127,13 +130,51 @@ def check_write_wait(server, cert, key, *, disconnect):
             process.communicate()
 
 
+def check_records(server, cert, key, version, truncated):
+    context = ssl.create_default_context(cafile=str(cert))
+    context.minimum_version = context.maximum_version = version
+    client, peer = socket.socketpair()
+    with client, peer:
+        client.settimeout(5)
+        peer.setblocking(False)
+        peer.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+        mode = "truncated" if truncated else "records"
+        process = subprocess.Popen([server, str(peer.fileno()), cert, key, mode], pass_fds=(peer.fileno(),),
+                                   stdout=subprocess.PIPE, bufsize=0)
+        def expect_line(expected):
+            if not select.select([process.stdout], [], [], 5)[0] or process.stdout.readline().strip() != expected:
+                raise AssertionError(f"expected probe to report {expected!r}")
+        try:
+            peer.close()
+            expect_line(b"waiting for ClientHello")
+            with context.wrap_socket(client, server_hostname="localhost", suppress_ragged_eofs=False) as channel:
+                expect_line(b"http/1.1")
+                expect_line(b"waiting for plaintext")
+                channel.sendall(b"ab")
+                expect_line(b"waiting to write plaintext")
+                received = bytearray()
+                while chunk := channel.recv(16384):
+                    received.extend(chunk)
+                if received != b"b" + bytes(i % 251 for i in range(256 * 1024)):
+                    raise AssertionError("partial writes lost or duplicated plaintext")
+                if not truncated:
+                    channel.unwrap().close()
+            if process.wait(timeout=5) != 0:
+                raise AssertionError(f"wrong peer closure result for {mode}")
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.communicate()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--server", type=pathlib.Path, help="exercise a previously linked probe executable")
     parser.add_argument("--check-write-wait", action="store_true", help="exercise the Mbed TLS probe under write backpressure")
+    parser.add_argument("--check-records", action="store_true", help="exercise nonblocking Mbed TLS record I/O")
     args = parser.parse_args()
-    if args.check_write_wait and not args.server:
-        parser.error("--check-write-wait requires a previously linked Mbed TLS --server")
+    if (args.check_write_wait or args.check_records) and not args.server:
+        parser.error("record and backpressure checks require a previously linked Mbed TLS --server")
     with tempfile.TemporaryDirectory() as directory:
         root = pathlib.Path(directory)
         server, cert, key = (root / name for name in ("server", "cert.pem", "key.pem"))
@@ -146,6 +187,13 @@ def main():
             subprocess.run(["zig", "cc", "-Wall", "-Wextra", "-Werror", str(SOURCE),
                             *shlex.split(flags), "-o", server], check=True)
         create_credentials(cert, key)
+        if args.check_records:
+            for mode in ("empty-read", "empty-write"):
+                check(server, cert, key, ["http/1.1"], "http/1.1", mode)
+            for version in (ssl.TLSVersion.TLSv1_2, ssl.TLSVersion.TLSv1_3):
+                for truncated in (False, True):
+                    check_records(server, cert, key, version, truncated)
+            print("PASS TLS records, buffered reads, partial writes, backpressure and shutdown")
         if args.check_write_wait:
             check_write_wait(server, cert, key, disconnect=False)
             check_write_wait(server, cert, key, disconnect=True)

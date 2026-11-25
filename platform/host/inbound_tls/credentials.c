@@ -1,4 +1,5 @@
 #include "credentials.h"
+#include <mbedtls/ssl.h>
 #include <psa/crypto.h>
 #include <stdlib.h>
 
