@@ -2,8 +2,8 @@
   "schema_version": 1,
   "version": "0.1.1",
   "generator_version": "0.1.1",
-  "roc_revision": "15177e91f62cafddf5336c455e00e9f05427ac16",
-  "roc_release": "0.1.0_RC1",
+  "roc_revision": "ee835686f9eae076bee7422c26e7cf8deb20aa0e",
+  "roc_release": "0.1.0-RC2",
   "schema_subset": "proto3-v1",
   "max_unpacked_bytes": 131072
 }

@@ -7,6 +7,7 @@ Changes to the roxum platform and its integrations, newest first. The platform a
 ### Added
 
 - Run application initialization once with `--check-init`. The [route response example](docs/guides/routing.md#testing-route-responses) uses it to test finite requests without opening a listener.
+- Pin Roc to `0.1.0-RC2` for application builds and host ABI glue generation.
 
 ## 0.4.0
 
