@@ -6,6 +6,7 @@
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #ifdef ROXUM_TRIAL_HOST
 void roxum_trial_finished(roxum_tls_handshake_result result) {
@@ -13,7 +14,59 @@ void roxum_trial_finished(roxum_tls_handshake_result result) {
     fflush(stdout);
 }
 #else
-static int handshake(int fd, const roxum_tls_credentials *credentials) {
+static int wait_for_io(int fd, int result) {
+    if (result != ROXUM_TLS_IO_WANT_READ && result != ROXUM_TLS_IO_WANT_WRITE) return 0;
+    struct pollfd wait = {fd, result == ROXUM_TLS_IO_WANT_READ ? POLLIN : POLLOUT, 0};
+    return poll(&wait, 1, 5000) > 0;
+}
+
+static int records(int fd, roxum_tls_session *session, int truncated) {
+    unsigned char byte;
+    int rc = roxum_tls_read(session, &byte, 1);
+    if (rc != ROXUM_TLS_IO_WANT_READ) return 2;
+    puts("waiting for plaintext");
+    fflush(stdout);
+    while (wait_for_io(fd, rc)) rc = roxum_tls_read(session, &byte, 1);
+    if (rc != 1 || byte != 'a' || !roxum_tls_check_pending(session)) return 2;
+    if (roxum_tls_read(session, &byte, 1) != 1 || byte != 'b') return 2;
+
+    if (roxum_tls_check_pending(session)) return 2;
+    do {
+        rc = roxum_tls_write(session, &byte, 1);
+    } while (wait_for_io(fd, rc));
+    if (rc != 1) return 2;
+
+    static unsigned char reply[256 * 1024];
+    for (size_t i = 0; i < sizeof(reply); i++) reply[i] = (unsigned char)(i % 251);
+    size_t sent = 0;
+    int blocked = 0;
+    while (sent < sizeof(reply)) {
+        rc = roxum_tls_write(session, reply + sent, sizeof(reply) - sent);
+        if (rc > 0) {
+            // The reply exceeds a TLS record, so at least one write must be partial.
+            if ((size_t)rc == sizeof(reply) || (size_t)rc > sizeof(reply) - sent) return 2;
+            sent += (size_t)rc;
+            continue;
+        }
+        if (!blocked && rc == ROXUM_TLS_IO_WANT_WRITE) {
+            puts("waiting to write plaintext");
+            fflush(stdout);
+            blocked = 1;
+        }
+        if (!wait_for_io(fd, rc)) return 2;
+    }
+    if (!blocked) return 2;
+    do {
+        rc = roxum_tls_close_notify(session);
+    } while (wait_for_io(fd, rc));
+    if (rc != 0) return 2;
+    do {
+        rc = roxum_tls_read(session, &byte, 1);
+    } while (wait_for_io(fd, rc));
+    return rc == (truncated ? ROXUM_TLS_IO_FAILED : 0) ? 0 : 2;
+}
+
+static int handshake(int fd, const roxum_tls_credentials *credentials, const char *mode) {
     roxum_tls_session *session = roxum_tls_session_open(credentials, fd);
     int announce_read = 1;
     int announce_write = 1;
@@ -28,7 +81,11 @@ static int handshake(int fd, const roxum_tls_credentials *credentials) {
         if (result == ROXUM_TLS_HTTP1 || result == ROXUM_TLS_HTTP2) {
             puts(result == ROXUM_TLS_HTTP2 ? "h2" : "http/1.1");
             fflush(stdout);
-            status = 0;
+            unsigned char byte = 0;
+            if (!mode) status = 0;
+            else if (strcmp(mode, "empty-read") == 0) status = roxum_tls_read(session, &byte, 0) == ROXUM_TLS_IO_FAILED ? 0 : 2;
+            else if (strcmp(mode, "empty-write") == 0) status = roxum_tls_write(session, &byte, 0) == ROXUM_TLS_IO_FAILED ? 0 : 2;
+            else status = records(fd, session, strcmp(mode, "truncated") == 0);
             break;
         }
         if (announce_read && result == ROXUM_TLS_WANT_READ) {
@@ -50,12 +107,12 @@ static int handshake(int fd, const roxum_tls_credentials *credentials) {
 }
 
 int main(int argc, char **argv) {
-    if (argc != 4) return 1;
+    if (argc != 4 && argc != 5) return 1;
     // Workers inherit this disposition from the supervisor.
     if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) return 1;
     roxum_tls_credentials *credentials = roxum_tls_credentials_load(argv[2], argv[3]);
     if (!credentials) return 1;
-    int status = handshake(atoi(argv[1]), credentials);
+    int status = handshake(atoi(argv[1]), credentials, argc == 5 ? argv[4] : NULL);
     roxum_tls_credentials_free(credentials);
     return status;
 }
