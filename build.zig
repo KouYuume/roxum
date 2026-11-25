@@ -85,12 +85,14 @@ pub fn build(b: *std.Build) void {
     const tls_objects = buildMbedTls(b, roc_target, archive);
     const tls_probe = b.addSystemCommand(&.{ b.graph.zig_exe, "cc", "-target", zigTargetOf(roc_target).?, "-Wall", "-Wextra", "-Werror" });
     if (std.mem.endsWith(u8, roc_target, "musl")) tls_probe.addArg("-static");
+    tls_probe.addArg("-DROXUM_TEST_TLS_MEMORY");
     tls_probe.addArg("-I");
     tls_probe.addDirectoryArg(b.path("platform/host/inbound_tls"));
     tls_probe.addFileInput(b.path("platform/host/inbound_tls/session.h"));
     tls_probe.addFileInput(b.path("platform/host/inbound_tls/credentials.h"));
+    tls_probe.addFileInput(b.path("platform/host/inbound_tls/tls_memory.h"));
     tls_probe.addFileArg(b.path("tests/inbound-tls/mbedtls-server.c"));
-    for ([_][]const u8{ "session.o", "credentials.o", "libmbedtls.a", "libmbedx509.a", "libtfpsacrypto.a" }) |input| {
+    for ([_][]const u8{ "session.o", "credentials.o", "tls_memory.o", "libmbedtls.a", "libmbedx509.a", "libtfpsacrypto.a" }) |input| {
         tls_probe.addFileArg(tls_objects.path(b, input));
     }
     tls_probe.addArg("-o");
@@ -1092,6 +1094,8 @@ fn buildMbedTls(b: *std.Build, roc_target: []const u8, archive: std.Build.LazyPa
     build_tls.addFileInput(b.path("platform/host/inbound_tls/credentials.h"));
     build_tls.addFileInput(b.path("platform/host/inbound_tls/session.c"));
     build_tls.addFileInput(b.path("platform/host/inbound_tls/session.h"));
+    build_tls.addFileInput(b.path("platform/host/inbound_tls/tls_memory.c"));
+    build_tls.addFileInput(b.path("platform/host/inbound_tls/tls_memory.h"));
     return build_tls.addOutputDirectoryArg("tls");
 }
 

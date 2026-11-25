@@ -116,7 +116,29 @@ static int handshake(int fd, const roxum_tls_credentials *credentials, const cha
     return status;
 }
 
+#ifdef ROXUM_TEST_TLS_MEMORY
+#include "tls_memory.h"
+#include <stdint.h>
+
+static int check_tls_memory(void) {
+    // Cover empty allocations, both sides of the mapping threshold and a record.
+    const size_t sizes[] = {0, 4095, 4096, 4097, 16384};
+    for (size_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++) {
+        unsigned char *p = roxum_tls_calloc(sizes[i], 1);
+        if (!p || (uintptr_t)p % _Alignof(max_align_t)) return 0;
+        for (size_t j = 0; j < sizes[i]; j++) if (p[j]) return 0;
+        memset(p, 0xff, sizes[i]);
+        roxum_tls_free(p);
+    }
+    roxum_tls_free(NULL);
+    return !roxum_tls_calloc(2, SIZE_MAX / 2 + 1) && !roxum_tls_calloc(1, SIZE_MAX);
+}
+#endif
+
 int main(int argc, char **argv) {
+#ifdef ROXUM_TEST_TLS_MEMORY
+    if (!check_tls_memory()) return 2;
+#endif
     if (argc != 4 && argc != 5) return 1;
     // Workers inherit this disposition from the supervisor.
     if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) return 1;
