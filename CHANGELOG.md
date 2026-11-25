@@ -4,6 +4,10 @@ Changes to the roxum platform and its integrations, newest first. The platform a
 
 ## Unreleased
 
+### Breaking changes
+
+- `Server.Protocol` gains a `Tls(Server.Tls)` variant for TCP listeners. Update exhaustive protocol matches and rebuild with matching platform sources and host archives. The development listener validates credentials at startup and closes each connection after TLS negotiation. See [deployment](docs/guides/deployment.md#inbound-tls-on-the-04-development-branch).
+
 ## 0.3.0
 
 ### Breaking changes

@@ -8,25 +8,6 @@
 #include <stdlib.h>
 
 #ifdef ROXUM_TRIAL_HOST
-static roxum_tls_credentials *worker_credentials;
-
-int roxum_trial_start(void) {
-    const char *cert = getenv("ROXUM_TRIAL_CERT");
-    const char *key = getenv("ROXUM_TRIAL_KEY");
-    if (!cert && !key) return 0;
-    worker_credentials = roxum_tls_credentials_load(cert, key);
-    return worker_credentials ? 0 : 1;
-}
-
-void roxum_trial_stop(void) {
-    roxum_tls_credentials_free(worker_credentials);
-    worker_credentials = NULL;
-}
-
-const roxum_tls_credentials *roxum_trial_credentials(void) {
-    return worker_credentials;
-}
-
 void roxum_trial_finished(roxum_tls_handshake_result result) {
     puts(result == ROXUM_TLS_HTTP2 ? "h2" : result == ROXUM_TLS_HTTP1 ? "http/1.1" : "failed");
     fflush(stdout);

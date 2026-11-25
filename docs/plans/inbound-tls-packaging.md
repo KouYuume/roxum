@@ -30,7 +30,8 @@ extracted host archive and served the expected cleartext HTTP/1.1 response.
 ## Intact-host trial
 
 The trial builds the release host in a disposable copy of the source tree
-and supplies credentials and handshake limits at worker startup. With trial
+and instruments the handshake result. The Roc fixture configures the worker
+through `Server.Protocol.Tls`. With trial
 credentials, the worker drives a handshake on the accepted socket and closes it. Without credentials,
 the same executable serves the hello route. The app uses the complete archive
 from the extracted bundle, including its normal host entry point and the TLS
@@ -41,8 +42,7 @@ The trial uses two handshake slots per worker and a three-second deadline.
 A full worker leaves new connections on the listener until a slot opens.
 The verifier checks concurrent progress, recovery after disconnect, timeout
 under partial reads, and worker drain.
-Public listener configuration and encrypted HTTP remain separate
-steps in the [0.4 plan](inbound-tls-0.4.md).
+Encrypted HTTP dispatch is tracked in the [0.4 plan](inbound-tls-0.4.md).
 
 Before adopting the engine, the instrumented bundle measured **16,496,190 bytes expanded** and **5,112,110 bytes
 compressed**, 3,496,190 bytes above the previous 13 MB limit. The intermediate
@@ -101,6 +101,10 @@ python3 tests/inbound-tls/verify-host.py "$host_trial/arm64mac/hello"
 
 Run the same verifier with the extracted application's `arm64musl/hello` and
 `x64musl/hello` binaries on their respective Linux architectures.
+Run `zig build test-inbound-tls` for all local backend/allocator variants.
+To check a standard bundle, build [the same app](../../tests/inbound-tls/app.roc)
+against its extracted platform and pass `--standard` to the verifier. This
+uses client-side negotiation checks without the trial worker’s result output.
 
 ## Engine configurations and updates
 
