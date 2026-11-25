@@ -254,17 +254,12 @@ fn installSupervisorSignals() void {
     };
     std.posix.sigaction(std.posix.SIG.INT, &action, null);
     std.posix.sigaction(std.posix.SIG.TERM, &action, null);
-    // Writing to a connection the peer closed raises SIGPIPE on Linux, which
-    // has no SO_NOSIGPIPE. On every OS the same happens to stdout and stderr
-    // when they are pipes whose reader has gone. Workers inherit the ignored
-    // disposition across fork, so such writes fail with EPIPE instead of
-    // ending the process.
     const ignore = std.posix.Sigaction{
         .handler = .{ .handler = std.posix.SIG.IGN },
         .mask = std.posix.sigemptyset(),
         .flags = 0,
     };
-    std.posix.sigaction(std.posix.SIG.PIPE, &ignore, null);
+    @import("stdio.zig").ignoreBrokenPipe();
     // The signals the supervisor sends its workers must not end the
     // supervisor if they reach the whole group.
     std.posix.sigaction(drain_signal.drain_signal, &ignore, null);

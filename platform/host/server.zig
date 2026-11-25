@@ -101,6 +101,19 @@ const Startup = struct {
     }
 };
 
+/// Execute the application's startup effects once without starting a supervisor or listener.
+pub fn checkInit(environment: anytype) !void {
+    stack_overflow.installProcess();
+    try stack_overflow.installThread();
+    var host_allocator = environment.hostAllocator();
+    var roc_host = runtime.makeRocHost(@ptrCast(&host_allocator));
+    var application = try initializeApplication(&host_allocator, &roc_host);
+    defer if (application.listen_options.tls) |options| options.deinit();
+    defer std.heap.smp_allocator.free(application.listen_options.routes);
+    for (application.listen_options.routes) |route| std.heap.smp_allocator.free(route);
+    deinitializeModel(&application.model_root, &host_allocator, environment.generation);
+}
+
 /// Runs one worker: this thread runs the connection event loop, and one
 /// dedicated thread makes every Roc call (`init!`, handlers, body reads,
 /// response producers), because allocator context and body tokens are

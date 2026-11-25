@@ -15,6 +15,16 @@ pub const Error = error{
     WriteFailed,
 };
 
+/// Closed output pipes and sockets must report EPIPE even before workers fork.
+pub fn ignoreBrokenPipe() void {
+    const ignore = std.posix.Sigaction{
+        .handler = .{ .handler = std.posix.SIG.IGN },
+        .mask = std.posix.sigemptyset(),
+        .flags = 0,
+    };
+    std.posix.sigaction(std.posix.SIG.PIPE, &ignore, null);
+}
+
 pub fn writeStdout(bytes: []const u8) Error!void {
     try writeAll(stdout_fd, bytes);
 }

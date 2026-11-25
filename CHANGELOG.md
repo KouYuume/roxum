@@ -4,6 +4,10 @@ Changes to the roxum platform and its integrations, newest first. The platform a
 
 ## Unreleased
 
+### Added
+
+- Run application initialization once with `--check-init`. The [route response example](docs/guides/routing.md#testing-route-responses) uses it to test finite requests without opening a listener.
+
 ## 0.4.0
 
 ### Breaking changes

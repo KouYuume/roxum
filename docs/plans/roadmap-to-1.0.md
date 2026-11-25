@@ -21,11 +21,9 @@ and the [0.4 acceptance checks](inbound-tls-0.4.md) for verification.
 - Exercise an SSE subscription in which a separate request publishes an event.
   Check delivery and cleanup when the subscriber leaves. The application or an
   external service owns subscriptions and history.
-- Give application authors a supported way to exercise finite HTTP routes
-  without opening a port. The [routing guide](../guides/routing.md#testing-route-selection)
-  covers pure route selection. For response tests, start with the existing `Router.dispatch!` and a
-  runnable example covering a successful response, extractor rejection and
-  middleware short-circuit. Add public API only if the example requires it.
+- [Finite route tests](../guides/routing.md#testing-route-responses) use `Router.dispatch!`
+  to check handler responses, extractor rejection and middleware short-circuiting
+  without opening a listener.
 
 Review limits, defaults, errors and cancellation with representative HTTP,
 SSE and gRPC applications. Record intended breaking changes and migration

@@ -84,6 +84,15 @@ def check_json_media_type(port):
 
 def main():
     example, executable = sys.argv[1], sys.argv[2]
+    if example == "responses":
+        with subprocess.Popen([executable, "--check-init"], stdout=subprocess.PIPE, start_new_session=True) as app:
+            try:
+                stdout, _ = app.communicate(timeout=10)
+                if app.returncode != 0 or stdout:
+                    raise RuntimeError(f"init-only check exited with {app.returncode}, stdout={stdout!r}")
+            finally:
+                stop(app)
+        return
     server = subprocess.Popen(
         [executable],
         stdout=subprocess.PIPE,

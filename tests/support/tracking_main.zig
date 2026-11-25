@@ -196,6 +196,7 @@ fn cMain(
     const options = host.launch.parse(arguments) orelse return 2;
     host.launch.apply(options);
 
+    if (options.check_init) return runWorker(null, true);
     host.supervisor.run(workerMain, .{}) catch |err| {
         host.diagnostics.hostFailed(err);
         return 1;
@@ -203,12 +204,17 @@ fn cMain(
 }
 
 fn workerMain(port_override: ?u16) c_int {
+    return runWorker(port_override, false);
+}
+
+fn runWorker(port_override: ?u16, check_init: bool) c_int {
     var environment = tracking_environment.Environment.init(
         std.heap.page_allocator,
     );
     defer environment.deinit();
 
-    host.server.run(&environment, .{}, port_override) catch |err| {
+    const result = if (check_init) host.server.checkInit(&environment) else host.server.run(&environment, .{}, port_override);
+    result catch |err| {
         host.diagnostics.hostFailed(err);
         return 1;
     };

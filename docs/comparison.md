@@ -33,7 +33,7 @@ Ratings describe each criterion, not overall quality; additional libraries can c
 | HTTP/2 | ○ Cleartext or ALPN over TLS, incremental input/output and trailers; [gRPC integration](../integrations/roxum-grpc/README.md) | ○ `http2` feature / transport setup | ◎ Automatic with HTTPS |
 | WebSocket | △ Not supported | ◎ `ws` feature / `extract::ws` | ○ `golang.org/x/net/websocket` or third-party packages |
 | IPv6 and Unix domain listeners | ○ IPv4/IPv6 TCP and filesystem Unix listeners | ◎ | ◎ |
-| HTTP tests without a server | △ No test harness; `Router.dispatch!` runs a request through the routes inside an app | ○ `tower::ServiceExt::oneshot` | ◎ `net/http/httptest` |
+| HTTP tests without a server | ○ [Test finite responses with `Router.dispatch!`](guides/routing.md#testing-route-responses) | ○ `tower::ServiceExt::oneshot` | ◎ `net/http/httptest` |
 | Profiling and debugging | ○ Access log, metrics, `roxum-trace` ([observability](guides/observability.md)) | ◎ `tracing` ecosystem, native debuggers | ◎ `net/http/pprof`, runtime trace, Delve |
 | Supported systems | △ Apple silicon macOS; arm64 and x86_64 Linux with musl | ◎ | ◎ |
 | Maturity and API stability | △ 0.x, on a pinned Roc release candidate | ○ 0.x, widely deployed | ◎ [Go 1 compatibility promise](https://go.dev/doc/go1compat) |
