@@ -30,15 +30,18 @@ extracted host archive and served the expected cleartext HTTP/1.1 response.
 ## Intact-host trial
 
 The trial builds the release host in a disposable copy of the source tree
-and inserts one hook after TCP accept. With trial credentials, the worker
-drives a handshake on the accepted socket and closes it. Without credentials,
+and supplies credentials and handshake limits at worker startup. With trial
+credentials, the worker drives a handshake on the accepted socket and closes it. Without credentials,
 the same executable serves the hello route. The app uses the complete archive
 from the extracted bundle, including its normal host entry point and the TLS
 engine. The trial worker loads its certificate chain and matching private key before
 reporting readiness. Its TLS sessions borrow that configuration until worker
 shutdown. Replacing credential files takes effect on the next worker start.
-The test hook polls synchronously.
-Production admission, readiness scheduling and encrypted HTTP remain separate
+The trial uses two handshake slots per worker and a three-second deadline.
+A full worker leaves new connections on the listener until a slot opens.
+The verifier checks concurrent progress, recovery after disconnect, timeout
+under partial reads, and worker drain.
+Public listener configuration and encrypted HTTP remain separate
 steps in the [0.4 plan](inbound-tls-0.4.md).
 
 Before adopting the engine, the instrumented bundle measured **16,496,190 bytes expanded** and **5,112,110 bytes

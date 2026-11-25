@@ -43,7 +43,10 @@ The packaged host includes a worker-owned credential configuration. The
 [trial listener](inbound-tls-packaging.md#intact-host-trial) exercises startup
 failure and reuses the validated pair across sessions. Each handshake borrows
 the nonblocking socket and returns a read wait, a write wait, the negotiated
-HTTP engine, or failure. The trial drives these waits with poll.
+HTTP engine, or failure. The trial listener resumes pending handshakes on the
+worker's kqueue/epoll poller. Pending sessions occupy connection slots and
+have a separate per-worker cap and an absolute monotonic deadline. Drain
+closes unfinished sessions.
 
 Add an opt-in TCP listener setting with certificate chain and private key paths.
 Define the protocol choice alongside existing cleartext settings, handshake
@@ -52,11 +55,6 @@ configuration and key/certificate pairing before reporting readiness. Exercise
 missing, unreadable, malformed and mismatched files. Document certificate
 renewal by replacement and process restart, and keep key bytes out of Roc
 model values, logs and diagnostics. Regenerate glue and verify the ABI.
-
-Give each accepted connection a single session owner, a monotonic absolute
-handshake deadline and a bounded admission slot. Drive read and write waits from
-kqueue/epoll. Verify a healthy client progresses while another stalls, quota
-recovery after failure, and cleanup on peer close, timeout and worker drain.
 
 ## 4. Serve HTTP and gRPC through the negotiated transport
 
