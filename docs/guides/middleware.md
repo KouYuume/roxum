@@ -3,7 +3,7 @@
 A layer does work around a handler at the stages of a request. It is a list of `Middleware.Stage` values, so a
 layer can inspect and change the request's metadata, the body, and the reply as values.
 
-The code on this page is from [`tests/guide/middleware.roc`](../../tests/guide/middleware.roc); `zig build
+The code on this page is from [`tests/guide/ProtectedRoutes.roc`](../../tests/guide/ProtectedRoutes.roc); `zig build
 test-m13b` builds it and checks the behavior described here.
 
 ## Stages

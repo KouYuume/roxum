@@ -108,8 +108,8 @@ runs on the same machine, listen on `127.0.0.1` so the server is not reachable d
 
 ## Settings
 
-Settings that differ between environments go in TOML files, not in arguments or environment variables. The
-executable takes no arguments but `--debug`.
+Settings that differ between environments go in TOML files, not in arguments or environment variables. The executable accepts
+`--debug` and [`--check-init`](routing.md#testing-route-responses).
 
 - `config/base.toml`, next to `app.roc`, holds what every environment shares. `import "config/base.toml"` compiles it
   into the program
@@ -356,7 +356,7 @@ Start the executable with `--debug` during development:
 The values a handler passes to `dbg` are then attached to the response as `X-Roxum-Dbg` fields (percent-encoded; at
 most 16, and only as many as fit in the response head; `X-Roxum-Dbg-Truncated` counts the rest). A streaming response carries only the values from before
 its head was sent. **Never use `--debug` in production**: it shows internal values to clients. roxum prints a warning
-at start when it is on. Any other argument makes the executable exit with status 2.
+at start when it is on. Unknown or repeated arguments make the executable exit with status 2.
 
 ## Listener endpoints
 

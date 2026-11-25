@@ -7,7 +7,7 @@ says what it reads by the type of its argument. A handler made with `Handler.eff
 `Extract.run!` has effects, so `Handler.pure`, whose only argument is the `RouteContext`, and `Handler.stateful`, which
 gets the model and the `RouteContext`, cannot call it. They read the context directly, such as `context.path_params`.
 
-The code on this page is from [`tests/guide/extractors.roc`](../../tests/guide/extractors.roc); `zig build
+The code on this page is from [`tests/guide/ItemRoutes.roc`](../../tests/guide/ItemRoutes.roc); `zig build
 test-m13b` builds it and checks the behavior described here.
 
 ## Handlers with a typed argument

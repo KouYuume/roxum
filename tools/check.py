@@ -198,9 +198,9 @@ TESTS = [
     Test("test-m9b-5", {"app": "examples/ddd/app.roc"}, ["python3", "tests/ddd/run.py", "{allocator}", "{exe:app}"],
          checks=[["bash", "tests/ddd/checks.sh"]]),
     Test("test-m13b", {"routing": "tests/guide/routing.roc", "extractors": "tests/guide/extractors.roc",
-                       "middleware": "tests/guide/middleware.roc"},
+                       "middleware": "tests/guide/middleware.roc", "responses": "tests/guide/route-responses.roc"},
          ["bash", "-c", 'python3 tests/guide/verify.py routing "$1" && python3 tests/guide/verify.py extractors "$2" '
-          '&& python3 tests/guide/verify.py middleware "$3"', "guide", "{exe:routing}", "{exe:extractors}", "{exe:middleware}"],
+          '&& python3 tests/guide/verify.py middleware "$3" && python3 tests/guide/verify.py responses "$4"', "guide", "{exe:routing}", "{exe:extractors}", "{exe:middleware}", "{exe:responses}"],
          allocators=ARENA,
          checks=[[ROC, "test", "tests/guide/routing.roc"],
                  ["bash", "-c", f'{ROC} docs platform/main.roc --output="$(mktemp -d)" >/dev/null']]),
