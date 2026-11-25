@@ -2,6 +2,11 @@
 # Called in the trial directory after its three archives and probe objects exist.
 set -euo pipefail
 probe_dir=$(cd "$(dirname "$0")" && pwd)
+app="$probe_dir/../../examples/hello/app.roc"
+if [[ ${1:-} == --host-trial ]]; then
+    app="$probe_dir/app.roc"
+    shift
+fi
 targets=(arm64mac arm64musl x64musl)
 (
     cd platform
@@ -9,7 +14,7 @@ targets=(arm64mac arm64musl x64musl)
         targets/*/libc.a targets/*/rcrt1.o --output-dir ..
 )
 tar xf ./*.tar.zst -C extracted
-sed 's@../../platform/main.roc@extracted/main.roc@' "$probe_dir/../../examples/hello/app.roc" > hello.roc
+sed 's@../../platform/main.roc@extracted/main.roc@' "$app" > hello.roc
 for target in "${targets[@]}"; do
     case "$target" in
         arm64mac) link_flags=(-target aarch64-macos) ;;

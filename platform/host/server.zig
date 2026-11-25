@@ -1,3 +1,4 @@
+const tls = @import("inbound_tls/handshake.zig");
 const std = @import("std");
 const allocator_context = @import("allocator/context.zig");
 const host_allocator_module = @import("allocator/host_allocator.zig");
@@ -147,6 +148,29 @@ pub fn run(
     fiber_wait.waits = waits;
     handoff.waits = waits;
     handoff.work = try work_queue.Jobs.init(ready.settings.threads, poller);
+    if (listen_options.tls) |options| {
+        if (supervisor.inherited_listener) |listener| {
+            if (listener.unix_path != null) {
+                diagnostics.startupFailed("Server.Protocol.Tls requires a TCP endpoint; the inherited listener is Unix");
+                return error.StartupFailed;
+            }
+        }
+        const credentials = tls.roxum_tls_credentials_load(options.certificate_chain_path.ptr, options.private_key_path.ptr) orelse {
+            diagnostics.startupFailed("could not load TLS certificate chain and matching private key");
+            return error.StartupFailed;
+        };
+        handoff.tls_config = .{
+            .credentials = credentials,
+            .maximum_pending = options.maximum_pending_handshakes,
+            .timeout_milliseconds = options.handshake_timeout_milliseconds,
+        };
+    }
+    // After the first accept, the worker and its threads share the configuration
+    // until process exit. Startup errors have no live sessions to release.
+    var serving = false;
+    defer if (!serving) {
+        if (handoff.tls_config) |config| tls.roxum_tls_credentials_free(@constCast(config.credentials));
+    };
     startup.publishHandoff(waits);
     var endpoint = listen_options.endpoint;
     if (listen_port_override) |port| switch (endpoint) {
@@ -167,6 +191,7 @@ pub fn run(
     if (listen_options.metrics != null) metrics.startWorker(listen_options.routes) catch diagnostics.fatal("failed to start the metrics");
     transferred = try supervisor.notifyReady(listener, workers, application_limits.drain_timeout_milliseconds, listen_options.metrics);
     if (!transferred) try stdio.writeStdoutListener(listener);
+    serving = true;
     try event_loop.run(listener.socket, handoff);
 }
 
@@ -207,6 +232,7 @@ fn serveDispatched(
         startup.finish(Startup.Result.failed);
         return err;
     };
+    defer if (application.listen_options.tls) |options| options.deinit();
     defer deinitializeModel(
         &application.model_root,
         &host_allocator,

@@ -1,27 +1,10 @@
 --- a/platform/host/server.zig
 +++ b/platform/host/server.zig
-@@ -1,1 +1,5 @@
-+const tls = @import("inbound_tls/handshake.zig");
-+extern "c" fn roxum_trial_credentials() ?*const tls.Credentials;
+@@ -1,2 +1,3 @@
+ const tls = @import("inbound_tls/handshake.zig");
 +extern "c" fn roxum_trial_finished(tls.Result) void;
-+
  const std = @import("std");
-@@ -134,2 +138,8 @@
-     handoff.http2 = listen_options.http2;
-+    if (roxum_trial_credentials()) |credentials| handoff.tls_config = .{
-+        .credentials = credentials,
-+        .maximum_pending = 2,
-+        .timeout_milliseconds = 3000,
-+        .finished = roxum_trial_finished,
-+    };
-     // One poller for the process: every connection's socket and
---- a/platform/host/main.zig
-+++ b/platform/host/main.zig
-@@ -29,2 +29,7 @@
-+extern "c" fn roxum_trial_start() c_int;
-+extern "c" fn roxum_trial_stop() void;
-+
- fn workerMain(port_override: ?u16) c_int {
-+    if (roxum_trial_start() != 0) return 1;
-+    defer roxum_trial_stop();
-     var environment = arena.ArenaEnvironment.production();
+@@ -147,2 +148,3 @@
+         handoff.tls_config = .{
++            .finished = roxum_trial_finished,
+             .credentials = credentials,

@@ -13,7 +13,7 @@ client ──HTTPS / HTTP/2──> proxy / load balancer ──HTTP/1.1──> r
 
 | | in front of roxum | in roxum |
 |---|---|---|
-| TLS and HTTP/3 to clients | the proxy | — |
+| HTTPS and HTTP/3 traffic | the proxy | TLS negotiation in the 0.4 development build |
 | HTTP/2 | the proxy can terminate it or use an HTTP/2 upstream | explicit cleartext prior-knowledge listener with incremental I/O |
 | Static files | the proxy or a CDN, for a site mostly made of them | `Files.serve` and `Reply.file`, for files the app's routes own or check access to ([Files](files.md)) |
 | Compression | the proxy's `gzip` / `brotli`, for everything at once | `Compression.layer`, for the routes you choose, and precompressed `.br` / `.gz` files ([Files](files.md#compressing-responses)) |
@@ -21,11 +21,33 @@ client ──HTTPS / HTTP/2──> proxy / load balancer ──HTTP/1.1──> r
 Compress in one place: with both on, the proxy finds `content-encoding` already set and passes the body on, but
 that is wasted work in roxum.
 
+## Inbound TLS on the 0.4 development branch
+
+A TCP listener can negotiate TLS 1.2 or 1.3 using this protocol setting:
+
+```roc
+protocol: Server.Protocol.Tls({
+	certificate_chain_path: "certs/chain.pem",
+	private_key_path: "certs/server.key",
+}),
+```
+
+Each worker loads the leaf-first chain and its matching unencrypted private key
+before reporting readiness. Paths must be nonempty and contain no NUL byte.
+Relative paths resolve from the worker's current directory. To rotate credentials,
+replace both files and restart the server.
+`handshake_timeout_milliseconds` defaults to 5,000 (range 1–3,600,000).
+`maximum_pending_handshakes` defaults to 64 per worker (range 1–65,536).
+Each handshake also occupies a connection slot. At capacity new peers wait
+on the listener. The timeout starts when the worker accepts the connection.
+
+This development version closes the connection after ALPN negotiation.
+Continue terminating TLS at the proxy to serve HTTPS and gRPC requests.
+
 ## Opt-in HTTP/2
 
 Set `protocol: Server.Protocol.Http2` in `Server.ListenOptions`; omitting it selects
-`Server.Protocol.Http1`. Protocol selection is independent of `Server.Endpoint`,
-so both TCP and Unix listeners support it. Configure the proxy's upstream for
+`Server.Protocol.Http1`. Both TCP and Unix listeners support these cleartext modes. Configure the proxy's upstream for
 cleartext HTTP/2 prior knowledge. HTTP/1 Upgrade and automatic protocol detection
 are not supported on this listener.
 

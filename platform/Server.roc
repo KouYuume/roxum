@@ -166,10 +166,21 @@ Server :: [].{
 	## route for that.
 	Metrics := [Off, Listen(Server.Endpoint)]
 
-	## Explicit cleartext protocol selection. Http2 uses prior knowledge; no Upgrade.
-	## Http2 currently buffers request bodies and supports finite responses only.
-	## Finite response trailers support Unary gRPC integrations; streaming and files are unsupported.
-	Protocol := [Http1, Http2]
+	## Inbound TLS on a TCP listener. Workers read the certificate chain
+	## (leaf first) and matching private key from these paths at startup.
+	Tls := {
+		certificate_chain_path : Str,
+		private_key_path : Str,
+		## Absolute time from admission, in milliseconds (1 to 3,600,000).
+		handshake_timeout_milliseconds : U64 ?? 5_000,
+		## Concurrent handshakes per worker (1 to 65,536). Each uses a connection slot.
+		maximum_pending_handshakes : U32 ?? 64,
+	}
+
+	## Http1 serves cleartext HTTP/1.1. Http2 uses cleartext prior knowledge.
+	## Tls negotiates h2 or http/1.1. In the 0.4 development build, the
+	## worker closes the connection after negotiation.
+	Protocol := [Http1, Http2, Tls(Server.Tls)]
 
 	## Where the server listens, its connection timeouts, its limits, and how
 	## many threads and processes serve it. Returned by the app's `init!`;

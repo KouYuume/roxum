@@ -48,13 +48,9 @@ worker's kqueue/epoll poller. Pending sessions occupy connection slots and
 have a separate per-worker cap and an absolute monotonic deadline. Drain
 closes unfinished sessions.
 
-Add an opt-in TCP listener setting with certificate chain and private key paths.
-Define the protocol choice alongside existing cleartext settings, handshake
-timeout and concurrency limit, their defaults and valid ranges. Validate
-configuration and key/certificate pairing before reporting readiness. Exercise
-missing, unreadable, malformed and mismatched files. Document certificate
-renewal by replacement and process restart, and keep key bytes out of Roc
-model values, logs and diagnostics. Regenerate glue and verify the ABI.
+TCP listeners select TLS through `Server.Protocol.Tls`. The
+[deployment guide](../guides/deployment.md#inbound-tls-on-the-04-development-branch)
+describes credential paths, rotation and handshake limits. Only paths cross the Roc/host boundary. The worker owns key material.
 
 ## 4. Serve HTTP and gRPC through the negotiated transport
 

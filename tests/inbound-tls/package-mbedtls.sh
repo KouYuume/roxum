@@ -88,4 +88,6 @@ for target in arm64mac arm64musl x64musl; do
 done
 cp "$src/LICENSE" platform/MBEDTLS-LICENSE
 cp "$src/tf-psa-crypto/LICENSE" platform/TF-PSA-CRYPTO-LICENSE
-bash "$probe_dir/bundle-probes.sh" MBEDTLS-LICENSE TF-PSA-CRYPTO-LICENSE
+set -- MBEDTLS-LICENSE TF-PSA-CRYPTO-LICENSE
+if "$host_trial"; then set -- --host-trial "$@"; fi
+bash "$probe_dir/bundle-probes.sh" "$@"

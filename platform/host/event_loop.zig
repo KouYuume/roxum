@@ -1177,7 +1177,9 @@ pub const Loop = struct {
                 self.poller.watchOnce(item.accepted.socket, !item.watching_writable, token(slot, item.generation)) catch return self.close(slot);
             },
             tls.Result.failed, tls.Result.http1, tls.Result.http2 => {
-                if (!item.timeout.hasPassedAt(net.monotonicNanoseconds() catch return self.close(slot))) config.finished(result);
+                if (config.finished) |finished| {
+                    if (!item.timeout.hasPassedAt(net.monotonicNanoseconds() catch return self.close(slot))) finished(result);
+                }
                 self.close(slot);
             },
         }

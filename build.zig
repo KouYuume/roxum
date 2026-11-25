@@ -703,6 +703,9 @@ pub fn build(b: *std.Build) void {
     });
     test_postgres.dependOn(&run_postgres.step);
 
+    const test_inbound_tls = b.step("test-inbound-tls", "Exercise inbound TLS listener configuration and handshake admission");
+    const run_inbound_tls = b.addSystemCommand(&.{ "python3", "tools/check.py", "--only", "test-inbound-tls" });
+    test_inbound_tls.dependOn(&run_inbound_tls.step);
     const test_http2_listener = b.step("test-http2-listener", "Exercise production HTTP/2 TCP and Unix listeners in all backend/allocator modes");
     const run_http2_listener = b.addSystemCommand(&.{ "python3", "tools/check.py", "--only", "test-http2-listener" });
     test_http2_listener.dependOn(&run_http2_listener.step);
