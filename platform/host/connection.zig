@@ -171,7 +171,7 @@ fn writeWrittenThunk(context: *anyopaque, bytes: []const u8) bool {
 const WriteContext = struct {
     socket: net.Socket,
     deadline: net.Deadline,
-    session: ?*Session = null,
+    session: *Session,
 };
 
 /// Response bytes the socket did not accept at once. The event loop finishes
@@ -1000,6 +1000,7 @@ pub const Session = struct {
     fn writeContext(self: *Session) error{ClockFailed}!WriteContext {
         return .{
             .socket = self.accepted.socket,
+            .session = self,
             .deadline = net.Deadline.afterMilliseconds(self.limits.response_write_timeout_milliseconds) catch return error.ClockFailed,
         };
     }
@@ -1037,7 +1038,7 @@ pub const Session = struct {
             self.limits.response_write_timeout_milliseconds,
         ) catch return;
         if (!self.defer_buffered_writes) {
-            net.sendAllUntil(self.accepted.socket, response, send_deadline) catch {};
+            @import("inbound_tls/records.zig").sendAllUntil(self.reader.records, self.accepted.socket, response, send_deadline) catch {};
             return;
         }
         var write_context = WriteContext{
@@ -1077,12 +1078,13 @@ fn writeIovecsDeferred(
     const write_context: *const WriteContext = @ptrCast(
         @alignCast(context),
     );
-    const session = write_context.session.?;
+    const session = write_context.session;
     var total: usize = 0;
     for (iovecs) |iovec| total += iovec.len;
 
     var written: usize = 0;
-    if (session.pending_length == 0) {
+    // TLS retry buffers must stay at a stable address until the write completes.
+    if (session.pending_length == 0 and session.reader.records == null) {
         written = net.sendIovecsAvailable(
             write_context.socket,
             iovecs,
@@ -1104,6 +1106,12 @@ fn writeIovecs(
     const write_context: *const WriteContext = @ptrCast(
         @alignCast(context),
     );
+    if (write_context.session.reader.records) |stream| {
+        for (iovecs) |iov| {
+            if (iov.len != 0) return stream.writeUntil(write_context.socket, iov.base[0..iov.len], write_context.deadline) catch bridge.ResponseWriteError.WriteFailed;
+        }
+        return 0;
+    }
     const written = net.sendIovecsUntil(
         write_context.socket,
         iovecs,

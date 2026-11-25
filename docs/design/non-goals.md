@@ -18,13 +18,15 @@ To keep its focus on backend services, roxum does not aim to provide:
 
 Serving HTML, static assets, or an API used by a browser remains in scope. Applications can use rendering libraries and database integrations without roxum owning the surrounding UI or database toolchain. Existing static-page support is not excluded by this boundary.
 
-IPv4/IPv6 and Unix listeners are core networking capabilities. HTTP/2 listeners, streamed bodies, trailers, and request execution deadlines support the [gRPC integration](../../integrations/roxum-grpc/README.md). Inbound TLS remains a separate candidate. WebSocket is deferred until a concrete use case that existing HTTP requests plus SSE cannot satisfy, or a WebSocket interoperability requirement, justifies its implementation and maintenance cost. This does not assume that another Roc platform supplies a replacement backend.
+IPv4/IPv6 and Unix listeners are core networking capabilities. HTTP/2 listeners, streamed bodies, trailers, and request execution deadlines support the [gRPC integration](../../integrations/roxum-grpc/README.md). The [roadmap to 1.0](../plans/roadmap-to-1.0.md) covers HTTP/2 file and SSE support in the feature phase following 0.4. TCP listeners support [direct TLS](../guides/deployment.md#inbound-tls) as of 0.4.
 
 ## Choosing a Roc platform for your application
 
-For applications centered on browser UI or hypermedia pages, consider these Roc projects:
+These Roc projects serve different application needs:
 
 - **Browser interfaces written in Roc:** explore [Joy](https://github.com/niclas-ahden/joy), with its model, update, and render approach to browser applications. Its examples are a useful starting point for building interactive UI in Roc.
+- **Reactive browser interfaces:** [Roc Signals](https://github.com/lukewilliamboswell/roc-signals) owns browser state and DOM updates. Its [socket examples](https://github.com/lukewilliamboswell/roc-signals/blob/main/www/samples/port-recipes/sockets.mjs) connect to SSE or WebSocket endpoints as clients. A roxum backend can supply the HTTP API and SSE stream.
+- **Small-group chat:** [roc-chat](https://github.com/showell/roc-chat) is a complete application on its own platform. It delivers new messages with SSE and illustrates how a chat application can own channels, membership and history.
 - **HTML templates and SQLite in one application workflow:** explore [roux](https://github.com/Eldhus/roux), which combines typed HTML templates, typed SQLite queries, schema migrations, and a development command for rebuilding applications as you edit them.
 
 Follow each project's documentation for setup, supported environments, and examples. These are suggestions for choosing an application development model. A browser application can also communicate with a separately deployed roxum API over HTTP.
@@ -35,6 +37,7 @@ The following features are explicitly outside the planned scope unless strong us
 
 | Feature | Reason for excluding it | Demand that could justify reconsideration |
 |---|---|---|
+| WebSocket | Applications can send browser events over SSE and accept client actions through HTTP requests. | A concrete need for bidirectional communication that HTTP requests and SSE cannot serve, or an existing client that requires WebSocket interoperability. |
 | CONNECT | Establishing tunnels serves proxy use cases and requires connection management beyond ordinary request handling. | A concrete need to build a tunneling proxy with roxum. |
 | TRACE | Request loopback diagnostics are not needed for ordinary application behavior. | An operational requirement that specifically depends on TRACE. |
 | Arbitrary extension HTTP methods | Accepting and routing methods beyond roxum's supported set expands the API for specialized protocols rather than ordinary web applications. Examples include WebDAV's PROPFIND, MKCOL, COPY, MOVE, LOCK, and UNLOCK. | A concrete interoperability requirement, such as serving existing WebDAV clients. |
@@ -53,7 +56,7 @@ Other limitations listed in the [README](../../README.md#limitations) are not au
 
 gRPC-specific message envelopes, metadata conventions, timeout parsing, service dispatch, and status mapping belong in an integration. Protobuf encoding and decoding belong in a reusable pure library; schema compilation and Roc code generation belong in build-time tools.
 
-The core supplies generic HTTP/2 transport, response trailers, and request-scoped I/O, deadline, and cancellation capabilities. The host enforces connection and stream lifetimes without interpreting Protobuf schemas or gRPC statuses. Applications can use `Handler.duplex` for independent HTTP/2 reads and writes. The [gRPC integration](../../integrations/roxum-grpc/README.md) supports all four uncompressed server RPC forms. Outbound gRPC and inbound TLS remain separate work.
+The core supplies generic HTTP/2 transport, response trailers, and request-scoped I/O, deadline, and cancellation capabilities. The host enforces connection and stream lifetimes without interpreting Protobuf schemas or gRPC statuses. Applications can use `Handler.duplex` for independent HTTP/2 reads and writes. The [gRPC integration](../../integrations/roxum-grpc/README.md) supports all four uncompressed server RPC forms. Outbound gRPC is outside the 1.0 core roadmap.
 
 ### HTML templates and AOT generation
 

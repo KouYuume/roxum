@@ -2,13 +2,14 @@
 
 Run `python3 tools/check.py --only test-grpc-streaming` with the pinned compiler
 and Python 3.13. Generated grpcio clients exercise all four RPC forms over TCP
-and Unix sockets with both allocator modes. The interpreter runs one server
+and Unix sockets with both allocator modes. TCP coverage includes direct TLS
+with a verified server certificate and negotiated `h2`. The interpreter runs one server
 thread per process. The dev and speed backends run two. Regenerate the committed service with
 `python3 tests/grpc-streaming/regenerate.py --write` after changing its schema.
 
 The upload fixture checks empty and multiple input messages, fragmented and coalesced envelopes, truncated input, and rejection before client half-close.
 
-The generated duplex client waits for its first acknowledgement before sending its second request. A separate call receives final status while its request iterator is still open. Both half-close orders run on TCP and Unix listeners directly and through the TLS proxy. A direct HTTP/2 peer withholds stream credit after 8 KiB of a large reply. An independent observation confirms that a second request is processed while output is blocked. The peer then resets the stream or restores credit and checks the completed envelope and error trailers. A small input also forces a codec allocation failure while output is stalled, exercising both reset and successful delivery of the remaining bytes followed by status 8.
+The generated duplex client waits for its first acknowledgement before sending its second request. A separate call receives final status while its request iterator is still open. Both half-close orders run over direct TLS, cleartext TCP and Unix sockets, and through the TLS proxy. A direct HTTP/2 peer withholds stream credit after 8 KiB of a large reply. An independent observation confirms that a second request is processed while output is blocked. The peer then resets the stream or restores credit and checks the completed envelope and error trailers. A small input also forces a codec allocation failure while output is stalled, exercising both reset and successful delivery of the remaining bytes followed by status 8.
 
 The server-streaming fixture covers ordered output, zero-message success, initial/trailing metadata,
 application failure before and after output, invalid success-as-failure status,
@@ -26,7 +27,7 @@ exercises streaming from extracted artifacts through the release verification.
 ## Resource and lifecycle acceptance
 
 `acceptance.roc` runs with two concurrent requests, one writer and an 8 MiB per-request
-memory budget. Direct TCP and Unix listeners exercise these workloads:
+memory budget. Direct TLS, cleartext TCP and Unix listeners exercise these workloads:
 
 | RPC | Workload and observable result |
 |---|---|
@@ -34,7 +35,7 @@ memory budget. Direct TCP and Unix listeners exercise these workloads:
 | Client-streaming and bidirectional | Send 2,048 ordered 16 KiB payloads per call. Pause the request iterator at 4, 16 and 32 MiB. A concurrent Unary probe confirms application consumption before each RSS sample. Submit returns the final count; Chat acknowledges each checkpoint before more input is sent. |
 | Interrupted input | Reset the stream or close the connection with a partial envelope after an application-observed marker. After a reset, start a new Submit on the same connection. After disconnect, use a new connection. Hold Submit open while a Unary probe confirms its marker, accounting for both request slots. A subsequent Watch must also acquire the sole writer and finish while the probe connection stays open. |
 | Deadline expiry | Withhold credit partway through a duplex response. A later client-streaming deadline expires on incomplete input. Restore duplex credit and check both calls' wire status (`DEADLINE_EXCEEDED`) and the incomplete response prefix. |
-| Shutdown | Signal the server after a duplex acknowledgement. On TCP, half-close after GOAWAY and require final OK and a clean exit. On Unix, keep the request open past the drain timeout and require a forced exit and a diagnostic for the cut connection. |
+| Shutdown | Signal the server after a duplex acknowledgement. On TCP, send a second message and half-close after GOAWAY. Require its acknowledgement, final OK and a clean exit. Direct TLS also requires authenticated EOF. On Unix, keep the request open past the drain timeout and require a forced exit and a diagnostic for the cut connection. |
 
 The server-streaming workload samples server-process-tree RSS at the same payload
 sizes as the input workloads. After the 4 MiB warmup, compiled-backend samples

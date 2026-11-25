@@ -77,5 +77,16 @@ if [[ "$downloads" -ne 3 ]]; then
 	exit 1
 fi
 
+# Exercise the TLS listener in the packaged host with the same wire checks as
+# the source-built listener. The dev cache above contains this release URL.
+sed "s#../../platform/main.roc#http://127.0.0.1:$port/$bundle#" \
+    tests/inbound-tls/app.roc > "$task_tmp/tls.roc"
+ROC_CACHE_DIR="$task_tmp/roc-cache-dev" XDG_CACHE_HOME="$task_tmp/xdg-cache-dev" \
+    "$roc_bin" build --opt=dev --output="$task_tmp/tls-server" "$task_tmp/tls.roc" >/dev/null
+python3 -m venv "$task_tmp/tls-client"
+"$task_tmp/tls-client/bin/python" -m pip install --disable-pip-version-check \
+    --require-hashes --only-binary=:all: -r tests/http2-engine/requirements.txt
+"$task_tmp/tls-client/bin/python" tests/inbound-tls/verify-host.py --standard "$task_tmp/tls-server"
+
 # Exercise the distributed generator and the gRPC/wire/platform bundles together.
 python3 tests/release/verify_grpc.py "http://127.0.0.1:$port" "$task_tmp/http.log"

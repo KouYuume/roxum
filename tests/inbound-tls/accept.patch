@@ -1,0 +1,10 @@
+--- a/platform/host/server.zig
++++ b/platform/host/server.zig
+@@ -1,2 +1,3 @@
+ const tls = @import("inbound_tls/handshake.zig");
++extern "c" fn roxum_trial_finished(tls.Result) void;
+ const std = @import("std");
+@@ -147,2 +148,3 @@
+         handoff.tls_config = .{
++            .finished = roxum_trial_finished,
+             .credentials = credentials,

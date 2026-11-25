@@ -15,7 +15,7 @@ Its focus is independently deployable HTTP APIs and backend services. See [scope
 - **Build-time route checks.** Invalid patterns and duplicate routes fail compilation when routers are top-level values.
 - **Tags and staged middleware.** Filter by application-defined typed tags and place work at `BeforeBody`, `OnChunk`, `AfterBody`, or `AfterHandler`. See [middleware](docs/guides/middleware.md) and the [tags and middleware example](examples/middleware/README.md).
 
-HTTP/1.1 is the default and supports streaming, SSE, and file serving. [Opt-in cleartext HTTP/2](docs/guides/deployment.md#opt-in-http2) supports incremental input and output, trailers, and all four uncompressed gRPC forms. Both listeners support IPv4/IPv6 TCP and filesystem Unix sockets.
+HTTP/1.1 is the default and supports streaming, SSE, and file serving. [HTTP/2](docs/guides/deployment.md#opt-in-http2) supports incremental input and output, trailers, and all four uncompressed gRPC call forms. Both protocols run over IPv4/IPv6 TCP or filesystem Unix sockets. On TCP, a [TLS listener](docs/guides/deployment.md#inbound-tls) can negotiate either protocol.
 
 ## Comparison with axum and Go
 
@@ -62,7 +62,7 @@ Core and integrations are versioned independently. See [versioning](docs/design/
 
 ## Limitations
 
-- Terminate inbound TLS and HTTP/3 at a [reverse proxy](docs/guides/reverse-proxy.md). WebSocket and HTTP/1 trailers are unsupported; CONNECT, TRACE, and arbitrary extension methods are [non-goals](docs/design/non-goals.md).
+- Terminate HTTP/3 at a [reverse proxy](docs/guides/reverse-proxy.md). HTTP/1 trailers are unsupported. WebSocket server support, CONNECT, TRACE, and arbitrary extension methods are [excluded unless strong demand emerges](docs/design/non-goals.md#features-excluded-unless-strong-demand-emerges).
 - Timeouts cannot forcibly interrupt arbitrary Roc computation.
 - Runtime compression is gzip; precompressed Brotli is supported, multipart byte ranges are not.
 - Sessions, CSRF, OAuth, JWT, and OpenAPI belong in libraries or integrations; see the [scope policy](docs/design/non-goals.md#features-owned-by-libraries-and-integrations).

@@ -130,13 +130,15 @@ class RoxumHost:
     profiles = ["host"]
 
     def prepare(self, work):
+        subprocess.run(["bash", ROOT / "tools/fetch-mbedtls.sh", work / "mbedtls.tar.bz2"], check=True)
         return None
 
     def environment(self, work):
-        return dict(os.environ)
+        return {**os.environ, "ZIG_GLOBAL_CACHE_DIR": str(work / "zig-global")}
 
     def build(self, work, profile, environment):
-        command = ["zig", "build", "host", "--cache-dir", str(work / "zig-cache"), "--global-cache-dir", str(work / "zig-global")]
+        command = ["zig", "build", "host", f"-Dmbedtls-archive={work / 'mbedtls.tar.bz2'}",
+                   "--cache-dir", str(work / "zig-cache")]
         return run(command, ROOT, environment), None
 
     def version(self):

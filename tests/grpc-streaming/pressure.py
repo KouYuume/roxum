@@ -1,9 +1,5 @@
 """Bounded output, peer progress and repeated cancellation on production listeners."""
 from contextlib import ExitStack
-import json
-import pathlib
-import select
-import socket
 import subprocess
 import tempfile
 import time
@@ -15,14 +11,14 @@ from h2.settings import SettingCodes
 
 from roxum_process import ready_workers, stop
 import input_lifecycle
-import proxy
+from transport import listener, scheme
 import streaming_pb2 as messages
 
 
 class Peer:
-    def __init__(self, sock, proxied):
+    def __init__(self, sock):
         self.sock = sock
-        self.proxied = proxied
+        self.connection_consumed = 0
         self.pending = []
         self.h2 = H2Connection(config=H2Configuration(header_encoding='utf-8'))
         self.h2.initiate_connection()
@@ -34,7 +30,7 @@ class Peer:
 
     def begin(self, method, count, mode=''):
         stream = self.h2.get_next_available_stream_id()
-        self.h2.send_headers(stream, [(':method', 'POST'), (':scheme', 'https' if self.proxied else 'http'),
+        self.h2.send_headers(stream, [(':method', 'POST'), (':scheme', scheme(self.sock)),
             (':authority', 'localhost'), (':path', '/streaming.Updates/' + method),
             ('content-type', 'application/grpc'), ('te', 'trailers')])
         body = messages.Request(count=count, mode=mode).SerializeToString()
@@ -88,7 +84,10 @@ class Peer:
             assert not isinstance(event, StreamReset), event
             if isinstance(event, DataReceived):
                 # Keep connection credit available while withholding stream credit.
-                self.h2.increment_flow_control_window(event.flow_controlled_length)
+                self.connection_consumed += event.flow_controlled_length
+        if self.connection_consumed >= 32768:
+            self.h2.increment_flow_control_window(self.connection_consumed)
+            self.connection_consumed = 0
         self.flush()
         return events
 
@@ -138,6 +137,9 @@ class Peer:
             self.h2.increment_flow_control_window(65536 if resumed else 65536 - 8192, stream_id=stream)
         self.flush()
         buffer, index, statuses = bytearray(prefix), 0, []
+        # Refill half of the 64 KiB window at a time. Returning credit per
+        # fragment can make every later DATA frame as small as that fragment.
+        stream_consumed = 0
         while True:
             for event in self.receive():
                 if isinstance(event, DataReceived):
@@ -154,8 +156,10 @@ class Peer:
                         index += 1
                         if index in (1024, 4096, 8192):
                             checkpoint(index)
-                    if self.h2.streams[stream].open:
-                        self.h2.increment_flow_control_window(event.flow_controlled_length, stream_id=stream)
+                    stream_consumed += event.flow_controlled_length
+                    if stream_consumed >= 32768 and self.h2.streams[stream].open:
+                        self.h2.increment_flow_control_window(stream_consumed, stream_id=stream)
+                        stream_consumed = 0
                 if isinstance(event, TrailersReceived):
                     statuses.append(dict(event.headers).get('grpc-status'))
                 if isinstance(event, StreamEnded):
@@ -180,43 +184,24 @@ def rss_tree(pid):
     return sum(rss * 1024 for child, _, rss in rows if child in included)
 
 
-def verify(executable, unix=False, proxied=False, backend="speed"):
+def verify(executable, unix, mode, backend):
     with tempfile.TemporaryDirectory(prefix='roxum-stream-pressure-', dir='/tmp') as directory, ExitStack() as stack:
-        path = str(pathlib.Path(directory) / 'rpc.sock') if unix else ''
-        config = pathlib.Path(directory) / 'config'
-        config.mkdir()
-        threads = 1 if backend == 'interpreter' else 2
-        (config / 'local.toml').write_text(f'path = {json.dumps(path)}\nthreads = {threads}\n')
         errors = stack.enter_context(tempfile.TemporaryFile(mode='w+'))
-        process = subprocess.Popen([executable], cwd=directory, stdout=subprocess.PIPE, stderr=errors,
-                                   text=True, start_new_session=True)
         try:
-            assert select.select([process.stdout], [], [], 30)[0], 'startup timeout'
-            port = process.stdout.readline().strip()
+            process, transport = stack.enter_context(listener(executable, directory, errors, unix, mode, backend))
             workers = set(ready_workers(process))
-            address = path if unix else ('127.0.0.1', int(port))
-            context = None
-            if proxied:
-                _, address, context, _ = stack.enter_context(proxy.start('unix:' + path if unix else 'grpc://127.0.0.1:' + port, directory))
-            def connect():
-                sock = context.wrap_socket(socket.socket(), server_hostname='localhost') if proxied else socket.socket(socket.AF_UNIX if unix else socket.AF_INET)
-                if proxied or not unix:
-                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                sock.settimeout(10)
-                sock.connect(address)
-                return sock
+            connect = transport.connect
             def verify_recovery():
                 with connect() as probe:
-                    Peer(probe, proxied).consume(1, lambda _: None)
+                    Peer(probe).consume(1, lambda _: None)
 
-            if not proxied:
-                target = 'unix:' + path if unix else '127.0.0.1:' + port
-                input_lifecycle.long_inputs(target, lambda: rss_tree(process.pid), backend)
-                input_lifecycle.interrupted_inputs(connect, target, verify_recovery)
+            if mode != 'proxy':
+                input_lifecycle.long_inputs(transport.channel, lambda: rss_tree(process.pid), backend)
+                input_lifecycle.interrupted_inputs(connect, transport.channel, verify_recovery)
                 input_lifecycle.deadlines(connect)
                 verify_recovery()
             with connect() as sock:
-                peer = Peer(sock, proxied)
+                peer = Peer(sock)
                 # Repeated zero-credit resets must release the single writer slot.
                 for _ in range(16):
                     peer.reset(peer.stall())
@@ -232,41 +217,37 @@ def verify(executable, unix=False, proxied=False, backend="speed"):
                     # Probe while the long request is still alive: retaining its
                     # history must not be hidden by end-of-request cleanup.
                     with connect() as probe:
-                        Peer(probe, proxied).echo()
+                        Peer(probe).echo()
                 # 32 MiB traverses an 8 MiB request budget, with fixed 64 KiB credit.
-                count = 256 if proxied else 8192
+                count = 256 if mode == 'proxy' else 8192
                 stream, prefix = peer.stall(count, retain=True)
                 peer.consume(count, checkpoint, stream, prefix)
-                assert len(samples) == (0 if proxied else 3), samples
+                assert len(samples) == (0 if mode == 'proxy' else 3), samples
                 # After 4 MiB warmup, a further 28 MiB must not remain resident.
                 # Allow 8 MiB for allocator caches and runtime bookkeeping.
-                if not proxied and backend != "interpreter":
+                if mode != 'proxy' and backend != "interpreter":
                     assert max(value for _, value in samples[1:]) <= samples[0][1] + 8 * 1024 * 1024, samples
                 if samples:
                     print('server RSS checkpoints (messages, bytes):', samples, flush=True)
             # Connection loss while output is blocked must release writer resources.
             for _ in range(4):
                 with connect() as sock:
-                    Peer(sock, proxied).stall()
+                    Peer(sock).stall()
             verify_recovery()
             # A replacement worker can serve new connections after a cleanup
             # crash; successful RPCs alone must not hide that failure.
             assert set(ready_workers(process)) == workers, "worker restarted during acceptance"
-            if proxied:
+            if mode == 'proxy':
                 assert stop(process) == 0
             else:
                 input_lifecycle.drain(process, connect, forced=unix)
             errors.seek(0)
             diagnostic = errors.read()
             assert 'panic' not in diagnostic.lower(), diagnostic
-            if unix and not proxied:
+            if unix and mode != 'proxy':
                 assert 'the drain timeout passed; 1 connections were cut' in diagnostic, diagnostic
         except BaseException:
-            stop(process)
             errors.seek(0)
             print(errors.read())
             raise
-        finally:
-            stop(process)
-            process.stdout.close()
-    print('PASS pressure/cancellation ' + ('TLS proxy -> ' if proxied else '') + ('Unix' if unix else 'TCP'), flush=True)
+    print('PASS pressure/cancellation ' + mode + ' ' + ('Unix' if unix else 'TCP'), flush=True)

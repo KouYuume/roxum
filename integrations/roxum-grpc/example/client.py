@@ -5,12 +5,18 @@ import sys
 import threading
 
 
-def verify(target, bindings):
+def verify(target, bindings, ca=None):
     sys.path.insert(0, str(bindings))
     import grpc
     import service_pb2
     import service_pb2_grpc
-    with grpc.insecure_channel(target, options=(('grpc.enable_retries', 0), ('grpc.enable_http_proxy', 0))) as channel:
+    options = (('grpc.enable_retries', 0), ('grpc.enable_http_proxy', 0))
+    if ca is None:
+        channel = grpc.insecure_channel(target, options=options)
+    else:
+        credentials = grpc.ssl_channel_credentials(root_certificates=ca.read_bytes())
+        channel = grpc.secure_channel(target, credentials, options=options)
+    with channel:
         greeter = service_pb2_grpc.GreeterStub(channel)
         call = greeter.Greet
         response, completed = call.with_call(service_pb2.Greeting(name='Roc'), timeout=5,
@@ -55,7 +61,8 @@ def verify(target, bindings):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('target', help='127.0.0.1:<printed server port>')
+    parser.add_argument('target', metavar='HOST:PORT', help='server hostname or IP address and printed port')
     parser.add_argument('--bindings', type=Path, default=(Path(__file__).resolve().parent / '../../../zig-out/grpc-example').resolve())
+    parser.add_argument('--ca', type=Path, help='enable TLS and trust this PEM certificate or CA bundle')
     args = parser.parse_args()
-    verify(args.target, args.bindings)
+    verify(args.target, args.bindings, args.ca)

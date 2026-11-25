@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Called in the trial directory after its three archives and probe objects exist.
+set -euo pipefail
+probe_dir=$(cd "$(dirname "$0")" && pwd)
+app="$probe_dir/../../examples/hello/app.roc"
+if [[ ${1:-} == --host-trial ]]; then
+    app="$probe_dir/app.roc"
+    shift
+fi
+targets=(arm64mac arm64musl x64musl)
+(
+    cd platform
+    roc bundle main.roc NGHTTP2-LICENSE "$@" targets/*/libhost.a \
+        targets/*/libc.a targets/*/rcrt1.o --output-dir ..
+)
+tar xf ./*.tar.zst -C extracted
+sed 's@../../platform/main.roc@extracted/main.roc@' "$app" > hello.roc
+for target in "${targets[@]}"; do
+    case "$target" in
+        arm64mac) link_flags=(-target aarch64-macos) ;;
+        arm64musl) link_flags=(-target aarch64-linux-musl -static) ;;
+        x64musl) link_flags=(-target x86_64-linux-musl -static) ;;
+    esac
+    roc build --opt=dev --target="$target" --output="$target/hello" hello.roc
+    # The C probe provides its own main. Omit the Roc entry object from a
+    # private link copy; hello above uses the complete extracted archive.
+    cp "extracted/targets/$target/libhost.a" "$target/probe.a"
+    zig ar d "$target/probe.a" host.o
+    probe_objects=("$target/server.o")
+    # The baseline 0.3 archive predates the credential adapter.
+    if [[ -f "$target/credentials.o" ]]; then probe_objects+=("$target/credentials.o" "$target/session.o"); fi
+    zig cc "${link_flags[@]}" "${probe_objects[@]}" "$target/probe.a" -o "$target/server"
+done

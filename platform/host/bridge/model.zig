@@ -1,3 +1,4 @@
+const diagnostics = @import("../diagnostics.zig");
 const net = @import("../net.zig");
 const std = @import("std");
 const abi = @import("../roc_platform_abi.zig");
@@ -21,6 +22,7 @@ pub const rocHandle = abi.roc_handle;
 pub const ListenOptions = struct {
     endpoint: net.Endpoint,
     http2: bool = false,
+    tls: ?TlsOptions = null,
     timeouts: Timeouts,
     limits: Limits,
     threads: Threads,
@@ -32,6 +34,45 @@ pub const ListenOptions = struct {
     metrics: ?MetricsListen,
     /// The app's route patterns, host-owned, for the metrics.
     routes: []const []const u8,
+};
+
+pub const TlsOptions = struct {
+    certificate_chain_path: [:0]const u8,
+    private_key_path: [:0]const u8,
+    handshake_timeout_milliseconds: u64,
+    maximum_pending_handshakes: u32,
+
+    fn fromRoc(options: abi.ServerTls, endpoint: net.Endpoint) error{ OutOfMemory, StartupFailed }!TlsOptions {
+        if (endpoint != net.Endpoint.tcp) {
+            diagnostics.startupFailed("Server.Protocol.Tls requires a TCP endpoint");
+            return error.StartupFailed;
+        }
+        const chain = options.certificate_chain_path.asSlice();
+        const key = options.private_key_path.asSlice();
+        if (chain.len == 0 or key.len == 0 or std.mem.indexOfScalar(u8, chain, 0) != null or std.mem.indexOfScalar(u8, key, 0) != null) {
+            diagnostics.startupFailed("TLS credential paths must be nonempty and contain no NUL");
+            return error.StartupFailed;
+        }
+        if (options.handshake_timeout_milliseconds == 0 or options.handshake_timeout_milliseconds > 3_600_000 or
+            options.maximum_pending_handshakes == 0 or options.maximum_pending_handshakes > 65_536)
+        {
+            diagnostics.startupFailed("TLS handshake timeout takes 1 to 3600000 milliseconds and maximum_pending_handshakes takes 1 to 65536");
+            return error.StartupFailed;
+        }
+        const chain_copy = try std.heap.smp_allocator.dupeSentinel(u8, chain, 0);
+        errdefer std.heap.smp_allocator.free(chain_copy);
+        return .{
+            .certificate_chain_path = chain_copy,
+            .private_key_path = try std.heap.smp_allocator.dupeSentinel(u8, key, 0),
+            .handshake_timeout_milliseconds = options.handshake_timeout_milliseconds,
+            .maximum_pending_handshakes = options.maximum_pending_handshakes,
+        };
+    }
+
+    pub fn deinit(self: TlsOptions) void {
+        std.heap.smp_allocator.free(self.certificate_chain_path);
+        std.heap.smp_allocator.free(self.private_key_path);
+    }
 };
 
 pub const MetricsListen = net.Endpoint;
@@ -96,8 +137,10 @@ pub const Application = struct {
     pub fn initOwned(
         value: abi.Init_for_hostOk,
         roc_host: *abi.RocHost,
-    ) (error{OutOfMemory} || net.Error)!Application {
+    ) (error{ OutOfMemory, StartupFailed } || net.Error)!Application {
         defer abi.decrefListOfStr(value.routes, roc_host);
+        errdefer abi.decrefBox(value.model, roc_host);
+        defer value.listen.protocol.decref(roc_host);
         defer value.listen.endpoint.decref(roc_host);
         defer value.listen.metrics.decref(roc_host);
         const endpoint = try endpointFromRoc(value.listen.endpoint);
@@ -105,6 +148,11 @@ pub const Application = struct {
             abi.ServerMetricsTag.Off => null,
             abi.ServerMetricsTag.Listen => try endpointFromRoc(value.listen.metrics.payload_listen()),
         };
+        const tls = if (value.listen.protocol.tag == abi.ServerProtocolTag.Tls)
+            try TlsOptions.fromRoc(value.listen.protocol.payload_tls(), endpoint)
+        else
+            null;
+        errdefer if (tls) |options| options.deinit();
         const routes = try copyRoutes(value.routes);
         return .{
             .model_root = ModelRoot.initOwned(
@@ -113,7 +161,8 @@ pub const Application = struct {
             ),
             .listen_options = .{
                 .endpoint = endpoint,
-                .http2 = value.listen.protocol == abi.ServerProtocol.http2,
+                .http2 = value.listen.protocol.tag == abi.ServerProtocolTag.Http2,
+                .tls = tls,
                 .timeouts = .{
                     .initial_request_milliseconds = value.listen.timeouts.initial_request_milliseconds,
                     .keep_alive_idle_milliseconds = value.listen.timeouts.keep_alive_idle_milliseconds,

@@ -10,14 +10,33 @@ from h2.connection import H2Connection
 from h2.settings import SettingCodes
 from h2.events import DataReceived, ResponseReceived, StreamEnded, StreamReset, TrailersReceived
 
+from transport import scheme
 import streaming_pb2 as messages
 import streaming_pb2_grpc as services
 
 
-def long_inputs(target, sample_rss, backend):
+def await_marker(progress, expected, seconds):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        try:
+            count = progress()
+        except grpc.RpcError as error:
+            # A completed or cancelled RPC can still own the second request
+            # slot when this observation is admitted. Only retry the probe.
+            if error.code() != grpc.StatusCode.CANCELLED:
+                raise
+        else:
+            if count == expected:
+                return
+            assert count < expected, (count, expected)
+        time.sleep(.005)
+    raise AssertionError(f'missing checkpoint {expected} or request capacity')
+
+
+def long_inputs(channel_for_target, sample_rss, backend):
     checkpoints = (256, 1024, 2048)
     payload = 'x' * 16384
-    with grpc.insecure_channel(target, options=(('grpc.enable_retries', 0), ('grpc.enable_http_proxy', 0))) as channel:
+    with channel_for_target() as channel:
         echo = services.UpdatesStub(channel).Echo
 
         def progress():
@@ -42,10 +61,7 @@ def long_inputs(target, sample_rss, backend):
                         assert next(call) == messages.Update(sequence=index, text='ack')
                     # The RPC is still open and its request iterator cannot run
                     # ahead. A concurrent Unary confirms application consumption.
-                    deadline = time.monotonic() + 20
-                    while progress() != baseline + ordinal:
-                        assert time.monotonic() < deadline, ('missing checkpoint', index)
-                        time.sleep(.005)
+                    await_marker(progress, baseline + ordinal, 20)
                     samples.append(sample_rss())
                     gates[index].set()
                 if duplex:
@@ -67,13 +83,13 @@ def begin(sock, path, timeout=None, window=None):
     client.initiate_connection()
     if window is not None:
         client.update_settings({SettingCodes.INITIAL_WINDOW_SIZE: window})
-    request_headers(client, 1, path, timeout)
+    request_headers(sock, client, 1, path, timeout)
     sock.sendall(client.data_to_send())
     return client
 
 
-def request_headers(client, stream, path, timeout=None):
-    headers = [(':method', 'POST'), (':scheme', 'http'), (':authority', 'localhost'),
+def request_headers(sock, client, stream, path, timeout=None):
+    headers = [(':method', 'POST'), (':scheme', scheme(sock)), (':authority', 'localhost'),
                (':path', path), ('content-type', 'application/grpc'), ('te', 'trailers')]
     if timeout:
         headers.append(('grpc-timeout', timeout))
@@ -85,29 +101,12 @@ def envelope(message):
     return b'\0' + len(payload).to_bytes(4, 'big') + payload
 
 
-def interrupted_inputs(connect, target, verify_recovery):
-    with grpc.insecure_channel(target, options=(('grpc.enable_retries', 0), ('grpc.enable_http_proxy', 0))) as channel:
+def interrupted_inputs(connect, channel_for_target, verify_recovery):
+    with channel_for_target() as channel:
         echo = services.UpdatesStub(channel).Echo
 
         def progress():
             return echo(messages.Request(mode='progress'), timeout=5).sequence
-
-        def await_marker(expected):
-            deadline = time.monotonic() + 5
-            while time.monotonic() < deadline:
-                try:
-                    count = progress()
-                except grpc.RpcError as error:
-                    # HTTP/2 request admission may reset the probe while
-                    # asynchronous cancellation still holds the second slot.
-                    if error.code() != grpc.StatusCode.CANCELLED:
-                        raise
-                else:
-                    if count == expected:
-                        return
-                    assert count < expected, (count, expected)
-                time.sleep(.005)
-            raise AssertionError(f'missing checkpoint {expected} or request capacity')
 
         marker = envelope(messages.Request(count=1, mode='marker'))
         upload = '/streaming.Uploads/Submit'
@@ -117,7 +116,7 @@ def interrupted_inputs(connect, target, verify_recovery):
             sock.sendall(client.data_to_send())
             # Submit holds one request slot until EOF. Observing its marker with
             # Echo requires the other slot previously used by the cancelled RPC.
-            await_marker(expected)
+            await_marker(progress, expected, 5)
             client.end_stream(stream)
             sock.sendall(client.data_to_send())
             assert response(sock, client, '0', stream) == envelope(messages.Update(sequence=1, text='total'))
@@ -130,10 +129,10 @@ def interrupted_inputs(connect, target, verify_recovery):
                     client = begin(sock, path)
                     client.send_data(1, marker + b'\0\0\0\0\x02\x08')
                     sock.sendall(client.data_to_send())
-                    await_marker(before + 1)
+                    await_marker(progress, before + 1, 5)
                     if reset:
                         client.reset_stream(1)
-                        request_headers(client, 3, upload)
+                        request_headers(sock, client, 3, upload)
                         verify_slots(sock, client, 3, before + 2)
                 if not reset:
                     with connect() as probe:
@@ -213,9 +212,11 @@ def drain(process, connect, forced):
         expect_ack(sock, client)
         os.killpg(process.pid, signal.SIGTERM)
         # hyper-h2 closes the connection on GOAWAY. Decode that frame here so
-        # the admitted stream can still send EOF and receive its terminal status.
+        # the admitted stream can finish a second exchange after the signal.
         with sock.makefile('rb') as reader:
             goaway, ended, statuses = False, False, []
+            reply = bytearray()
+            expected = envelope(messages.Update(sequence=2, text="ack"))
             while True:
                 header = reader.read(9)
                 if not header:
@@ -225,19 +226,26 @@ def drain(process, connect, forced):
                 payload = reader.read(size)
                 assert len(payload) == size
                 if header[3] == 7:
-                    assert size >= 8 and int.from_bytes(payload[:4], 'big') >= 1
+                    assert header[5:] == bytes(4) and size >= 8
+                    assert int.from_bytes(payload[:4], 'big') >= 1
                     assert payload[4:8] == bytes(4)
                     if not goaway and not forced:
-                        client.end_stream(1)
+                        client.send_data(1, envelope(messages.Request(count=2)), end_stream=True)
                         sock.sendall(client.data_to_send())
                     goaway = True
                     continue
                 for event in client.receive_data(header + payload):
-                    assert not isinstance(event, (DataReceived, StreamReset)), event
+                    assert not isinstance(event, StreamReset), event
+                    if isinstance(event, (DataReceived, TrailersReceived, StreamEnded)):
+                        assert goaway and not forced and event.stream_id == 1, event
+                    if isinstance(event, DataReceived):
+                        reply.extend(event.data)
                     if isinstance(event, TrailersReceived):
+                        assert reply == expected, reply
                         statuses.append(dict(event.headers).get('grpc-status'))
                     if isinstance(event, StreamEnded):
                         ended = True
             assert goaway and ended == (not forced)
             assert statuses == ([] if forced else ['0']), statuses
+            assert reply == (b'' if forced else expected), reply
     assert process.wait(timeout=6) == (1 if forced else 0)
