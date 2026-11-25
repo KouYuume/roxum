@@ -15,6 +15,8 @@ import venv
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'tests/support'))
 from roxum_process import read_port, stop
+sys.path.insert(0, str(ROOT / 'tests/grpc-unary'))
+from proxy import make_credentials
 
 
 def run(command, cwd, env=None):
@@ -65,29 +67,41 @@ def verify(url, http_log):
         bindings = root / 'python'
         run([python, 'generate.py', '--tool-root', tools, '--wire', wire['url'],
              '--grpc', grpc['url'], '--platform', platform['url'], '--python-output', bindings], example, environment)
-        # The example asks for two threads, which interpreter builds do not run
-        # (platform/host/single_thread_runtime.zig).
-        for backend in ('speed', 'dev'):
-            before = http_log.read_text()
-            environment = {**os.environ, 'ROC_CACHE_DIR': str(root / ('roc-' + backend)),
-                           'XDG_CACHE_HOME': str(root / ('xdg-' + backend))}
-            executable = example / ('server-' + backend)
-            run([os.environ.get('ROC_BIN', 'roc'), 'build', '--opt=' + backend,
-                 '--output=' + str(executable), app], example, environment)
-            after = http_log.read_text()
-            for artifact in (platform, grpc, wire):
-                request = 'GET /' + artifact['file'] + ' '
-                assert after.count(request) > before.count(request), ('bundle was not fetched', backend, artifact['file'])
-            process = subprocess.Popen([str(executable)], cwd=example, stdout=subprocess.PIPE,
-                                       text=True, start_new_session=True)
-            try:
-                port = read_port(process)
-                run([python, 'client.py', f'127.0.0.1:{port}', '--bindings', bindings], example)
-            finally:
-                status = stop(process)
-                process.stdout.close()
-            assert status == 0
-            print(f'PASS distributed gRPC (all four forms) {backend}: generated service, three URL packages, metadata and status')
+        # Compile the example with each documented listener setting. Both variants
+        # use the same generated service, client assertions and release artifacts.
+        make_credentials(example)
+        cleartext = 'protocol: Server.Protocol.Http2'
+        assert text.count(cleartext) == 1
+        tls_app = example / 'tls.roc'
+        tls_app.write_text(text.replace(cleartext, 'protocol: Server.Protocol.Tls({ '
+                                        'certificate_chain_path: "cert.pem", private_key_path: "key.pem" })'))
+        for transport, source, client_options in (
+            ('h2c', app, []), ('tls', tls_app, ['--ca', example / 'cert.pem']),
+        ):
+            # The example asks for two threads, which interpreter builds do not run
+            # (platform/host/single_thread_runtime.zig).
+            for backend in ('speed', 'dev'):
+                variant = f'{backend}-{transport}'
+                before = http_log.read_text()
+                environment = {**os.environ, 'ROC_CACHE_DIR': str(root / ('roc-' + variant)),
+                               'XDG_CACHE_HOME': str(root / ('xdg-' + variant))}
+                executable = example / ('server-' + variant)
+                run([os.environ.get('ROC_BIN', 'roc'), 'build', '--opt=' + backend,
+                     '--output=' + str(executable), source], example, environment)
+                after = http_log.read_text()
+                for artifact in (platform, grpc, wire):
+                    request = 'GET /' + artifact['file'] + ' '
+                    assert after.count(request) > before.count(request), ('bundle was not fetched', variant, artifact['file'])
+                process = subprocess.Popen([str(executable)], cwd=example, stdout=subprocess.PIPE,
+                                           text=True, start_new_session=True)
+                try:
+                    port = read_port(process)
+                    run([python, 'client.py', f'127.0.0.1:{port}', '--bindings', bindings, *client_options], example)
+                finally:
+                    status = stop(process)
+                    process.stdout.close()
+                assert status == 0
+                print(f'PASS distributed gRPC (all four forms) {variant}: generated service, three URL packages, metadata and status')
 
 
 if __name__ == '__main__':

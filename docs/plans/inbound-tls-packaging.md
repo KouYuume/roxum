@@ -104,9 +104,10 @@ Run the same verifier with the extracted application's `arm64musl/hello` and
 `x64musl/hello` binaries on their respective Linux architectures with the same pinned Python
 [client dependencies](../../tests/http2-engine/requirements.txt).
 Run `zig build test-inbound-tls` for all local backend/allocator variants.
-To check a standard bundle, build [the same app](../../tests/inbound-tls/app.roc)
-against its extracted platform and pass `--standard` to the verifier. This
-uses client-side negotiation checks without the trial worker’s result output.
+Run `zig build test-m13a` to build [the listener app](../../tests/inbound-tls/app.roc)
+from the release platform URL and run the standard verifier on the current
+target. It exercises HTTPS and multiplexed HTTP/2 with certificate verification,
+as well as startup failures, handshake admission and shutdown.
 
 ## Engine configurations and updates
 
