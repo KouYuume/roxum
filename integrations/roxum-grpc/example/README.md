@@ -45,7 +45,7 @@ Use `python3 tools/check.py --only test-grpc-example` to run the two-thread serv
 dev and speed with both allocators. The more exhaustive protocol, deadline and
 cancellation matrices remain in `tests/grpc-unary` and `tests/grpc-streaming`.
 
-For direct TLS on the 0.4 development branch, replace `Server.Protocol.Http2`
+For direct TLS with core 0.4, replace `Server.Protocol.Http2`
 in `app.roc` with the following listener setting and rebuild:
 
 ```roc
@@ -60,6 +60,6 @@ certificate (here, `localhost`):
 zig-out/grpc-example/venv/bin/python integrations/roxum-grpc/example/client.py localhost:PORT --ca ca.pem
 ```
 
-See the [deployment guide](../../../docs/guides/deployment.md#inbound-tls-on-the-04-development-branch)
+See the [deployment guide](../../../docs/guides/deployment.md#inbound-tls)
 for credential rotation and limits, or the [reverse proxy guide](../../../docs/guides/reverse-proxy.md#native-grpc-over-tls)
 for proxy termination. For released packages, follow the [distribution guide](../DISTRIBUTION.md).

@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "core": {
-    "version": "0.3.0",
+    "version": "0.4.0",
     "platform_root": "platform/main.roc",
     "source_globs": [
       "platform/*.roc",
@@ -30,7 +30,7 @@
       "applications": [
         "tests/platform-package/app.roc"
       ],
-      "platform_versions": "^0.3",
+      "platform_versions": "^0.4",
       "requires_platform_sha256": "e53aa91d78354471d6e6cc0f67510d55ecefc2dcd926f0f1a95f210b03a743c1",
       "compatibility_files": [
         "tests/platform-package/run.sh",
@@ -46,7 +46,7 @@
       "applications": [
         "integrations/roxum-sse/example/app.roc"
       ],
-      "platform_versions": "^0.3",
+      "platform_versions": "^0.4",
       "requires_platform_sha256": "e53aa91d78354471d6e6cc0f67510d55ecefc2dcd926f0f1a95f210b03a743c1",
       "compatibility_files": [
         "integrations/roxum-sse/example/unsafe-event.roc",
@@ -64,7 +64,7 @@
       "applications": [
         "integrations/roxum-set-header/example/app.roc"
       ],
-      "platform_versions": "^0.3",
+      "platform_versions": "^0.4",
       "requires_platform_sha256": "e53aa91d78354471d6e6cc0f67510d55ecefc2dcd926f0f1a95f210b03a743c1",
       "compatibility_files": [
         "integrations/roxum-set-header/example/run.sh",
@@ -81,7 +81,7 @@
       "applications": [
         "integrations/roxum-trace/example/app.roc"
       ],
-      "platform_versions": "^0.3",
+      "platform_versions": "^0.4",
       "requires_platform_sha256": "e53aa91d78354471d6e6cc0f67510d55ecefc2dcd926f0f1a95f210b03a743c1",
       "compatibility_files": [
         "integrations/roxum-trace/example/run.sh",
@@ -98,7 +98,7 @@
       "applications": [
         "integrations/roxum-normalize-path/example/app.roc"
       ],
-      "platform_versions": "^0.3",
+      "platform_versions": "^0.4",
       "requires_platform_sha256": "e53aa91d78354471d6e6cc0f67510d55ecefc2dcd926f0f1a95f210b03a743c1",
       "compatibility_files": [
         "integrations/roxum-normalize-path/example/run.sh",
@@ -115,7 +115,7 @@
       "applications": [
         "integrations/roxum-cors/example/app.roc"
       ],
-      "platform_versions": "^0.3",
+      "platform_versions": "^0.4",
       "requires_platform_sha256": "e53aa91d78354471d6e6cc0f67510d55ecefc2dcd926f0f1a95f210b03a743c1",
       "compatibility_files": [
         "integrations/roxum-cors/example/run.sh",
@@ -133,7 +133,7 @@
         "integrations/roxum-proxy-headers/example/app.roc",
         "integrations/roxum-proxy-headers/example/untrusted-app.roc"
       ],
-      "platform_versions": "^0.3",
+      "platform_versions": "^0.4",
       "requires_platform_sha256": "e53aa91d78354471d6e6cc0f67510d55ecefc2dcd926f0f1a95f210b03a743c1",
       "compatibility_files": [
         "integrations/roxum-proxy-headers/example/run.sh",
@@ -151,7 +151,7 @@
         "integrations/roxum-postgres/example/app.roc",
         "integrations/roxum-postgres/tests/protocol.roc"
       ],
-      "platform_versions": "^0.3",
+      "platform_versions": "^0.4",
       "requires_platform_sha256": "e53aa91d78354471d6e6cc0f67510d55ecefc2dcd926f0f1a95f210b03a743c1",
       "compatibility_files": [
         "integrations/roxum-postgres/example/run.sh",
@@ -171,7 +171,7 @@
       "applications": [
         "tests/http-client/app.roc"
       ],
-      "platform_versions": "^0.3",
+      "platform_versions": "^0.4",
       "requires_platform_sha256": "e53aa91d78354471d6e6cc0f67510d55ecefc2dcd926f0f1a95f210b03a743c1",
       "compatibility_files": [
         "tests/http-client/run.sh",
@@ -188,7 +188,7 @@
       "applications": [
         "integrations/roxum-cookie/example/app.roc"
       ],
-      "platform_versions": "^0.3",
+      "platform_versions": "^0.4",
       "requires_platform_sha256": "e53aa91d78354471d6e6cc0f67510d55ecefc2dcd926f0f1a95f210b03a743c1",
       "compatibility_files": [
         "integrations/roxum-cookie/example/run.sh",
@@ -205,7 +205,7 @@
       "applications": [
         "integrations/roxum-rate-limit/example/app.roc"
       ],
-      "platform_versions": "^0.3",
+      "platform_versions": "^0.4",
       "requires_platform_sha256": "e53aa91d78354471d6e6cc0f67510d55ecefc2dcd926f0f1a95f210b03a743c1",
       "compatibility_files": [
         "integrations/roxum-rate-limit/example/run.sh",
@@ -222,7 +222,7 @@
       "applications": [
         "integrations/roxum-concurrency-limit/example/app.roc"
       ],
-      "platform_versions": "^0.3",
+      "platform_versions": "^0.4",
       "requires_platform_sha256": "e53aa91d78354471d6e6cc0f67510d55ecefc2dcd926f0f1a95f210b03a743c1",
       "compatibility_files": [
         "integrations/roxum-concurrency-limit/example/run.sh",
@@ -243,7 +243,7 @@
         "tests/grpc-streaming/app.roc",
         "tests/grpc-streaming/acceptance.roc"
       ],
-      "platform_versions": "^0.3",
+      "platform_versions": "^0.4",
       "requires_platform_sha256": "e53aa91d78354471d6e6cc0f67510d55ecefc2dcd926f0f1a95f210b03a743c1",
       "compatibility_files": [
         "tests/grpc-wire/checks.sh",

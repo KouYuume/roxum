@@ -1,7 +1,6 @@
 # Running behind a reverse proxy
 
-Terminate inbound TLS at a reverse proxy or load balancer. The general HTTP configurations below connect to roxum over IPv4 HTTP/1.1; the gRPC configuration uses HTTP/2. For explicit
-cleartext HTTP/2 upstreams and their current limits, see [deployment](deployment.md#opt-in-http2). Outbound PostgreSQL and HTTP connections can use TLS; see [database](database.md) and [HTTP client](http-client.md).
+These examples terminate TLS at nginx or Caddy and forward requests to roxum over HTTP/1.1. The native gRPC example uses a [cleartext HTTP/2 upstream](deployment.md#opt-in-http2). To terminate TLS in roxum itself, configure a [TCP TLS listener](deployment.md#inbound-tls).
 
 ## Keep-alive
 
@@ -34,7 +33,7 @@ routes =
 		.before_routing(ProxyHeaders.trust(["10.0.0.0/16"]))
 ```
 
-The integration removes forwarding fields from untrusted peers. For a trusted peer it resolves `X-Forwarded-For` into `remote_addr` and removes that field. A `/0` trust range is rejected. Trusting a range that includes direct clients allows address spoofing. The proxy must append the client address it observed; nginx can use `$proxy_add_x_forwarded_for`.
+The integration removes forwarding fields from untrusted peers. For a trusted peer it resolves `X-Forwarded-For` into `remote_addr` and removes that field. A `/0` trust range is rejected. For load balancers with changing addresses, use their dedicated subnet ranges. Trusting a range that includes direct clients allows address spoofing. The proxy must append the client address it observed; nginx can use `$proxy_add_x_forwarded_for`.
 
 ## Example proxy configurations
 

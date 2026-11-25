@@ -18,7 +18,7 @@ To keep its focus on backend services, roxum does not aim to provide:
 
 Serving HTML, static assets, or an API used by a browser remains in scope. Applications can use rendering libraries and database integrations without roxum owning the surrounding UI or database toolchain. Existing static-page support is not excluded by this boundary.
 
-IPv4/IPv6 and Unix listeners are core networking capabilities. HTTP/2 listeners, streamed bodies, trailers, and request execution deadlines support the [gRPC integration](../../integrations/roxum-grpc/README.md). The [roadmap to 1.0](../plans/roadmap-to-1.0.md) schedules inbound TLS for 0.4 and HTTP/2 file and SSE support in the following feature phase.
+IPv4/IPv6 and Unix listeners are core networking capabilities. HTTP/2 listeners, streamed bodies, trailers, and request execution deadlines support the [gRPC integration](../../integrations/roxum-grpc/README.md). The [roadmap to 1.0](../plans/roadmap-to-1.0.md) covers HTTP/2 file and SSE support in the feature phase following 0.4. TCP listeners support [direct TLS](../guides/deployment.md#inbound-tls) as of 0.4.
 
 ## Choosing a Roc platform for your application
 
