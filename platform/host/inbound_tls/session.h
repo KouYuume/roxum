@@ -30,6 +30,9 @@ enum {
 // A transport EOF without close_notify is a failure.
 int roxum_tls_read(roxum_tls_session *session, unsigned char *data, size_t len);
 int roxum_tls_write(roxum_tls_session *session, const unsigned char *data, size_t len);
+// HTTP/2 only: zero means TLS accepted the plaintext but the socket still owes
+// ciphertext. Reads may proceed. Retry with the same slice until positive.
+int roxum_tls_http2_write(roxum_tls_session *session, const unsigned char *data, size_t len);
 // Check before waiting on the socket after a successful read. The library
 // may hold another record or part of the current one.
 int roxum_tls_check_pending(const roxum_tls_session *session);

@@ -14,6 +14,9 @@ import sys
 import tempfile
 import time
 
+from h2.connection import H2Connection
+from h2.events import ConnectionTerminated, DataReceived, ResponseReceived, StreamEnded, StreamReset
+
 from verify import ALPN_CASES, create_credentials
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
@@ -81,6 +84,55 @@ def check_https(channel):
     channel.unwrap().close()
 
 
+def check_http2(channel, draining_process=None):
+    client = H2Connection()
+    client.initiate_connection()
+    body = bytes(range(256)) * 96
+    expected = {1: b"Hello, Roc!\n", 3: body}
+    streams = {stream: bytearray() for stream in expected}
+    for stream, method, path in ((1, "GET", "/"), (3, "POST", "/echo")):
+        client.send_headers(stream, [(":method", method), (":scheme", "https"),
+                                     (":authority", "localhost"), (":path", path)], end_stream=(stream == 1))
+    client.send_data(3, body[:16384])
+    client.send_data(3, body[16384:], end_stream=True)
+    channel.sendall(client.data_to_send())
+    successful = set()
+    while streams:
+        data = channel.recv(16384)
+        if not data:
+            raise AssertionError("HTTP/2 connection ended before both responses")
+        for event in client.receive_data(data):
+            if isinstance(event, (ConnectionTerminated, StreamReset)):
+                raise AssertionError(f"HTTP/2 response interrupted: {event}")
+            if isinstance(event, ResponseReceived):
+                if dict(event.headers).get(b":status") != b"200":
+                    raise AssertionError(f"unexpected HTTP status on stream {event.stream_id}")
+                successful.add(event.stream_id)
+            if isinstance(event, DataReceived):
+                if event.stream_id not in successful:
+                    raise AssertionError("DATA before response headers")
+                streams[event.stream_id].extend(event.data)
+                client.acknowledge_received_data(event.flow_controlled_length, event.stream_id)
+            if isinstance(event, StreamEnded):
+                if streams.pop(event.stream_id) != expected[event.stream_id]:
+                    raise AssertionError("wrong multiplexed HTTP/2 response")
+        channel.sendall(client.data_to_send())
+    if draining_process is not None:
+        if stop(draining_process) != 0:
+            raise AssertionError("worker failed to drain HTTP/2")
+        received_goaway = False
+        while data := channel.recv(16384):
+            for event in client.receive_data(data):
+                if isinstance(event, ConnectionTerminated):
+                    if event.error_code != 0 or event.last_stream_id < 3:
+                        raise AssertionError(f"unexpected GOAWAY: {event}")
+                    received_goaway = True
+        if not received_goaway:
+            raise AssertionError("missing GOAWAY during TLS shutdown")
+        return
+    channel.unwrap().close()
+
+
 def strict_shutdown_context(cafile):
     context = ssl.create_default_context(cafile=str(cafile))
     # Some OpenSSL builds treat a bare transport EOF as a close_notify.
@@ -102,13 +154,7 @@ def check_tls(port, cert, version, worker_output):
                     if expected == "http/1.1":
                         check_https(tls)
                     else:
-                        # The development listener closes immediately on h2.
-                        try:
-                            if tls.recv(1):
-                                raise AssertionError("unexpected application data after h2 negotiation")
-                        except ssl.SSLError as error:
-                            if error.reason != "UNEXPECTED_EOF_WHILE_READING":
-                                raise
+                        check_http2(tls)
                     check_worker_result(worker_output, expected)
             except ssl.SSLError as error:
                 if expected is not None or "no application protocol" not in str(error).lower().replace("_", " "):
@@ -318,12 +364,13 @@ def check_valid_settings(hello, cert, key, trust):
         try:
             port = read_port(process)
             if options.get("defaults"):
-                context = ssl.create_default_context(cafile=str(trust))
+                context = strict_shutdown_context(trust)
                 context.set_alpn_protocols(["h2"])
                 with socket.create_connection(("127.0.0.1", port), timeout=5) as peer:
-                    with context.wrap_socket(peer, server_hostname="localhost") as channel:
+                    with context.wrap_socket(peer, server_hostname="localhost", suppress_ragged_eofs=False) as channel:
                         if channel.selected_alpn_protocol() != "h2":
                             raise AssertionError("TLS defaults did not negotiate h2")
+                        check_http2(channel, draining_process=process)
         finally:
             if stop(process) != 0:
                 raise AssertionError("valid TLS listener settings failed")
@@ -374,7 +421,7 @@ def main():
             finally:
                 if stop(process) != 0:
                     raise RuntimeError("hello exited unsuccessfully")
-    print("PASS cleartext, HTTPS keep-alive, request and response bodies, TLS admission and shutdown")
+    print("PASS cleartext, HTTPS keep-alive, multiplexed HTTP/2, request and response bodies, TLS admission and shutdown")
 
 
 if __name__ == "__main__":

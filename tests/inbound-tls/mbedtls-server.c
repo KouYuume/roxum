@@ -20,7 +20,7 @@ static int wait_for_io(int fd, int result) {
     return poll(&wait, 1, 5000) > 0;
 }
 
-static int records(int fd, roxum_tls_session *session, int truncated) {
+static int records(int fd, roxum_tls_session *session, int truncated, int duplex) {
     unsigned char byte;
     int rc = roxum_tls_read(session, &byte, 1);
     if (rc != ROXUM_TLS_IO_WANT_READ) return 2;
@@ -41,19 +41,29 @@ static int records(int fd, roxum_tls_session *session, int truncated) {
     size_t sent = 0;
     int blocked = 0;
     while (sent < sizeof(reply)) {
-        rc = roxum_tls_write(session, reply + sent, sizeof(reply) - sent);
+        rc = duplex ? roxum_tls_http2_write(session, reply + sent, sizeof(reply) - sent)
+                    : roxum_tls_write(session, reply + sent, sizeof(reply) - sent);
         if (rc > 0) {
             // The reply exceeds a TLS record, so at least one write must be partial.
             if ((size_t)rc == sizeof(reply) || (size_t)rc > sizeof(reply) - sent) return 2;
             sent += (size_t)rc;
             continue;
         }
-        if (!blocked && rc == ROXUM_TLS_IO_WANT_WRITE) {
+        if (!blocked && rc == (duplex ? 0 : ROXUM_TLS_IO_WANT_WRITE)) {
             puts("waiting to write plaintext");
             fflush(stdout);
             blocked = 1;
+            if (duplex) {
+                int received;
+                do {
+                    received = roxum_tls_read(session, &byte, 1);
+                } while (wait_for_io(fd, received));
+                if (received != 1 || byte != 'c') return 2;
+                puts("read while blocked");
+                fflush(stdout);
+            }
         }
-        if (!wait_for_io(fd, rc)) return 2;
+        if (!wait_for_io(fd, duplex && rc == 0 ? ROXUM_TLS_IO_WANT_WRITE : rc)) return 2;
     }
     if (!blocked) return 2;
     do {
@@ -85,7 +95,7 @@ static int handshake(int fd, const roxum_tls_credentials *credentials, const cha
             if (!mode) status = 0;
             else if (strcmp(mode, "empty-read") == 0) status = roxum_tls_read(session, &byte, 0) == ROXUM_TLS_IO_FAILED ? 0 : 2;
             else if (strcmp(mode, "empty-write") == 0) status = roxum_tls_write(session, &byte, 0) == ROXUM_TLS_IO_FAILED ? 0 : 2;
-            else status = records(fd, session, strcmp(mode, "truncated") == 0);
+            else status = records(fd, session, strcmp(mode, "truncated") == 0, strcmp(mode, "duplex") == 0);
             break;
         }
         if (announce_read && result == ROXUM_TLS_WANT_READ) {

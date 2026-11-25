@@ -1,5 +1,5 @@
 //! A negotiated session belongs to the slot. The HTTP/1 loop and its request
-//! fiber take turns driving it, including retries of a pending TLS write.
+//! fiber take turns driving it. HTTP/2 serializes record I/O in the connection owner.
 const tls = @import("handshake.zig");
 const net = @import("../net.zig");
 const tcp = @import("../net/tcp.zig");
@@ -7,14 +7,16 @@ const std = @import("std");
 
 extern "c" fn roxum_tls_read(*tls.Session, [*]u8, usize) c_int;
 extern "c" fn roxum_tls_write(*tls.Session, [*]const u8, usize) c_int;
+extern "c" fn roxum_tls_http2_write(*tls.Session, [*]const u8, usize) c_int;
 extern "c" fn roxum_tls_close_notify(*tls.Session) c_int;
 
 pub const Ops = struct {
     read: *const @TypeOf(roxum_tls_read) = roxum_tls_read,
     write: *const @TypeOf(roxum_tls_write) = roxum_tls_write,
+    write_http2: ?*const @TypeOf(roxum_tls_http2_write) = null,
     shutdown: *const @TypeOf(roxum_tls_close_notify) = roxum_tls_close_notify,
 };
-pub const native = Ops{};
+pub const native = Ops{ .write_http2 = roxum_tls_http2_write };
 pub const Progress = union(enum) { bytes: usize, want_read, want_write, failed };
 
 pub const Stream = struct {
@@ -43,6 +45,12 @@ pub const Stream = struct {
     pub fn write(self: *Stream, bytes: []const u8) Progress {
         if (self.failed) return Progress.failed;
         return self.result(self.ops.write(self.session, bytes.ptr, bytes.len));
+    }
+
+    pub fn writeHttp2(self: *Stream, bytes: []const u8) Progress {
+        if (self.failed) return Progress.failed;
+        const send = self.ops.write_http2 orelse self.ops.write;
+        return self.result(send(self.session, bytes.ptr, bytes.len));
     }
 
     pub fn shutdown(self: *Stream) Progress {

@@ -1,8 +1,8 @@
 # Internal HTTP/2 engine
 
 This document defines the HTTP/2 host's ownership, resource bounds, and
-execution contracts. HTTP/1 remains the default; TCP and Unix listeners opt into
-cleartext HTTP/2. For configuration, see [deployment](../guides/deployment.md#opt-in-http2);
+execution contracts. TCP and Unix listeners support cleartext HTTP/2. TCP
+listeners configured for TLS also serve HTTP/2 when ALPN selects `h2`. For configuration, see [deployment](../guides/deployment.md#opt-in-http2);
 for supported RPC behavior, see the [gRPC integration](../../integrations/roxum-grpc/README.md).
 
 For the copying and cleanup rules of completed requests and responses, see the
@@ -79,13 +79,21 @@ scheduling turn ends before EAGAIN. Otherwise edge-triggered epoll/kqueue could
 leave unread input or pending output without a new event. Observers only queue
 work for execution between engine calls.
 
-A full socket send buffer enables writable readiness without disabling reads.
+On cleartext sockets, a full send buffer enables writable readiness without disabling reads.
 When output empties, writable interest is removed. HTTP/2 flow-control stalls
 wait for incoming frames rather than polling writable sockets continuously.
 A TCP read EOF preserves output that can still be serialized; after that output
 is exhausted, the connection closes. Responses that need further peer credit
 cannot finish after EOF. Socket/protocol errors terminate only that owner; the
 scheduler removes it and releases its resources.
+
+TLS record operations can require readiness in the opposite direction. The
+owner retries a blocked write with the same engine-owned slice. When a socket
+cannot accept a complete encrypted application record, the transport retains
+its unsent suffix and continues reading frames. It credits the plaintext to
+the engine only after the suffix reaches the socket. If a read
+needs writable readiness, it finishes that read before submitting more output.
+Only a peer close notification counts as clean TLS EOF.
 
 Each readiness token must be unique across connection reuse, including queued
 stale events. `ready` ignores mismatched tokens and terminal owners. The production
@@ -263,8 +271,10 @@ completion and verifies unfinished-body cancellation and unrelated-stream progre
 
 ## Production HTTP/2 listeners
 
-`Server.ListenOptions.protocol` selects `Http1` (the default) or explicit cleartext
-prior-knowledge `Http2`, independently of TCP/Unix addressing. One initialized
+`Server.ListenOptions.protocol` defaults to `Http1` and supports explicit cleartext
+prior-knowledge `Http2` on TCP or Unix sockets. On a TLS listener, ALPN selects
+the engine for each connection. Its transport owner reads and writes through
+the negotiated session under the same connection lock. One initialized
 model and the existing worker threads serve both protocols. The HTTP/2 path
 executes routing and `BeforeBody` stages after initial headers. Ordinary handlers
 wait for finite input EOF. It accepts finite responses with trailers and

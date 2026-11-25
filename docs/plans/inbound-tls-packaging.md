@@ -32,7 +32,7 @@ extracted host archive and served the expected cleartext HTTP/1.1 response.
 The trial builds the release host in a disposable copy of the source tree
 and instruments the handshake result. The Roc fixture configures the worker
 through `Server.Protocol.Tls`. With trial
-credentials, the worker serves HTTPS for HTTP/1.1 and closes after negotiating h2. Without credentials,
+credentials, the worker serves HTTP/1.1 and HTTP/2 over TLS. Without credentials,
 the same executable serves the hello route. The app uses the complete archive
 from the extracted bundle, including its normal host entry point and the TLS
 engine. The trial worker loads its certificate chain and matching private key before
@@ -96,11 +96,13 @@ the cleartext route and all seven ALPN cases separately for TLS 1.2 and 1.3.
 
 ```sh
 bash tests/inbound-tls/package-mbedtls.sh --host-trial mbedtls-4.1.2.tar.bz2 "$host_trial"
-python3 tests/inbound-tls/verify-host.py "$host_trial/arm64mac/hello"
+bash tests/http2-listener/setup.sh
+zig-out/http2-listener/venv/bin/python tests/inbound-tls/verify-host.py "$host_trial/arm64mac/hello"
 ```
 
 Run the same verifier with the extracted application's `arm64musl/hello` and
-`x64musl/hello` binaries on their respective Linux architectures.
+`x64musl/hello` binaries on their respective Linux architectures with the same pinned Python
+[client dependencies](../../tests/http2-engine/requirements.txt).
 Run `zig build test-inbound-tls` for all local backend/allocator variants.
 To check a standard bundle, build [the same app](../../tests/inbound-tls/app.roc)
 against its extracted platform and pass `--standard` to the verifier. This

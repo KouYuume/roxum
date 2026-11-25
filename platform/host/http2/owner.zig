@@ -8,6 +8,7 @@ const request = @import("../bridge/http2_request.zig");
 const request_types = @import("../bridge/request.zig");
 const response = @import("../bridge/http2_response.zig");
 const streams = @import("streams.zig");
+const records = @import("../inbound_tls/records.zig");
 const readiness = @import("../net/poller.zig");
 
 pub const Error = protocol.Error || net.Error || readiness.Error;
@@ -18,6 +19,9 @@ pub const Owner = struct {
     socket: net.Socket,
     poller: *readiness.Poller,
     token: u64,
+    tls: ?*records.Stream = null,
+    retry_tls_read: bool = false,
+    ciphertext_pending: bool = false,
     runnable: bool = true,
     terminal: bool = false,
     read_eof: bool = false,
@@ -42,7 +46,7 @@ pub const Owner = struct {
         else
             try protocol.Engine.create(allocator, limits, observer);
         errdefer engine.destroy();
-        try poller.watchReadable(socket, token);
+        try poller.restoreReadable(socket, token);
         return .{ .engine = engine, .socket = socket, .poller = poller, .token = token };
     }
 
@@ -184,6 +188,22 @@ pub const Owner = struct {
         self.runnable = true;
     }
 
+    fn watchWrite(self: *Owner, writable: bool) Error!void {
+        if (self.watching_writable == writable) return;
+        if (writable) {
+            try self.poller.watchWritable(self.socket, self.token);
+        } else {
+            try self.poller.unwatchWritable(self.socket, self.token);
+        }
+        self.watching_writable = writable;
+    }
+
+    fn waitForRecord(self: *Owner, progress: records.Progress) Error!Progress {
+        try self.watchWrite(progress == records.Progress.want_write);
+        self.runnable = false;
+        return Progress.waiting;
+    }
+
     /// At most one bounded write and one bounded read per call. A successful
     /// read returns to the scheduler before requesting output, so observer work
     /// can be dispatched outside callbacks. Keep runnable owners on a fair queue
@@ -195,25 +215,46 @@ pub const Owner = struct {
         errdefer self.terminal = true;
         std.debug.assert(self.write_bytes > 0);
         var progress = false;
-        const output = try self.engine.output();
+        const output = if (self.retry_tls_read and !self.ciphertext_pending) &.{} else try self.engine.output();
         if (output.len == 0 and self.read_eof) {
             self.terminal = true;
             return Progress.closed;
         }
         if (output.len > 0) {
-            const count = try net.sendAvailable(self.socket, output[0..@min(output.len, self.write_bytes)]);
+            const chunk = output[0..@min(output.len, self.write_bytes)];
+            // The engine retains this exact suffix until consumeOutput succeeds.
+            const count = if (self.tls) |tls| switch (tls.writeHttp2(chunk)) {
+                records.Progress.bytes => |n| n,
+                records.Progress.want_read => return self.waitForRecord(records.Progress.want_read),
+                records.Progress.want_write => return self.waitForRecord(records.Progress.want_write),
+                records.Progress.failed => return error.SendFailed,
+            } else try net.sendAvailable(self.socket, chunk);
+            self.ciphertext_pending = self.tls != null and count == 0;
             try self.engine.consumeOutput(count);
             progress = count > 0;
-            if (count == 0 and !self.watching_writable) {
-                try self.poller.watchWritable(self.socket, self.token);
-                self.watching_writable = true;
-            }
-        } else if (self.watching_writable) {
-            try self.poller.unwatchWritable(self.socket, self.token);
-            self.watching_writable = false;
+            try self.watchWrite(count == 0);
+        } else if (!self.retry_tls_read) {
+            try self.watchWrite(false);
         }
         if (!self.read_eof) {
-            if (try net.receiveAvailable(self.socket, &self.input)) |count| {
+            const received = if (self.tls) |tls| read: {
+                const result = tls.read(&self.input);
+                if (result == records.Progress.want_write) {
+                    self.retry_tls_read = true;
+                    return self.waitForRecord(result);
+                }
+                // Completing a cross-direction read may unblock queued output.
+                progress = progress or self.retry_tls_read;
+                self.retry_tls_read = false;
+                try self.watchWrite(self.ciphertext_pending);
+                break :read switch (result) {
+                    records.Progress.bytes => |n| @as(?usize, n),
+                    records.Progress.want_read => null,
+                    records.Progress.failed => return error.ReceiveFailed,
+                    records.Progress.want_write => unreachable,
+                };
+            } else try net.receiveAvailable(self.socket, &self.input);
+            if (received) |count| {
                 if (count == 0) {
                     // Preserve already queued output after a TCP half-close.
                     // Output blocked on HTTP/2 credit cannot progress after EOF.

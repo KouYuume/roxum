@@ -67,8 +67,9 @@ writes. The listener tests exercise keep-alive, 100 Continue, an echoed body,
 streamed output and TLS shutdown. The worker releases the handshake slot
 before dispatch and owns the session until connection cleanup.
 
-Connect the HTTP/2 engine to the negotiated transport next. Check
-HTTP/2 with an independent gRPC client, including streaming, backpressure,
+Negotiated h2 sessions use the existing HTTP/2 engine. The listener tests
+exercise concurrent streams and authenticated TLS shutdown. Next, check HTTP/2
+with an independent gRPC client, including streaming, backpressure,
 cancellation, trailers and graceful shutdown. Retain cleartext and proxy
 regressions and run the lifecycle checks with both allocators.
 
