@@ -1,19 +1,14 @@
 # Deployment
 
-roxum serves plain HTTP/1.1 by default over IPv4 or IPv6 TCP, or a filesystem Unix domain socket.
-Opt-in cleartext HTTP/2 supports incremental request reads and finite or streamed responses. Run it behind a reverse proxy or
-load balancer that terminates TLS (and optionally HTTP/2 or HTTP/3 for clients), such as nginx, Caddy, or AWS Application Load
-Balancer.
-
-```text
-client ──HTTPS / HTTP/2──> proxy / load balancer ──HTTP/1.1──> roxum
-```
+roxum defaults to HTTP/1.1. TCP and Unix listeners also support cleartext HTTP/2.
+On TCP, enable [inbound TLS](#inbound-tls) to serve HTTPS or native gRPC directly.
+For nginx and Caddy configurations, see [running behind a reverse proxy](reverse-proxy.md).
 
 ## What the proxy and roxum each do
 
 | | in front of roxum | in roxum |
 |---|---|---|
-| HTTPS and HTTP/3 traffic | the proxy | TLS for HTTP/1.1 and HTTP/2 in the 0.4 development build |
+| TLS termination | HTTPS, including HTTP/3 if supported by the proxy | HTTP/1.1 and HTTP/2 on TCP |
 | HTTP/2 | the proxy can terminate it or use an HTTP/2 upstream | cleartext prior knowledge or TLS with ALPN |
 | Static files | the proxy or a CDN, for a site mostly made of them | `Files.serve` and `Reply.file`, for files the app's routes own or check access to ([Files](files.md)) |
 | Compression | the proxy's `gzip` / `brotli`, for everything at once | `Compression.layer`, for the routes you choose, and precompressed `.br` / `.gz` files ([Files](files.md#compressing-responses)) |
@@ -21,7 +16,7 @@ client ──HTTPS / HTTP/2──> proxy / load balancer ──HTTP/1.1──> r
 Compress in one place: with both on, the proxy finds `content-encoding` already set and passes the body on, but
 that is wasted work in roxum.
 
-## Inbound TLS on the 0.4 development branch
+## Inbound TLS
 
 A TCP listener can negotiate TLS 1.2 or 1.3 using this protocol setting:
 
@@ -99,7 +94,7 @@ roc build --opt=speed --target=x64musl --output=app app.roc
 
 Both commands cross-compile, so a Mac can build the Linux executable. `zig build hosts` builds every target at once.
 
-A container needs nothing but the executable:
+A minimal image can run the executable. Mount any files the app reads at startup, including certificates and keys for direct TLS.
 
 ```dockerfile
 FROM scratch
@@ -144,14 +139,7 @@ syntax error also stops the startup; the message names the file or the key's pat
 an integer, found a string`) but never the value. Leave a key out of both files only when its field is
 `Try(T, [Missing])`. Tags are written in snake_case: `level = "read_only"` for `ReadOnly`.
 
-Put the file at `config/local.toml` under the working directory of the process:
-
-```dockerfile
-FROM scratch
-COPY app /app
-WORKDIR /
-ENTRYPOINT ["/app"]
-```
+With the image above, mount the settings file at runtime:
 
 ```bash
 docker run -v "$PWD/production.toml:/config/local.toml:ro" -p 8080:8080 app
@@ -246,30 +234,8 @@ way, and exit. Nothing restarts the server then, so run it under something that 
 
 ## Keep-alive and timeouts
 
-A proxy reuses idle connections to roxum. If roxum closes an idle connection first, the proxy may send the next
-request into a closed connection and return `502` to the client. **Set roxum's keep-alive timeout longer than the
-proxy's idle timeout.**
-
-| Proxy | Idle timeout (default) | roxum setting |
-|---|---|---|
-| AWS ALB | 60 s | 75 s |
-| nginx upstream `keepalive_timeout` | 60 s | 75 s |
-| Caddy `reverse_proxy` keep-alive | 2 min | 135 s |
-
-```roc
-init! : {} => Try({ model : Model, listen : Server.ListenOptions }, [StartupErr(Str)])
-init! = |{}| Ok({
-	model: {},
-	listen: {
-		endpoint: Server.Endpoint.Tcp({ address: IpAddr.V4((0, 0, 0, 0)), port: 8080 }),
-		timeouts: {
-			..Server.Timeouts.defaults,
-			keep_alive_idle_milliseconds: 75_000,
-		},
-		limits: Server.Limits.defaults,
-	},
-})
-```
+Behind a proxy, set the server’s keep-alive idle timeout above the proxy’s upstream idle timeout.
+See the [keep-alive configuration](reverse-proxy.md#keep-alive).
 
 `Server.Timeouts` has five limits, in milliseconds; each must be at least 1:
 
@@ -347,27 +313,6 @@ Responses that are not streams, and streams answering `HEAD`, do not count. Each
 request. On HTTP/1 each stalled write is subject to `response_write_milliseconds`.
 On HTTP/2 the same setting limits total response write time, including active streams.
 
-## Client addresses behind a proxy
-
-Behind a proxy, `request.remote_addr` is the proxy. The `roxum-proxy-headers` package reads `X-Forwarded-For` and
-`X-Forwarded-Proto` only when the direct peer is a proxy you trust. From any other peer it removes every forwarding
-field (`X-Forwarded-*`, `X-Real-IP`, `Forwarded`); after resolving a trusted chain it removes `X-Forwarded-For`, so
-read the client address from `remote_addr`:
-
-```roc
-routes =
-	app_routes
-		.before_routing(ProxyHeaders.trust(["10.0.0.0/16"]))
-```
-
-List the addresses your proxies connect from. For AWS ALB, whose addresses change, list its subnets or the VPC CIDR.
-
-## Proxy examples
-
-See [reverse proxy deployment](reverse-proxy.md) for nginx and Caddy HTTP/1
-configurations, and [native gRPC over TLS](reverse-proxy.md#native-grpc-over-tls)
-for nginx TLS termination with an HTTP/2 upstream.
-
 ## Logs
 
 roxum writes logs to stderr, one line per write. A line up to `PIPE_BUF` bytes (512 on macOS, 4096 on Linux) cannot
@@ -381,11 +326,8 @@ Roc crashed: pid=4312 GET /users/42 request_id=abc123: index out of bounds
 ```
 
 `dbg` output and crashes name the request: method, path without the query (which often carries tokens), process id,
-the request's ID, and the `traceparent` the request arrived with. The ID is the `request_id` the app reads from
-`Http.Request`, decided by the host before any app code runs: a new random ID for every request, or, with
-`request_id: Server.RequestIdSource.TrustIncoming` in `listen`, the request's own `X-Request-Id` when it has one
-valid field. Trust it only when a proxy you trust sets or replaces `X-Request-Id`. `traceparent` is the client's
-value, so do not use it to correlate requests unless such a proxy sets it too. Control bytes in messages from `Log`, `dbg`,
+the request ID, and the incoming `traceparent`. Trust the latter for correlation only if a trusted proxy sets it.
+See [request IDs](observability.md#request-ids) for ID generation and proxy settings. Control bytes in messages from `Log`, `dbg`,
 `expect`, and `crash` are written as `\xNN`, so request data in a message cannot start a line of its own.
 
 ## Crashes
@@ -443,5 +385,3 @@ Once all workers are ready, TCP startup writes the bound port and a newline to s
 `Server.Metrics.Listen` accepts the same endpoint type. Use a different path for Unix metrics, for example `Server.Metrics.Listen(Server.Endpoint.Unix({ path: "/run/my-app/metrics.sock" }))`. Keep metrics accessible only to trusted monitoring clients.
 
 Request metadata uses `RemoteAddr.Tcp({ ip, port })` or `RemoteAddr.Unix`; Unix connections are not represented by a fabricated loopback address. Match on the transport before using an IP-based policy. All Unix peers share the same transport marker, so it is not an individual client identity.
-
-To migrate, replace separate `address` and `port` fields with `endpoint: Server.Endpoint.Tcp({ address, port })`, wrap the metrics address record in `Server.Endpoint.Tcp`, and match on `RemoteAddr.Tcp` before accessing `ip` or `port`. From the older IPv4-only API, also replace `Server.Ipv4Address.(a, b, c, d)` with `IpAddr.V4((a, b, c, d))` and import `pf.IpAddr`.

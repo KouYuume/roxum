@@ -8,17 +8,10 @@ HTTP/2 I/O and all four uncompressed gRPC server call forms.
 
 ## 0.4 — inbound TLS
 
-See the [0.4 implementation and acceptance plan](inbound-tls-0.4.md).
-
-Add TLS to TCP listeners and negotiate HTTP/1.1 or HTTP/2 through ALPN.
-Define certificate and key configuration, startup failures, certificate
-renewal procedures, handshake deadlines and concurrent handshake limits.
-The host owns each connection from acceptance through shutdown.
-
-Verify a regular HTTPS route and a gRPC call with independent clients.
-Exercise a stalled handshake alongside a healthy client, and verify cleanup
-on timeout, disconnect and shutdown. Keep proxy deployments covered by the
-existing [deployment checks and guidance](../guides/deployment.md).
+TCP listeners can serve HTTPS and native gRPC directly. The host loads the
+credentials, bounds concurrent handshakes and negotiates HTTP/1.1 or HTTP/2.
+See the [deployment guide](../guides/deployment.md#inbound-tls) for configuration
+and the [0.4 acceptance checks](inbound-tls-0.4.md) for verification.
 
 ## Complete the HTTP feature set
 

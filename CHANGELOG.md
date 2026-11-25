@@ -4,9 +4,15 @@ Changes to the roxum platform and its integrations, newest first. The platform a
 
 ## Unreleased
 
+## 0.4.0
+
 ### Breaking changes
 
-- `Server.Protocol` gains a `Tls(Server.Tls)` variant for TCP listeners. Update exhaustive protocol matches and rebuild with matching platform sources and host archives. The development listener validates credentials at startup and serves HTTP/1.1 and HTTP/2 over TLS. See [deployment](docs/guides/deployment.md#inbound-tls-on-the-04-development-branch).
+- `Server.Protocol` gains a `Tls(Server.Tls)` variant for TCP listeners. Update exhaustive protocol matches and rebuild with matching platform sources and host archives. See [migrating from 0.3](docs/guides/migrating-to-0.4.md).
+
+### Added
+
+- TCP listeners can serve HTTPS and native gRPC with TLS 1.2 or 1.3. ALPN selects HTTP/2 or HTTP/1.1. Each worker validates the certificate chain and private key at startup and limits pending handshakes. See [deployment](docs/guides/deployment.md#inbound-tls).
 
 ## 0.3.0
 

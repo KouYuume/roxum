@@ -15,7 +15,7 @@ roxumは、[Roc](https://github.com/roc-lang/roc)の思想に沿ったWebサー�
 - **ルートをビルド時に検査する。** トップレベルで定義したルーターの不正なパターンや重複をコンパイル時に検出。
 - **タグと実行段階でミドルウェアを制御する。** 独自の型付きタグで対象を絞り、`BeforeBody`・`OnChunk`・`AfterBody`・`AfterHandler` に処理を配置。[ミドルウェア](docs/guides/middleware.md)と[タグとミドルウェアの例](examples/middleware/README.md)を参照してください。
 
-既定のHTTP/1.1ではストリーミング、SSE、ファイル配信を利用できます。[平文HTTP/2](docs/guides/deployment.md#opt-in-http2)を選ぶと、入力と出力の逐次処理、トレーラー、非圧縮gRPCの全4形式を利用できます。どちらもIPv4・IPv6のTCPとファイルパスを使うUnixソケットに対応しています。
+既定のHTTP/1.1ではストリーミング、SSE、ファイル配信を利用できます。[HTTP/2](docs/guides/deployment.md#opt-in-http2)では入力と出力の逐次処理、トレーラー、非圧縮gRPCの全4形式に対応しています。どちらもIPv4・IPv6のTCPとファイルパスを使うUnixソケットで利用できます。TCPでは[TLSリスナー](docs/guides/deployment.md#inbound-tls)がクライアントとプロトコルを交渉します。
 
 ## axum・Goとの比較
 
@@ -62,7 +62,7 @@ routes = Router.new
 
 ## 制約
 
-- 受信TLS・HTTP/3は[リバースプロキシ](docs/guides/reverse-proxy.md)で終端します。HTTP/1トレーラーは未対応です。WebSocketサーバー、CONNECT、TRACE、任意の拡張メソッドは[強い要望がない限り対応対象外](docs/design/non-goals.md#features-excluded-unless-strong-demand-emerges)です。
+- HTTP/3は[リバースプロキシ](docs/guides/reverse-proxy.md)で終端します。HTTP/1トレーラーは未対応です。WebSocketサーバー、CONNECT、TRACE、任意の拡張メソッドは[強い要望がない限り対応対象外](docs/design/non-goals.md#features-excluded-unless-strong-demand-emerges)です。
 - タイムアウトで任意のRocの計算を強制中断することはできません。
 - 実行時圧縮はgzip。事前圧縮したBrotliは配信可能、複数バイトレンジは未対応です。
 - セッション・CSRF・OAuth・JWT・OpenAPIはライブラリまたはintegrationが担います。[対応範囲の方針](docs/design/non-goals.md#features-owned-by-libraries-and-integrations)を参照してください。
