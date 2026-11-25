@@ -9,6 +9,7 @@ import ssl
 import subprocess
 import sys
 import tempfile
+import time
 
 from verify import ALPN_CASES, create_credentials
 
@@ -64,6 +65,65 @@ def check_worker_result(output, expected):
     actual = output.readline().strip()
     if actual != expected:
         raise AssertionError(f"expected worker result {expected!r}, got {actual!r}")
+
+
+def send_client_hello(peer, context):
+    outgoing = ssl.MemoryBIO()
+    client = context.wrap_bio(ssl.MemoryBIO(), outgoing, server_hostname="localhost")
+    try:
+        client.do_handshake()
+    except ssl.SSLWantReadError:
+        peer.sendall(outgoing.read())
+        return
+    raise AssertionError("expected the client to wait for the server flight")
+
+
+def await_server_hello(peer):
+    if peer.recv(1) != b"\x16":
+        raise AssertionError("expected a server handshake record")
+
+
+def check_handshake_admission(port, trust, output):
+    address = ("127.0.0.1", port)
+    context = ssl.create_default_context(cafile=str(trust))
+    context.set_alpn_protocols(["h2"])
+    with socket.create_connection(address, timeout=5) as first:
+        send_client_hello(first, context)
+        await_server_hello(first)
+        with socket.create_connection(address, timeout=2) as healthy:
+            with context.wrap_socket(healthy, server_hostname="localhost") as tls:
+                if tls.selected_alpn_protocol() != "h2":
+                    raise AssertionError("healthy peer failed to negotiate alongside stalled peer")
+                check_worker_result(output, "h2")
+        with socket.create_connection(address, timeout=5) as second:
+            send_client_hello(second, context)
+            await_server_hello(second)
+            with socket.create_connection(address, timeout=5) as queued:
+                send_client_hello(queued, context)
+                if select.select([queued], [], [], 0.2)[0]:
+                    raise AssertionError("third handshake progressed beyond the two-slot limit")
+                first.close()
+                check_worker_result(output, "failed")
+                await_server_hello(queued)
+            check_worker_result(output, "failed")
+        check_worker_result(output, "failed")
+
+    # Keep delivering part of a TLS record. Read readiness must not renew the
+    # three-second admission deadline. The freed slot can serve another peer.
+    with socket.create_connection(address, timeout=5) as slow:
+        slow.sendall(b"\x16\x03\x03\x02\x00")
+        started = time.monotonic()
+        try:
+            while not select.select([slow], [], [], 0.2)[0]:
+                if time.monotonic() - started > 4.5:
+                    raise AssertionError("partial reads extended the handshake deadline")
+                slow.sendall(b"\x00")
+            if slow.recv(1):
+                raise AssertionError("unexpected response to incomplete TLS record")
+        except (ConnectionResetError, BrokenPipeError):
+            pass
+        if time.monotonic() - started < 2.8:
+            raise AssertionError("stalled connection closed before its handshake deadline")
 
 
 def check_invalid_credentials(hello, cert, key):
@@ -122,8 +182,14 @@ def main():
                     # Existing workers retain the validated pair until shutdown.
                     cert.unlink()
                     key.unlink()
+                    check_handshake_admission(port, trust, process.stdout)
                     for version in (ssl.TLSVersion.TLSv1_2, ssl.TLSVersion.TLSv1_3):
                         check_tls(port, trust, version, process.stdout)
+                    with socket.create_connection(("127.0.0.1", port), timeout=5) as stalled:
+                        send_client_hello(stalled, ssl.create_default_context(cafile=str(trust)))
+                        await_server_hello(stalled)
+                        if stop(process, timeout=2) != 0:
+                            raise AssertionError("worker failed to drain an unfinished handshake")
                 else:
                     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
                     try:
@@ -136,7 +202,7 @@ def main():
             finally:
                 if stop(process) != 0:
                     raise RuntimeError("hello exited unsuccessfully")
-    print("PASS cleartext hello and certificate-verified TLS 1.2/1.3 on the trial listener")
+    print("PASS cleartext, TLS 1.2/1.3, concurrent handshake admission, timeout and drain")
 
 
 if __name__ == "__main__":

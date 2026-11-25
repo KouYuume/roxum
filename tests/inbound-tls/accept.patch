@@ -1,16 +1,20 @@
---- a/platform/host/event_loop.zig
-+++ b/platform/host/event_loop.zig
-@@ -1,2 +1,4 @@
-+extern "c" fn roxum_trial_accept(socket: c_int) c_int;
+--- a/platform/host/server.zig
++++ b/platform/host/server.zig
+@@ -1,1 +1,5 @@
++const tls = @import("inbound_tls/handshake.zig");
++extern "c" fn roxum_trial_credentials() ?*const tls.Credentials;
++extern "c" fn roxum_trial_finished(tls.Result) void;
 +
  const std = @import("std");
- const h2 = @import("http2/connection.zig");
-@@ -1011,4 +1013,5 @@
-                 net.PendingAccept.accepted => |accepted| {
-                     self.accept_warned = false;
-+                    if (roxum_trial_accept(accepted.socket) != 0) continue;
-                     if (reject_new) self.openRejected(accepted) else self.open(accepted);
-                 },
+@@ -134,2 +138,8 @@
+     handoff.http2 = listen_options.http2;
++    if (roxum_trial_credentials()) |credentials| handoff.tls_config = .{
++        .credentials = credentials,
++        .maximum_pending = 2,
++        .timeout_milliseconds = 3000,
++        .finished = roxum_trial_finished,
++    };
+     // One poller for the process: every connection's socket and
 --- a/platform/host/main.zig
 +++ b/platform/host/main.zig
 @@ -29,2 +29,7 @@

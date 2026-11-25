@@ -1,4 +1,5 @@
 const std = @import("std");
+const tls = @import("inbound_tls/handshake.zig");
 const h2 = @import("http2/connection.zig");
 const h2_streams = @import("http2/streams.zig");
 const builtin = @import("builtin");
@@ -96,6 +97,7 @@ fn monotonicReading() ?u64 {
 pub const Connection = struct {
     pub const State = enum {
         free,
+        handshaking,
         /// Owned by the loop, waiting for a complete request head.
         reading,
         /// Owned by the loop, the head complete, waiting for the rest of a
@@ -121,6 +123,7 @@ pub const Connection = struct {
     /// free slots without taking their locks.
     open: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     accepted: net.AcceptedSocket = undefined,
+    handshake: ?*tls.Session = null,
     http2: ?*h2.Connection = null,
     generation: u32 = 0,
     state: State = State.free,
@@ -463,6 +466,8 @@ pub const Completion = struct {
 pub const Handoff = struct {
     connections: []Connection,
     http2: bool = false,
+    tls_config: ?tls.Config = null,
+    pending_handshakes: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
     limits: connection.Limits = .{},
     /// The process's poller: every connection's socket and every waiting
     /// fiber's. The Roc threads wait on it, and the acceptor looks at it when
@@ -882,6 +887,11 @@ pub const Loop = struct {
         item.lock.lock();
         defer item.lock.unlock();
         if (item.generation != generation) return;
+        if (item.state == Connection.State.handshaking) {
+            const expected = if (item.watching_writable) poller_backend.Event.Kind.writable else poller_backend.Event.Kind.readable;
+            if (event.kind == expected) self.advanceHandshake(slot);
+            return;
+        }
         if (item.http2) |protocol| {
             _ = protocol.owner.ready(event);
             return self.advanceHttp2(slot);
@@ -1000,6 +1010,12 @@ pub const Loop = struct {
             self.overloaded_since = null;
         }
         while (!self.accept_paused) {
+            if (self.handoff.tls_config) |config| {
+                if (self.handoff.pending_handshakes.load(std.builtin.AtomicOrder.acquire) >= config.maximum_pending) {
+                    self.setAcceptPaused(true);
+                    return;
+                }
+            }
             // Every slot taken: give the longest-idle keep-alive connection's
             // slot to the new one, as nginx does; its client only connects
             // again. Without one, wait for a slot.
@@ -1079,7 +1095,7 @@ pub const Loop = struct {
 
     /// Takes a connection only to answer it 503 and close it.
     fn openRejected(self: *Loop, accepted: net.AcceptedSocket) void {
-        if (self.handoff.http2) return net.closeSocket(accepted.socket);
+        if (self.handoff.http2 or self.handoff.tls_config != null) return net.closeSocket(accepted.socket);
         const slot = self.handoff.takeSlot().?;
         const item = &self.handoff.connections[slot];
         item.lock.lock();
@@ -1131,6 +1147,13 @@ pub const Loop = struct {
         item.completed_requests = 0;
         item.client_gone = false;
         item.prefetch = .{};
+        if (self.handoff.tls_config) |config| {
+            item.state = Connection.State.handshaking;
+            item.timeout = net.Deadline.afterMilliseconds(config.timeout_milliseconds) catch return self.close(slot);
+            item.handshake = config.open(config.credentials, accepted.socket) orelse return self.close(slot);
+            _ = self.handoff.pending_handshakes.fetchAdd(1, std.builtin.AtomicOrder.release);
+            return self.advanceHandshake(slot);
+        }
         item.timeout = self.after(self.limits.initial_request_timeout_milliseconds);
         if (self.handoff.http2) {
             item.http2 = h2.Connection.create(accepted.socket, self.poller, token(slot, item.generation), self.limits) catch return self.close(slot);
@@ -1141,6 +1164,23 @@ pub const Loop = struct {
         self.poller.watchReadable(accepted.socket, token(slot, item.generation)) catch
             return self.close(slot);
         self.advance(slot);
+    }
+
+    fn advanceHandshake(self: *Loop, slot: u32) void {
+        const item = &self.handoff.connections[slot];
+        const config = self.handoff.tls_config.?;
+        if (self.drainingNow() or item.timeout.hasPassedAt(net.monotonicNanoseconds() catch return self.close(slot))) return self.close(slot);
+        const result = config.step(item.handshake.?);
+        switch (result) {
+            tls.Result.want_read, tls.Result.want_write => {
+                item.watching_writable = result == tls.Result.want_write;
+                self.poller.watchOnce(item.accepted.socket, !item.watching_writable, token(slot, item.generation)) catch return self.close(slot);
+            },
+            tls.Result.failed, tls.Result.http1, tls.Result.http2 => {
+                if (!item.timeout.hasPassedAt(net.monotonicNanoseconds() catch return self.close(slot))) config.finished(result);
+                self.close(slot);
+            },
+        }
     }
 
     /// The worker lock serializes callbacks, transport steps and submissions.
@@ -1489,6 +1529,7 @@ pub const Loop = struct {
             return;
         }
         switch (item.state) {
+            Connection.State.handshaking,
             Connection.State.reading,
             Connection.State.reading_body,
             Connection.State.writing,
@@ -1596,7 +1637,7 @@ pub const Loop = struct {
                 };
                 protocol.owner.runnable = true;
                 self.advanceHttp2(@intCast(index));
-            } else if (isIdle(item)) {
+            } else if (item.state == Connection.State.handshaking or isIdle(item)) {
                 self.close(@intCast(index));
             } else {
                 drainStream(item);
@@ -1652,6 +1693,11 @@ pub const Loop = struct {
 
     fn close(self: *Loop, slot: u32) void {
         const item = &self.handoff.connections[slot];
+        if (item.handshake) |session| {
+            self.handoff.tls_config.?.free(session);
+            item.handshake = null;
+            _ = self.handoff.pending_handshakes.fetchSub(1, std.builtin.AtomicOrder.release);
+        }
         if (item.http2) |protocol| {
             protocol.disconnect();
             if (protocol.busy()) return;
@@ -1779,6 +1825,95 @@ pub const Loop = struct {
 
 fn headReadExhausted(count: usize, capacity: usize) bool {
     return builtin.os.tag == std.Target.Os.Tag.linux and count < capacity;
+}
+
+test "TLS handshake re-arms the socket from writable to readable and releases its slot once" {
+    // Prescribe engine results to exercise both poller directions regardless
+    // of the platform's socket buffer size. The packaged trials use Mbed TLS.
+    const Driver = struct {
+        steps: usize = 0,
+        frees: usize = 0,
+
+        fn open(credentials: *const tls.Credentials, _: c_int) callconv(std.builtin.CallingConvention.c) ?*tls.Session {
+            return @ptrCast(@constCast(credentials));
+        }
+        fn step(session: *tls.Session) callconv(std.builtin.CallingConvention.c) tls.Result {
+            const self: *@This() = @ptrCast(@alignCast(session));
+            self.steps += 1;
+            return switch (self.steps) {
+                1 => tls.Result.want_write,
+                2 => tls.Result.want_read,
+                3 => tls.Result.http2,
+                else => unreachable,
+            };
+        }
+        fn free(session: *tls.Session) callconv(std.builtin.CallingConvention.c) void {
+            const self: *@This() = @ptrCast(@alignCast(session));
+            self.frees += 1;
+        }
+        fn finished(result: tls.Result) callconv(std.builtin.CallingConvention.c) void {
+            std.debug.assert(result == tls.Result.http2);
+        }
+    };
+    var driver = Driver{};
+    var poller = try poller_backend.Poller.init();
+    defer poller.deinit();
+    var handoff = try Handoff.init(1);
+    defer std.heap.page_allocator.free(handoff.connections);
+    defer std.heap.page_allocator.free(handoff.free_slots);
+    handoff.poller = &poller;
+    handoff.tls_config = .{
+        .credentials = @ptrCast(&driver),
+        .maximum_pending = 1,
+        .timeout_milliseconds = 5000,
+        .open = Driver.open,
+        .step = Driver.step,
+        .free = Driver.free,
+        .finished = Driver.finished,
+    };
+    const Ending = enum { negotiated, timeout, drain };
+    for ([_]Ending{ Ending.negotiated, Ending.timeout, Ending.drain }) |ending| {
+        driver = .{};
+        var pair: [2]c_int = undefined;
+        try std.testing.expectEqual(@as(c_int, 0), std.c.socketpair(std.c.AF.UNIX, std.c.SOCK.STREAM, 0, &pair));
+        defer net.closeSocket(pair[1]);
+        var loop = Loop.init(&handoff);
+        loop.open(.{ .socket = pair[0], .remote_address = .{ .v4 = .{ 127, 0, 0, 1 } }, .remote_port = 1 });
+        defer if (handoff.connections[0].open.load(std.builtin.AtomicOrder.acquire)) loop.close(0);
+        const item = &handoff.connections[0];
+        switch (ending) {
+            Ending.timeout => {
+                loop.now = item.timeout.expires_at_nanoseconds - 1;
+                loop.expireIfDue(0);
+                try std.testing.expectEqual(@as(usize, 0), driver.frees);
+                loop.now += 1;
+                loop.expireIfDue(0);
+            },
+            Ending.drain => {
+                const listener = try net.listenIpv4(.{ 127, 0, 0, 1 }, 0);
+                loop.listener = listener.socket;
+                loop.startDrain();
+            },
+            Ending.negotiated => {
+                var raw: [2]poller_backend.RawEvent = undefined;
+                var events: [2 * poller_backend.events_per_raw]poller_backend.Event = undefined;
+                for ([_]poller_backend.Event.Kind{ poller_backend.Event.Kind.writable, poller_backend.Event.Kind.readable }) |kind| {
+                    try std.testing.expectEqual(@as(usize, 1), handoff.pending_handshakes.load(std.builtin.AtomicOrder.acquire));
+                    if (kind == poller_backend.Event.Kind.readable) {
+                        try std.testing.expectEqual(@as(isize, 1), std.c.send(pair[1], "x", 1, 0));
+                    }
+                    const batch = try poller.wait(&raw, &events, 1000);
+                    try std.testing.expectEqual(@as(usize, 1), batch.len);
+                    try std.testing.expectEqual(kind, batch[0].kind);
+                    loop.onEvent(batch[0]);
+                }
+                try std.testing.expectEqual(@as(usize, 3), driver.steps);
+            },
+        }
+        try std.testing.expectEqual(@as(usize, 1), driver.frees);
+        try std.testing.expectEqual(@as(usize, 0), handoff.pending_handshakes.load(std.builtin.AtomicOrder.acquire));
+        try std.testing.expectEqual(@as(usize, 0), handoff.openConnections());
+    }
 }
 
 test "released connection does not retain an exhausted socket observation" {

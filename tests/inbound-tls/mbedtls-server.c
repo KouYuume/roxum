@@ -7,10 +7,35 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-static int handshake(int fd, const roxum_tls_credentials *credentials, int probe) {
+#ifdef ROXUM_TRIAL_HOST
+static roxum_tls_credentials *worker_credentials;
+
+int roxum_trial_start(void) {
+    const char *cert = getenv("ROXUM_TRIAL_CERT");
+    const char *key = getenv("ROXUM_TRIAL_KEY");
+    if (!cert && !key) return 0;
+    worker_credentials = roxum_tls_credentials_load(cert, key);
+    return worker_credentials ? 0 : 1;
+}
+
+void roxum_trial_stop(void) {
+    roxum_tls_credentials_free(worker_credentials);
+    worker_credentials = NULL;
+}
+
+const roxum_tls_credentials *roxum_trial_credentials(void) {
+    return worker_credentials;
+}
+
+void roxum_trial_finished(roxum_tls_handshake_result result) {
+    puts(result == ROXUM_TLS_HTTP2 ? "h2" : result == ROXUM_TLS_HTTP1 ? "http/1.1" : "failed");
+    fflush(stdout);
+}
+#else
+static int handshake(int fd, const roxum_tls_credentials *credentials) {
     roxum_tls_session *session = roxum_tls_session_open(credentials, fd);
-    int announce_read = probe;
-    int announce_write = probe;
+    int announce_read = 1;
+    int announce_write = 1;
     // The verifier distinguishes a TLS failure from a setup, wait or cleanup error.
     int status = 2;
     while (session) {
@@ -43,38 +68,13 @@ static int handshake(int fd, const roxum_tls_credentials *credentials, int probe
     return status;
 }
 
-#ifdef ROXUM_TRIAL_HOST
-static roxum_tls_credentials *worker_credentials;
-
-int roxum_trial_start(void) {
-    const char *cert = getenv("ROXUM_TRIAL_CERT");
-    const char *key = getenv("ROXUM_TRIAL_KEY");
-    if (!cert && !key) return 0;
-    worker_credentials = roxum_tls_credentials_load(cert, key);
-    return worker_credentials ? 0 : 1;
-}
-
-void roxum_trial_stop(void) {
-    roxum_tls_credentials_free(worker_credentials);
-    worker_credentials = NULL;
-}
-
-int roxum_trial_accept(int fd) {
-    if (!worker_credentials) return 0;
-    if (handshake(fd, worker_credentials, 0) != 0) {
-        puts("failed");
-        fflush(stdout);
-    }
-    return 1;
-}
-#else
 int main(int argc, char **argv) {
     if (argc != 4) return 1;
     // Workers inherit this disposition from the supervisor.
     if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) return 1;
     roxum_tls_credentials *credentials = roxum_tls_credentials_load(argv[2], argv[3]);
     if (!credentials) return 1;
-    int status = handshake(atoi(argv[1]), credentials, 1);
+    int status = handshake(atoi(argv[1]), credentials);
     roxum_tls_credentials_free(credentials);
     return status;
 }
