@@ -32,7 +32,7 @@ extracted host archive and served the expected cleartext HTTP/1.1 response.
 The trial builds the release host in a disposable copy of the source tree
 and instruments the handshake result. The Roc fixture configures the worker
 through `Server.Protocol.Tls`. With trial
-credentials, the worker drives a handshake on the accepted socket and closes it. Without credentials,
+credentials, the worker serves HTTPS for HTTP/1.1 and closes after negotiating h2. Without credentials,
 the same executable serves the hello route. The app uses the complete archive
 from the extracted bundle, including its normal host entry point and the TLS
 engine. The trial worker loads its certificate chain and matching private key before

@@ -1,6 +1,9 @@
 app [program] { pf: platform "../../platform/main.roc" }
 
 import pf.Config
+import pf.Extract
+import pf.ResponseWriter
+import pf.RouteContext
 import pf.Handler
 import pf.MethodRouter
 import pf.Reply
@@ -17,7 +20,7 @@ program = {
 
 init! : {} => Try({ model : Model, listen : Server.ListenOptions }, [StartupErr(Str)])
 init! = |{}| {
-	settings : { tls : Bool, chain : Str, key : Str, unix : Bool, socket_path : Str, timeout : U64, pending : U32, defaults : Bool }
+	settings : { tls : Bool, chain : Str, key : Str, unix : Bool, socket_path : Str, timeout : U64, pending : U32, defaults : Bool, short_drain : Bool }
 	settings = Config.load!("").map_err(|ConfigErr(msg)| StartupErr(msg))?
 	Ok({
 		model: {},
@@ -42,7 +45,12 @@ init! = |{}| {
 				Server.Protocol.Http1
 			},
 			timeouts: Server.Timeouts.defaults,
-			limits: Server.Limits.defaults,
+			limits: if settings.short_drain {
+				Server.Limits.{ maximum_connections: Server.Count.Fixed(1) }
+			} else {
+				Server.Limits.defaults
+			},
+			drain_timeout_milliseconds: if settings.short_drain { 500 } else { 20_000 },
 		},
 	})
 }
@@ -50,3 +58,11 @@ init! = |{}| {
 routes : Router(Model, [], {})
 routes = Router.new
 	.route("/", MethodRouter.get(Handler.static(|{}| Reply.text("Hello, Roc!\n"))))
+	.route("/echo", MethodRouter.post(Handler.effectful(echo!)))
+	.route("/stream", MethodRouter.get(Handler.static(|{}| Reply.stream(|writer| ResponseWriter.write!(writer, "streamed".to_utf8())))))
+
+echo! : Model, RouteContext({}) => Try(Reply, Reply)
+echo! = |_model, context| {
+	bytes = Extract.run!(Extract.bytes, context)?
+	Ok(Reply.bytes(bytes, "application/octet-stream"))
+}

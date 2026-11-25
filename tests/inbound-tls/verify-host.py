@@ -1,5 +1,6 @@
 """Exercise the extracted trial hello on its loopback TCP listener."""
 import argparse
+from contextlib import ExitStack
 import http.client
 import json
 import os
@@ -44,9 +45,52 @@ def create_server_chain(directory, chain, key):
     return trust
 
 
+def expect_response(channel, body):
+    with http.client.HTTPResponse(channel) as response:
+        response.begin()
+        if response.status != 200 or response.read() != body:
+            raise AssertionError(f"unexpected HTTPS response (expected {len(body)} bytes)")
+
+
+def check_https(channel):
+    # One TLS record carries two requests. Read each response on the same
+    # buffered file so read-ahead cannot discard the following status line.
+    channel.sendall(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n" * 2)
+    with channel.makefile("rb") as replies:
+        for _ in range(2):
+            if not replies.readline().startswith(b"HTTP/1.1 200 "):
+                raise AssertionError("missing pipelined HTTPS response")
+            headers = http.client.parse_headers(replies)
+            if int(headers["Content-Length"]) != 12 or replies.read(12) != b"Hello, Roc!\n":
+                raise AssertionError("wrong pipelined HTTPS body")
+
+    # The worker must send Continue before waiting for the body. Echo more
+    # than the prebuffer limit to exercise request-fiber reads across records.
+    body = bytes(range(256)) * 512
+    channel.sendall(b"POST /echo HTTP/1.1\r\nHost: localhost\r\nExpect: 100-continue\r\n"
+                    + f"Content-Length: {len(body)}\r\n\r\n".encode())
+    with channel.makefile("rb") as interim:
+        if interim.readline() != b"HTTP/1.1 100 Continue\r\n" or interim.readline() != b"\r\n":
+            raise AssertionError("missing HTTPS 100 Continue")
+    channel.sendall(body)
+    expect_response(channel, body)
+
+    channel.sendall(b"GET /stream HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+    expect_response(channel, b"streamed")
+    # unwrap requires the peer's authenticated close notification.
+    channel.unwrap().close()
+
+
+def strict_shutdown_context(cafile):
+    context = ssl.create_default_context(cafile=str(cafile))
+    # Some OpenSSL builds treat a bare transport EOF as a close_notify.
+    context.options &= ~getattr(ssl, "OP_IGNORE_UNEXPECTED_EOF", 0)
+    return context
+
+
 def check_tls(port, cert, version, worker_output):
     for offers, expected in ALPN_CASES:
-        context = ssl.create_default_context(cafile=str(cert))
+        context = strict_shutdown_context(cert)
         context.minimum_version = context.maximum_version = version
         if offers:
             context.set_alpn_protocols(offers)
@@ -55,8 +99,16 @@ def check_tls(port, cert, version, worker_output):
                 with context.wrap_socket(peer, server_hostname="localhost") as tls:
                     if expected is None or tls.selected_alpn_protocol() != (expected if offers else None):
                         raise AssertionError(f"unexpected ALPN for {offers}")
-                    if tls.recv(1):
-                        raise AssertionError("expected the worker to close after negotiation")
+                    if expected == "http/1.1":
+                        check_https(tls)
+                    else:
+                        # The development listener closes immediately on h2.
+                        try:
+                            if tls.recv(1):
+                                raise AssertionError("unexpected application data after h2 negotiation")
+                        except ssl.SSLError as error:
+                            if error.reason != "UNEXPECTED_EOF_WHILE_READING":
+                                raise
                     check_worker_result(worker_output, expected)
             except ssl.SSLError as error:
                 if expected is not None or "no application protocol" not in str(error).lower().replace("_", " "):
@@ -88,6 +140,22 @@ def send_client_hello(peer, context):
 def await_server_hello(peer):
     if peer.recv(1) != b"\x16":
         raise AssertionError("expected a server handshake record")
+
+
+def check_established_connections(port, trust, output):
+    # The worker admits two pending handshakes. Keep three negotiated sockets
+    # open and use every one, so idle eviction cannot hide a retained slot.
+    context = ssl.create_default_context(cafile=str(trust))
+    context.set_alpn_protocols(["http/1.1"])
+    with ExitStack() as stack:
+        channels = []
+        for _ in range(3):
+            peer = stack.enter_context(socket.create_connection(("127.0.0.1", port), timeout=5))
+            channels.append(stack.enter_context(context.wrap_socket(peer, server_hostname="localhost")))
+            check_worker_result(output, "http/1.1")
+        for channel in channels:
+            channel.sendall(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            expect_response(channel, b"Hello, Roc!\n")
 
 
 def check_handshake_admission(port, trust, output):
@@ -136,7 +204,7 @@ def check_handshake_admission(port, trust, output):
 def configure(root, **settings):
     def literal(value):
         return json.dumps(str(value) if isinstance(value, Path) else value)
-    values = dict(tls=False, chain="", key="", unix=False, socket_path=root / "listener.sock", timeout=3000, pending=2, defaults=False)
+    values = dict(tls=False, chain="", key="", unix=False, socket_path=root / "listener.sock", timeout=3000, pending=2, defaults=False, short_drain=False)
     values.update((name, value) for name, value in settings.items() if value is not None)
     (root / "config/local.toml").write_text("".join(
         f"{name} = {literal(value)}\n" for name, value in values.items()))
@@ -210,6 +278,37 @@ def check_inherited_unix_listener(hello, root, cert, key):
         stop(process)
 
 
+def check_tls_shutdown(hello, cert, key, trust):
+    configure(cert.parent, tls=True, chain=cert, key=key, short_drain=True)
+    context = strict_shutdown_context(trust)
+    request = b"GET / HTTP/1.1\r\nHost: localhost\r\n"
+    for last_headers in (b"\r\n", b"Connection: close\r\n\r\n"):
+        process = subprocess.Popen([hello], cwd=cert.parent, stdout=subprocess.PIPE, start_new_session=True)
+        try:
+            port = read_port(process)
+            with ExitStack() as stack:
+                def connect():
+                    peer = stack.enter_context(socket.create_connection(("127.0.0.1", port), timeout=5))
+                    return stack.enter_context(context.wrap_socket(peer, server_hostname="localhost",
+                                                                  suppress_ragged_eofs=False))
+
+                first = connect()
+                first.sendall(request + b"\r\n")
+                expect_response(first, b"Hello, Roc!\n")
+                second = connect()  # Replaces the idle peer in the worker's only slot.
+                if first.recv(1) != b"":
+                    raise AssertionError("expected TLS closure on idle eviction")
+                second.sendall(request + last_headers)
+                expect_response(second, b"Hello, Roc!\n")
+                # Leave the peer open during shutdown, both between requests
+                # and after the server has initiated TLS closure.
+                if stop(process) != 0 or second.recv(1) != b"":
+                    raise AssertionError("worker failed to drain a completed HTTPS connection cleanly")
+        finally:
+            if process.poll() is None:
+                stop(process)
+
+
 def check_valid_settings(hello, cert, key, trust):
     for options in (dict(timeout=1, pending=1), dict(timeout=2, pending=2),
                     dict(timeout=3599999, pending=65535), dict(timeout=3600000, pending=65536),
@@ -241,6 +340,7 @@ def main():
         trust = create_server_chain(Path(directory), cert, key)
         check_invalid_settings(args.hello.resolve(), cert, key)
         check_inherited_unix_listener(args.hello.resolve(), cert.parent, cert, key)
+        check_tls_shutdown(args.hello.resolve(), cert, key, trust)
         check_valid_settings(args.hello.resolve(), cert, key, trust)
         for secure in (False, True):
             configure(cert.parent, tls=secure, chain=cert, key=key)
@@ -254,6 +354,7 @@ def main():
                     key.unlink()
                     results = None if args.standard else process.stdout
                     check_handshake_admission(port, trust, results)
+                    check_established_connections(port, trust, results)
                     for version in (ssl.TLSVersion.TLSv1_2, ssl.TLSVersion.TLSv1_3):
                         check_tls(port, trust, version, results)
                     with socket.create_connection(("127.0.0.1", port), timeout=5) as stalled:
@@ -273,7 +374,7 @@ def main():
             finally:
                 if stop(process) != 0:
                     raise RuntimeError("hello exited unsuccessfully")
-    print("PASS cleartext, TLS 1.2/1.3, concurrent handshake admission, timeout and drain")
+    print("PASS cleartext, HTTPS keep-alive, request and response bodies, TLS admission and shutdown")
 
 
 if __name__ == "__main__":

@@ -178,8 +178,8 @@ Server :: [].{
 	}
 
 	## Http1 serves cleartext HTTP/1.1. Http2 uses cleartext prior knowledge.
-	## Tls negotiates h2 or http/1.1. In the 0.4 development build, the
-	## worker closes the connection after negotiation.
+	## Tls serves HTTP/1.1 with or without ALPN. In the 0.4
+	## development build, selecting h2 ends the connection after negotiation.
 	Protocol := [Http1, Http2, Tls(Server.Tls)]
 
 	## Where the server listens, its connection timeouts, its limits, and how

@@ -161,6 +161,7 @@ pub fn run(
         };
         handoff.tls_config = .{
             .credentials = credentials,
+            .records = &@import("inbound_tls/records.zig").native,
             .maximum_pending = options.maximum_pending_handshakes,
             .timeout_milliseconds = options.handshake_timeout_milliseconds,
         };
@@ -1305,6 +1306,8 @@ fn RequestFiber(comptime Environment: type) type {
             };
             session.draining = &handoff.draining;
             session.accepted = item.accepted;
+            session.reader.records = if (item.records) |*stream| stream else null;
+            defer session.reader.records = null;
             session.completed_requests = item.completed_requests;
             {
                 const parsed = item.takeParsedHead();

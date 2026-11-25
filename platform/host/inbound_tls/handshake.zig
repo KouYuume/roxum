@@ -1,5 +1,5 @@
 //! Worker configuration shared by connection slots. A slot holds its session
-//! under the connection lock until negotiation ends or the loop closes it.
+//! until negotiation fails or transfers ownership to the HTTP transport.
 const std = @import("std");
 
 pub const Credentials = opaque {};
@@ -17,6 +17,7 @@ pub const Config = struct {
     credentials: *const Credentials,
     maximum_pending: usize,
     timeout_milliseconds: u64,
+    records: *const @import("records.zig").Ops,
     open: *const @TypeOf(roxum_tls_session_open) = roxum_tls_session_open,
     step: *const @TypeOf(roxum_tls_handshake) = roxum_tls_handshake,
     free: *const @TypeOf(roxum_tls_session_free) = roxum_tls_session_free,
