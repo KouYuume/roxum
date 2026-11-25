@@ -1,6 +1,6 @@
 # Toolchain
 
-The source of truth for the Roc compiler revision is [`.roc-revision`](../.roc-revision). Use the Roc build from that revision that `tools/linux/Dockerfile` names in `ROC_RELEASE`, with its SHA-256 values: a release such as `0.1.0_RC1`, or a nightly such as `nightly-2026-11-09-9e85de7`. `tools/install-roc.sh` installs it, as CI does. The pinned Roc source and roxum host both use Zig 0.17.1. The checks of the ABI glue and the compiler revision also need the source checked out at that revision. Use the same compiler revision locally; a different build may change syntax, layout, or the hosted ABI.
+The source of truth for the Roc compiler revision is [`.roc-revision`](../.roc-revision). Use the Roc build from that revision that `tools/linux/Dockerfile` names in `ROC_RELEASE`, with its SHA-256 values: a release such as `0.1.0-RC2`, or a nightly such as `nightly-2026-11-09-9e85de7`. `tools/install-roc.sh` installs it, as CI does. The pinned Roc source and roxum host both use Zig 0.17.1. The checks of the ABI glue and the compiler revision also need the source checked out at that revision. Use the same compiler revision locally; a different build may change syntax, layout, or the hosted ABI.
 
 ## Python test dependencies
 
@@ -30,7 +30,13 @@ The supported host targets are `arm64mac`, `arm64musl`, and `x64musl`. See [gett
 
 ## Updating the pin
 
-Update `.roc-revision`, the source checkout references in the full-check and release workflows, and `ROC_RELEASE` and its SHA-256 values in `tools/linux/Dockerfile` (including the macOS one), together. A nightly's name carries its commit, which `tools/check-roc-toolchain.sh` compares with `.roc-revision`. A release's name and its `roc version` do not, so check that the release tag points at `.roc-revision` (`gh api repos/roc-lang/roc/git/ref/tags/<release> --jq .object.sha`). Install the new build and verify it with `tools/check-roc-toolchain.sh`. Regenerate ABI glue with `tools/regen-glue.sh` and inspect the changes; the generated glue remains tracked.
+Update these pins together:
+
+- Set `.roc-revision` and the Roc source checkout refs in the full-check and release workflows to the compiler commit.
+- Set `ROC_RELEASE` and the three archive SHA-256 values in `tools/linux/Dockerfile`.
+- In [the Protobuf compatibility manifest](../libraries/roc-protobuf/compatibility.json), set `roc_revision` to the commit in `.roc-revision` and `roc_release` to `ROC_RELEASE`.
+
+A nightly's name carries its commit, which `tools/check-roc-toolchain.sh` compares with `.roc-revision`. A release's name and its `roc version` do not, so check that the release tag points at `.roc-revision` (`gh api repos/roc-lang/roc/git/ref/tags/<release> --jq .object.sha`). Install the new build and verify it with `tools/check-roc-toolchain.sh`. Regenerate ABI glue with `tools/regen-glue.sh` and inspect the changes; the generated glue remains tracked.
 
 Run `tools/regen-glue.sh --check`, semantic ABI tests, hosted narrow-integer ABI tests on macOS, unit and contract tests, package identity/manifest tests, integration tests, and E2E tests in all three backends and both allocator modes. Run Linux checks before accepting the update. Rebuild host archives and applications together; do not mix platform sources with an older host ABI.
 
