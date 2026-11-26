@@ -1,14 +1,11 @@
 # Getting started
 
-roxum is a web server platform for [Roc](https://www.roc-lang.org). You write the application in Roc: an `init!` that
-starts it and a router of handlers. The platform's host, written in Zig, runs the HTTP/1.1 server, its threads,
-and the event loops.
+A roxum application supplies an `init!` function and a router of handlers in Roc.
+The Zig host runs the workers, serves HTTP/1.1 by default, and can serve HTTP/2.
 
 ## Requirements
 
-- The Roc build that roxum is pinned to, currently the release candidate `0.1.0_RC1` (see
-  [`docs/toolchain.md`](../toolchain.md)); roxum follows Roc's releases and nightly builds closely
-- Zig 0.17.1 and the [host build tools](../toolchain.md#setup) for source builds
+- The pinned Roc compiler and, for source builds, Zig and the [host build tools](../toolchain.md#setup)
 - macOS on Apple silicon (`arm64mac`), or Linux on arm64 / x86_64 (`arm64musl` / `x64musl`, statically linked)
 
 ## A first app
@@ -47,10 +44,7 @@ routes = Router.new
 	.route("/", MethodRouter.get(Handler.static(|{}| Reply.text("Hello, Roc!\n"))))
 ```
 
-- `init!` runs once before the server serves requests. It returns the `Model` your handlers read and
-  where to listen. Port `0` picks a free port. `Server.Timeouts.defaults` and `Server.Limits.defaults` keep the
-  default timeouts and limits ([Deployment](deployment.md#keep-alive-and-timeouts)). Without `threads`, one
-  process serves requests on a thread per CPU ([Deployment](deployment.md#processes-and-threads)).
+- Each worker runs `init!` once. It returns the shared `Model` and listener settings. Port `0` picks a free port.
 - `routes` maps paths and methods to handlers. It is an ordinary value, so it is checked and built when the app is
   compiled. Its type is `Router(model, tag, provided)`; an app with no route tags and no values passed from layers to
   handlers writes `Router(Model, [], {})`. `Router.build(routes, {})` closes it for `program`, which names only the
@@ -72,16 +66,13 @@ The server prints the port it bound as one line on stdout, then serves:
 curl http://127.0.0.1:<port>/
 ```
 
-It serves on one thread per logical CPU (up to 256) in a worker process, behind a supervisor that restarts the process
-if it stops.
-`Ctrl-C` stops them all.
-
-`roc build` uses `--opt=speed` by default, which optimizes with LLVM; `--opt=dev` skips LLVM and builds faster
-while you work. Both behave the same.
+Stop the server with Ctrl-C. Use `--opt=dev` for faster local builds. The default,
+`--opt=speed`, optimizes for execution speed.
 
 ## Distribution
 
-The instructions above build from source. Release bundles are produced by the repository release tooling; use published bundle URLs only when an actual release is available. See [integration releases](../design/integration-releases.md).
+For URL imports, take the platform and integration URLs from the same release's
+`release.json`. The platform bundle includes the host archives. See [integration releases](../design/integration-releases.md).
 
 ## Handlers
 
@@ -95,9 +86,10 @@ Pick the least capable kind of handler that works; the type then documents what 
 | `Handler.effectful` | `Model, RouteContext({}) => Try(Reply, Reply)` | handlers that perform effects (logging, time, randomness, running extractors) |
 | `Handler.typed` | `Model, { ...fields } => Try(Reply, Reply)` | handlers whose argument's field types say what to read ([Extractors](extractors.md#handlers-with-a-typed-argument)) |
 | `Handler.streaming` | `Handler.Streaming.{ begin!, chunk!, done!, abort! }` | request bodies too large to hold ([Streaming](streaming.md#reading-a-large-request-body)) |
+| `Handler.duplex` | `{ begin!, ready! }` | independent request and response streaming over [HTTP/2](streaming.md#independent-http2-input-and-output) |
 
-All but `Handler.streaming` run after roxum has received the whole body, up to `Server.Limits.maximum_body_bytes`
-(2 MiB by default).
+Buffered handlers receive the whole body, up to `Server.Limits.maximum_body_bytes`
+(2 MiB by default). Streaming and duplex handlers receive input incrementally.
 
 A pure function cannot call an effectful one: the compiler rejects it. That keeps effects visible in types and in
 names, which end in `!`. [`examples/ddd/`](../../examples/ddd/README.md) shows an application split into layers on
@@ -128,16 +120,6 @@ There is no general environment or process access: the platform only exposes wha
 
 ## Next
 
-- [Routing](routing.md): paths, parameters, methods, nesting, fallbacks
-- [Extractors](extractors.md): typed inputs from the path, query, headers, and body
-- [Responses](responses.md): bytes, HTML, redirects, downloads, JSON Lines, links to a route
-- [Middleware](middleware.md): layers at the stages of a request, route tags, values for handlers, rate limits
-- [Streaming](streaming.md): bodies written as they go, server-sent events, large uploads
-- [Files and compression](files.md): serving a directory, compressing responses
-- [Databases](database.md): PostgreSQL through `roxum-postgres`, queries into typed records, transactions
-- [Calling HTTP APIs](http-client.md): outside HTTP and HTTPS APIs through `roxum-http-client`, tokens, redirects,
-  errors
-- [Deployment](deployment.md): Linux builds, settings files, worker processes, reverse proxies, timeouts, logs, and
-  debug mode
-- [Observability](observability.md): request IDs, the access log, metrics, health checks
-- [Current limitations](../../README.md#limitations) and [WebSocket scope](../design/non-goals.md#features-excluded-unless-strong-demand-emerges)
+Use [routing](routing.md) to add a route, [extractors](extractors.md) to validate its inputs,
+and [responses](responses.md) to build its reply. The [documentation index](../README.md)
+covers middleware, integrations and deployment.

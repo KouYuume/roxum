@@ -52,7 +52,7 @@ In another terminal, use the printed port:
 
 Python, protoc and grpcio are needed for generation and the example client. The
 built server runs independently. See the [example](example/README.md) for direct
-TLS with core 0.4 and the [reverse proxy guide](../../docs/guides/reverse-proxy.md#native-grpc-over-tls)
+TLS and the [reverse proxy guide](../../docs/guides/reverse-proxy.md#native-grpc-over-tls)
 for TLS termination in front of a cleartext listener.
 
 ## Release compatibility and verification

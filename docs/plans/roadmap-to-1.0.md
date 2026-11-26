@@ -13,22 +13,34 @@ credentials, bounds concurrent handshakes and negotiates HTTP/1.1 or HTTP/2.
 See the [deployment guide](../guides/deployment.md#inbound-tls) for configuration
 and the [0.4 acceptance checks](inbound-tls-0.4.md) for verification.
 
-## Complete the HTTP feature set
+## 0.5 — HTTP feature completion
 
-- Support file responses and SSE writer options over HTTP/2. Exercise the same
-  application routes over HTTP/1.1 and HTTP/2, including a slow reader and a
-  disconnect. Verify bounded file reads and release of file and stream resources.
-- Exercise an SSE subscription in which a separate request publishes an event.
-  Check delivery and cleanup when the subscriber leaves. The application or an
-  external service owns subscriptions and history.
-- Give application authors a supported way to exercise finite HTTP routes
-  without opening a port. Start with the existing `Router.dispatch!` and a
-  runnable example covering a successful response, extractor rejection and
-  middleware short-circuit. Add public API only if the example requires it.
+- [File responses](../guides/files.md#serving-a-directory) serve known-length files over
+  HTTP/1.1 and HTTP/2, including ranges and precompressed files.
+- [SSE writers](../guides/streaming.md#server-sent-events) support periodic keep-alive
+  comments and graceful drain over HTTP/1.1 and HTTP/2.
+- The [SSE subscription test](../guides/streaming.md#publishing-from-another-request)
+  checks delivery from a separate publishing request and cleanup when an idle
+  subscriber disconnects over HTTP/1.1 or HTTP/2.
+- [Finite route tests](../guides/routing.md#testing-route-responses) use `Router.dispatch!`
+  to check handler responses, extractor rejection and middleware short-circuiting
+  without opening a listener.
 
-Review limits, defaults, errors and cancellation with representative HTTP,
-SSE and gRPC applications. Record intended breaking changes and migration
-steps before taking the performance baseline.
+The [0.5 migration guide](../guides/migrating-to-0.5.md) records the toolchain
+update and the HTTP/2 behavior changes. The following application checks cover
+limits and failure behavior before performance measurement:
+
+| Application | Acceptance evidence |
+|---|---|
+| HTTP | [Admission](../../tests/admission/verify.py) checks 503 responses under load and successful requests once capacity returns. The [HTTP/2 listener](../../tests/http2-listener/verify.py) checks body limits, expiry and release of writer slots. |
+| SSE | The [subscription test](../../tests/sse-subscription/verify.py) checks idle disconnect and resubscription. The HTTP/2 listener check also verifies that keep-alives do not extend the write deadline. |
+| gRPC | [Unary](../../tests/grpc-unary/README.md) and [streaming](../../tests/grpc-streaming/README.md) check wire status, message bounds and resource release after cancellation. |
+
+Compared with `v0.4.0`, the Roc source changes in the platform are confined to
+the internal file-response path and API comments. The platform entry contract
+and integration APIs are unchanged. RC2's `roc bump` reports no API change for
+`Server` with `Http.IpAddr`. It cannot compare the complete platform because
+`Config.load!` exposes a type from the local TOML package.
 
 ## Improve performance
 
@@ -62,6 +74,6 @@ Run the [release verification matrix](../toolchain.md) on the supported macOS
 and Linux targets. Publish the supported combination and its compatibility
 commitments under the [versioning policy](../design/versioning.md).
 
-After 0.4, phase names describe the order of work. Actual public changes
-determine the intervening 0.x version numbers. The [scope policy](../design/non-goals.md)
+Later phases describe the order of work. Public changes determine release
+versions under the versioning policy. The [scope policy](../design/non-goals.md)
 describes the core boundary. WebSocket server support is outside the 1.0 roadmap.

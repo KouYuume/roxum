@@ -67,6 +67,20 @@ def main(executable, contract_alloc):
         config = pathlib.Path(directory) / "config"
         local = config / "local.toml"
 
+        # A failed init-only run must fail the invoking test and emit no readiness line.
+        result = subprocess.run([executable, "--check-init"], cwd=directory, capture_output=True, text=True, timeout=10)
+        check("init-only exit status", result.returncode, 1)
+        check("init-only stdout", result.stdout, "")
+        if "config/local.toml not found" not in result.stderr:
+            raise RuntimeError(f"missing init-only startup diagnostic: {result.stderr!r}")
+
+        reader, writer = os.pipe()
+        os.close(reader)
+        with os.fdopen(writer, "wb") as closed_pipe:
+            result = subprocess.run([executable, "--debug", "--check-init"], cwd=directory,
+                                    stderr=closed_pipe, stdout=subprocess.PIPE, timeout=10)
+            check("init-only exit status with closed diagnostic pipe", result.returncode, 1)
+
         refuse(executable, directory, "no config directory", "config/local.toml not found")
         config.mkdir()
         refuse(executable, directory, "no override file", "config/local.toml not found")

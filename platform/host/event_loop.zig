@@ -1585,6 +1585,7 @@ pub const Loop = struct {
         const item = &self.handoff.connections[slot];
         if (item.http2) |protocol| {
             protocol.expire(self.now);
+            protocol.sendKeepAlives();
             if (protocol.owner.runnable) self.advanceHttp2(slot);
             if (item.http2 == null) return;
             if (!protocol.busy() and protocol.owner.engine.activeStreams() == 0 and protocol.owner.engine.pending.len == 0 and item.timeout.hasPassedAt(self.now)) self.finishIdle(slot);

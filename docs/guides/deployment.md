@@ -47,14 +47,8 @@ Set `protocol: Server.Protocol.Http2` in `Server.ListenOptions`; omitting it sel
 cleartext HTTP/2 prior knowledge. HTTP/1 Upgrade and automatic protocol detection
 are not supported on this listener.
 
-HTTP/2 routing and `BeforeBody` middleware run after initial headers; ordinary
-handlers receive complete finite bodies. Request IDs and effects use the worker's
-existing request fibers. A reset cancels the affected suspended request without
-closing its peers. Finite responses may include trailers. Uncompressed
-`Reply.stream` responses with default writer options send incremental DATA; see
-[streaming](streaming.md) for their limits. Use `Handler.streaming` for incremental input or `Handler.duplex` for
-independent input and output. SSE options and file responses require HTTP/1.
-For uncompressed Unary and streaming RPCs, use the [integration](../../integrations/roxum-grpc/README.md).
+For application APIs, see [streaming and SSE](streaming.md), [serving files](files.md#serving-a-directory)
+and [gRPC](../../integrations/roxum-grpc/README.md).
 
 To bound HTTP/2 execution, set a listener-wide cap:
 
@@ -66,22 +60,14 @@ The default is `Server.ExecutionLimit.Unlimited`. Finite values take 1 to
 18,446,744,073,709 milliseconds; zero or larger values stop startup. The duration
 starts when initial headers complete and includes body waits, queueing and
 handler execution. Expiry cancels suspended effects and resets only that stream
-unless an expiry response is registered; it cannot preempt arbitrary Roc computation. Detection follows scheduler ticks
-and checks at request conversion and response admission, not a real-time guarantee.
-Once a finite response has been admitted, its existing response-write timeout
-governs delivery even if the execution duration later elapses. A valid setting
-has no effect on HTTP/1.
+unless an expiry response is registered. A handler doing pure computation runs
+until it yields. Once a finite response is admitted, its write timeout governs delivery.
 
-Register application deadlines in `BeforeBody` to include body waits. For finite
-expiry responses and streamed expiry trailers, see
-[request execution controls](../design/http2-engine.md#request-execution-controls)
-and the [streaming guide](streaming.md).
-
-Whole-body handlers use `maximum_body_bytes`. Streaming handlers use
-`maximum_streamed_body_bytes` and route overrides. Budget for both the
-[HTTP/2 transport](../design/http2-engine.md#production-http2-listeners)
-and Roc request memory. Graceful shutdown sends GOAWAY and gives admitted
-streams until the drain timeout to finish.
+Set per-request deadlines in `BeforeBody` to include body waits. Register a
+[finite expiry response](../design/http2-engine.md#request-execution-controls) or
+[streamed expiry trailers](../design/http2-streaming.md#production-callback-writer)
+for clients that need a protocol-specific error. See
+[HTTP/2 transport limits](../design/http2-engine.md#production-http2-listeners) when sizing worker memory. For shutdown behavior, see [Stopping](#stopping).
 
 ## Building for Linux
 
@@ -108,8 +94,8 @@ runs on the same machine, listen on `127.0.0.1` so the server is not reachable d
 
 ## Settings
 
-Settings that differ between environments go in TOML files, not in arguments or environment variables. The
-executable takes no arguments but `--debug`.
+Settings that differ between environments go in TOML files, not in arguments or environment variables. The executable accepts
+`--debug` and [`--check-init`](routing.md#testing-route-responses).
 
 - `config/base.toml`, next to `app.roc`, holds what every environment shares. `import "config/base.toml"` compiles it
   into the program
@@ -267,9 +253,14 @@ Set the proxy's body limit at or above the largest a route takes, such as an upl
 
 ## Limits and overload
 
-Under too much load a process refuses work with `503 Service Unavailable` and `Retry-After: 1` rather than making
-clients wait without an answer. `Server.Limits` sets, per process (fields left out are `Server.Count.Auto`, which gives
-each thread the number in the table; `Server.Count.Fixed(n)` sets the process's own):
+On an established connection, a full queue, an expired queue wait or too many
+requests in progress causes an HTTP/1 response of `503 Service Unavailable` with
+`Retry-After: 1`. On HTTP/2 the host resets the affected stream before sending
+headers. The [access log](observability.md#access-log) records the reason.
+
+`Server.Limits` sets limits per process. For count limits, `Server.Count.Auto`
+scales the table value by the number of threads and `Server.Count.Fixed(n)`
+sets the process-wide limit.
 
 | Field | `Auto`, per thread | Limits |
 |---|---|---|
@@ -292,9 +283,10 @@ limits count across the process.
 
 - **A full queue, or too many requests in progress, or the requests' memory near its limit**: the process stops
   accepting, so new connections go to the other processes, if any, which share the listening socket. If it is still
-  overloaded 50 ms later and connections are waiting, it takes them and answers `503`
-- **A request that waited longer than `queue_timeout_milliseconds`** is answered `503` without running, even while
-  its thread is still busy with a long computation
+  overloaded after 50 ms, it rejects newly accepted sockets. A cleartext HTTP/1 listener sends
+  `503`. Cleartext HTTP/2 and TLS listeners close the socket before protocol setup.
+- **A request that waited longer than `queue_timeout_milliseconds`** expires without running its handler, even while
+  the thread is busy with a long computation.
 - **Over `request_memory`**: reads from outside fail, so a database or HTTP call in progress returns
   `PostgresOverloaded` or `HttpClientOverloaded`; answer `503`. The process logs that it refused reads
 - **`maximum_connections` reached**: the keep-alive connection that has waited longest for its next request is closed
@@ -310,8 +302,7 @@ much per request.
 Streams: when a process already writes `maximum_streams` streams, a handler that returns another stream is
 answered `503` before its head is sent, and the stream never runs; the handler's own effects have already happened.
 Responses that are not streams, and streams answering `HEAD`, do not count. Each refusal logs a warning with the
-request. On HTTP/1 each stalled write is subject to `response_write_milliseconds`.
-On HTTP/2 the same setting limits total response write time, including active streams.
+request.
 
 ## Logs
 
@@ -332,18 +323,17 @@ See [request IDs](observability.md#request-ids) for ID generation and proxy sett
 
 ## Crashes
 
-A `crash` in a handler, or a handler running out of memory, stops only that request. It is answered `500` and its
-connection closes; outgoing connections it held (`Tcp`, `HttpClient`, `Postgres`) are closed rather than reused,
-because what was half sent on them is unknown. A PostgreSQL transaction it had open is rolled back by the server when
-the connection closes. Other requests, in the same process too, go on.
+A handler crash abandons the request and closes its borrowed outbound connections.
+PostgreSQL rolls back any open transaction when its connection closes. Other
+effects completed before the crash still stand.
 
-A crash in a handler that has already sent the head of a `Reply.stream` body closes only that connection: the body
-stops where it was. A crash in `init!` ends the process. Every connection that
-process holds, on all its threads, is reset, including idle keep-alive connections; the proxy answers `502` for
-requests in flight. The supervisor restarts the process.
+- On HTTP/1, the host sends 500 and closes the connection if it can still send headers.
+  After headers it closes the connection mid-response.
+- On HTTP/2, the host resets the affected stream. Other requests can continue on
+  the same connection.
 
-Return errors as `Err(reply)` rather than crashing: a crash skips the rest of the handler, so work it had done outside
-roxum stays as it was.
+A worker failure drops all connections owned by that worker. See
+[processes and threads](#processes-and-threads) for supervision.
 
 ## Debug mode
 
@@ -356,7 +346,7 @@ Start the executable with `--debug` during development:
 The values a handler passes to `dbg` are then attached to the response as `X-Roxum-Dbg` fields (percent-encoded; at
 most 16, and only as many as fit in the response head; `X-Roxum-Dbg-Truncated` counts the rest). A streaming response carries only the values from before
 its head was sent. **Never use `--debug` in production**: it shows internal values to clients. roxum prints a warning
-at start when it is on. Any other argument makes the executable exit with status 2.
+at start when it is on. Unknown or repeated arguments make the executable exit with status 2.
 
 ## Listener endpoints
 

@@ -502,6 +502,10 @@ pub fn build(b: *std.Build) void {
     });
     test_sse_integration.dependOn(&run_sse_integration.step);
 
+    const test_subscription = b.step("test-sse-subscription", "Verify cross-request SSE delivery and subscription cleanup");
+    const run_subscription = b.addSystemCommand(&.{ "python3", "tools/check.py", "--only", "test-sse-subscription" });
+    test_subscription.dependOn(&run_subscription.step);
+
     const test_middleware_core = b.step(
         "test-m9-1",
         "Run the core Middleware contract in every backend and allocator mode",

@@ -11,7 +11,7 @@ Choose the API according to which side produces data incrementally:
 |---|---|---|
 | Upload a request in parts | [`Handler.streaming`](#reading-a-large-request-body) | HTTP/1 and HTTP/2 |
 | Send a response in parts | [`Reply.stream`](#writing-a-body) | HTTP/1 and HTTP/2 |
-| Send events with keep-alive comments | [`roxum-sse`](#server-sent-events) | HTTP/1 |
+| Send server-sent events | [`roxum-sse`](#server-sent-events) | HTTP/1 and HTTP/2 |
 | Keep reading while response output is blocked | [`Handler.duplex`](#independent-http2-input-and-output) | HTTP/2 |
 
 ## Independent HTTP/2 input and output
@@ -80,7 +80,7 @@ wait: the code after it never runs, and what the request held is given back. The
 
 `Reply.json_lines` is the same for [JSON Lines](responses.md#json-lines).
 
-On HTTP/2, use default writer options and uncompressed output. To attach trailers,
+On HTTP/2, use uncompressed output. To attach trailers,
 call `ResponseWriter.finish!(writer, trailers)` inside the callback. Invalid
 trailers can be corrected and retried. Successful finish closes the writer after
 terminal output is written to the socket. Returning `Err(StreamClosed)` aborts
@@ -89,7 +89,7 @@ unfinished output on either protocol. For execution expiry after headers, see
 
 ### Options
 
-On HTTP/1, `Reply.stream_with` accepts the following writer options:
+`Reply.stream_with` accepts the following writer options:
 
 | field | default | |
 |---|---|---|
@@ -97,7 +97,9 @@ On HTTP/1, `Reply.stream_with` accepts the following writer options:
 | `ends_on_drain` | `Bool.False` | when the server stops, end the body at the function's next wait |
 
 The keep-alive bytes are a part of the body like any other, so they must mean nothing to the client (an SSE comment,
-a blank line of NDJSON). They never go into the middle of a write.
+a blank line of NDJSON). They never go into the middle of a write. HTTP/2 checks the interval every 50 ms.
+A shorter interval still permits at most one send per tick. A busy connection or a slow reader can delay delivery,
+and missed sends do not accumulate.
 
 ### Stopping the server
 
@@ -140,6 +142,8 @@ send_time! = |sse, at| {
 | `retry_milliseconds` | `Sse.Retry.None` | `Sse.Retry.Value(ms)` sends a `retry` field first: how long the client waits before it connects again |
 | `ends_on_drain` | `Bool.True` | `Bool.False` makes a drain wait for the stream to end |
 
+On HTTP/2, set `Server.Timeouts.response_write_milliseconds` for the intended lifetime of the stream. Sending events or keep-alive comments does not extend this deadline.
+
 `Sse.with_retry` sets `retry` on a single event instead.
 
 ### Going on after a reconnection
@@ -163,6 +167,17 @@ ticks = |context| {
 ```
 
 What an `id` means, and whether the events after it can still be sent, is the app's to decide.
+
+### Publishing from another request
+
+A GET handler can use `Sse.reply` to forward events from a broker while a separate POST handler publishes
+to it. The [subscription example](../../tests/sse-subscription/app.roc) holds a broker connection inside
+the SSE callback using `Tcp.with!`. It calls `Tcp.discard!` so the connection closes when the callback
+ends. If the client disconnects while the feed is idle, the broker sees EOF and removes the subscription.
+Allow enough connections in the pool for publishers as well as active subscribers.
+
+The example delivers live events only. To replay missed events, the application or broker must retain
+history and use the reconnecting client's last event ID.
 
 ## Reading a large request body
 

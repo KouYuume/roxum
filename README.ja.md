@@ -15,7 +15,7 @@ roxumは、[Roc](https://github.com/roc-lang/roc)の思想に沿ったWebサー�
 - **ルートをビルド時に検査する。** トップレベルで定義したルーターの不正なパターンや重複をコンパイル時に検出。
 - **タグと実行段階でミドルウェアを制御する。** 独自の型付きタグで対象を絞り、`BeforeBody`・`OnChunk`・`AfterBody`・`AfterHandler` に処理を配置。[ミドルウェア](docs/guides/middleware.md)と[タグとミドルウェアの例](examples/middleware/README.md)を参照してください。
 
-既定のHTTP/1.1ではストリーミング、SSE、ファイル配信を利用できます。[HTTP/2](docs/guides/deployment.md#opt-in-http2)では入力と出力の逐次処理、トレーラー、非圧縮gRPCの全4形式に対応しています。どちらもIPv4・IPv6のTCPとファイルパスを使うUnixソケットで利用できます。TCPでは[TLSリスナー](docs/guides/deployment.md#inbound-tls)がクライアントとプロトコルを交渉します。
+既定のHTTP/1.1と[HTTP/2](docs/guides/deployment.md#opt-in-http2)の両方でストリーミング、SSE、ファイル配信を利用できます。HTTP/2ではトレーラーと非圧縮gRPCの全4形式にも対応しています。どちらもIPv4・IPv6のTCPとファイルパスを使うUnixソケットで利用できます。TCPでは[TLSリスナー](docs/guides/deployment.md#inbound-tls)がクライアントとプロトコルを交渉します。
 
 ## axum・Goとの比較
 

@@ -155,9 +155,14 @@ pub const Locals = struct {
     /// Set while the request writes its response body: every wait
     /// of the fiber also watches the client.
     stream_guard: ?*StreamGuard = null,
+    /// Finish an opted-in HTTP/2 writer on its fiber after the waiting effect
+    /// has released its resources and before abandoning the callback.
+    http2_drain: ?struct { context: *anyopaque, finish: *const fn (*anyopaque) void } = null,
     /// The file the request sends, or -1. Closed when the request
     /// ends, however it ends.
     file: c_int = -1,
+    /// A file write can suspend and abandon its stack while waiting for credit.
+    file_buffer: ?[]u8 = null,
     /// The keys the request holds. Given back when the
     /// request ends, however it ends.
     concurrency: concurrency_effect.Held = .{},
@@ -273,6 +278,7 @@ pub const Fiber = struct {
         self.locals.request_execution = null;
         self.locals.response = null;
         self.locals.stream_guard = null;
+        self.locals.http2_drain = null;
         std.debug.assert(self.locals.file == -1);
         std.debug.assert(self.locals.concurrency.isEmpty());
         self.locals.debug.reset();

@@ -32,9 +32,19 @@ counts active callback writers; excess writers receive 503. HEAD and bodyless st
 and do not enter the callback. Normal cleanup and abandoned fibers release the
 writer's quota once.
 
-This callback API currently supports default writer options and uncompressed
-output only. Keep-alive payloads, `ends_on_drain`, known-length file writes and
-trailers attached with `Reply.with_trailers` remain unsupported for callback
+File responses use the same bounded output path. The host reads at most 64 KiB
+at a time and sends a known Content-Length. Only accepted DATA counts toward
+that length. A short read at EOF aborts the stream. Cancellation releases the
+file descriptor, read buffer and writer slot.
+
+With `ends_on_drain`, shutdown wakes the callback at its next eligible wait.
+A write in progress completes its DATA parts before the host ends the stream.
+Socket backpressure remains subject to the write and drain deadlines.
+The connection timer sends configured keep-alive bytes while a callback waits.
+Each stream retains one copy within the connection memory budget. A slow reader
+can have one keep-alive in flight. Missed intervals do not accumulate, and
+keep-alives do not extend the response-write deadline.
+The callback API supports uncompressed output. Trailers attached with `Reply.with_trailers` remain unsupported for callback
 writers. Use `ResponseWriter.finish!` for streamed trailers; unsupported writer
 options reset the attempted stream. Request reads use bounded incremental input;
 `Handler.duplex` continues reading after streaming headers, until completion is selected.
@@ -82,7 +92,7 @@ needs no reset and does not stop response writes. This follows
 [RFC 9113 section 8.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.1).
 The protocol lease remains reserved until closure, and request resources remain
 pinned until callback cleanup. A normal completion remains `handled` in access
-logs; an expiry completion remains `timeout`. A subsequent callback wait is
+logs. Graceful writer drain records `drained`, and expiry records `timeout`. A subsequent callback wait is
 cancelled after closure, just as when request EOF precedes completion.
 
 ## Engine output

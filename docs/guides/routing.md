@@ -128,3 +128,43 @@ A nested router keeps its layers and its fallback: the layers cover the routes r
 answers under its prefix. A router passed to `merge` keeps its layers too, but it has no paths of its own, so `merge`
 rejects one with a fallback. When two merged routers share a path, a `405` for it goes to the merged router's
 fallback and through neither side's layers. A router with `before_routing` checks can be neither nested nor merged.
+
+## Testing route selection
+
+Use `Router.probe` in a pure `expect` to check which route a method and path
+select, the captured parameters, or the allowed methods. For example, the
+[routing example](../../tests/guide/routing.roc) checks that its static
+`/users/me` route takes precedence over `/users/{id}`:
+
+```roc
+expect Router.probe(routes, Method.GET, "/users/me") == RouteProbe.Found([])
+```
+
+Run `roc test tests/guide/routing.roc` from the repository root. These checks
+run without opening a listener. To exercise extractors, middleware and handler
+responses in the running application, use `zig build test-m13b`.
+
+## Testing route responses
+
+Use `Router.dispatch!(routes, initial, model, request)` in a test app to run a
+finite request through the same router as the server. Supply the initial
+middleware values, model and a `Request` with an in-memory body. Inspect the
+returned response's status, headers or body. The
+[response test app](../../tests/guide/route-responses.roc) checks the search
+handler's text, a 400 from its query extractor, and a 401 from the private
+route's middleware.
+
+Run the checks from the test app's `init!`. Return `Err(StartupErr(message))`
+on a failed assertion. From the repository root:
+
+```sh
+zig build host
+roc build --opt=dev --output=route-tests tests/guide/route-responses.roc
+./route-tests --check-init
+```
+
+`--check-init` runs initialization once, including any effects the app calls.
+An initialization error exits with status 1. Success exits with status 0 before
+the host binds a listener or starts serving traffic. These tests exercise Roc
+routing and finite responses. Use listener tests for wire framing, streaming
+and host resource limits.

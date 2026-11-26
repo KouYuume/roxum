@@ -6,16 +6,16 @@ ARG ZIG_VERSION=0.17.1
 # From https://ziglang.org/download/index.json for ZIG_VERSION.
 ARG ZIG_SHA256_AARCH64=a1546d5646eb184437918d6635ca6b762a0e889eac09cef720ee7a1ed3fe7795
 ARG ZIG_SHA256_X86_64=3581863e3cbcfd0fce0efc682ce7e9e93da96668a977791d356a26d2a7e9b17a
-# A Roc release (0.1.0_RC1) or nightly (nightly-<date>-<commit>) built from
+# A Roc release (0.1.0-RC2) or nightly (nightly-<date>-<commit>) built from
 # .roc-revision; tools/check-roc-toolchain.sh verifies the name.
-ARG ROC_RELEASE=0.1.0_RC1
+ARG ROC_RELEASE=0.1.0-RC2
 # The release assets' digests for ROC_RELEASE; update them with the pin
 # (gh api repos/roc-lang/roc/releases/tags/<release> --jq '.assets[].digest',
 # or repos/roc-lang/nightlies/... for a nightly).
-ARG ROC_SHA256_ARM64=b3e0a9dbc922f3802702a55a1869ad2c2e4f4dc935d8a9d1b26c3612668dff43
-ARG ROC_SHA256_X86_64=043c426ea85dcdbd427951eaed246f0c10c171d988f2598782233a6dae43379d
+ARG ROC_SHA256_ARM64=79ad3dcd6655c83e9f64dc875b934056f0815e1e46569fc44aed6c8026a531a8
+ARG ROC_SHA256_X86_64=12a1b5f2c5b02ad87c8ad2afecf5af2c195baf5b004492bddd40bd5398f8f3bb
 # Not used in the image: tools/install-roc.sh reads it for macOS.
-ARG ROC_SHA256_MACOS_ARM64=e8228040c701e130254c72539a1d0f1b150d78c00058747edb0edae51ba5dbc8
+ARG ROC_SHA256_MACOS_ARM64=50e044ad7d44a4c175ad6ac9c642ab9b82a2fbd3b9da207a33ec1f4c7939d1d2
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \

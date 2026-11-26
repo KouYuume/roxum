@@ -67,7 +67,7 @@ jobs:
         with:
           repository: roc-lang/roc
           # Keep this ref in sync with .roc-revision; check-roc-toolchain.sh enforces it.
-          ref: 15177e91f62cafddf5336c455e00e9f05427ac16
+          ref: ee835686f9eae076bee7422c26e7cf8deb20aa0e
           path: .roc-src
       - name: Install the pinned Roc compiler
         # Use the compiler built from the pinned revision;

@@ -170,8 +170,10 @@ def verify_duplex(executable, unix):
                 process.stdout.close()
 
 
-def verify_duplex_http1(executable):
+def verify_http1(executable):
     import http.client
+    import os
+    import signal
 
     with tempfile.TemporaryDirectory(prefix='roxum-duplex-http1-', dir='/tmp') as directory:
         config = pathlib.Path(directory) / 'config'
@@ -189,13 +191,25 @@ def verify_duplex_http1(executable):
                     response = client.getresponse()
                     assert response.status == 501
                     response.read()
+                    client.request('GET', '/stream-keep-alive', headers={'x-request-id': 'http1-drain'})
+                    response = client.getresponse()
+                    assert response.status == 200
+                    event = b'data: ' + b'x' * 20000 + b'\n\n'
+                    assert response.read(len(event)) == event
+                    assert response.read(6) == b':\n\n:\n\n'
+                    os.killpg(process.pid, signal.SIGTERM)
+                    # The chunked reader requires the final zero-length chunk.
+                    remaining = response.read()
+                    assert remaining == b':\n\n' * (len(remaining) // 3)
                 finally:
                     client.close()
-                assert stop(process) == 0
+                assert process.wait(timeout=10) == 0
                 errors.seek(0)
                 diagnostic = errors.read()
+                entries = [json.loads(line) for line in diagnostic.splitlines() if line.startswith('{')]
+                assert [e['outcome'] for e in entries if e.get('request_id') == 'http1-drain'] == ['drained'], diagnostic
                 assert 'crash' not in diagnostic.lower() and 'panic' not in diagnostic.lower(), diagnostic
-                print('PASS duplex HTTP/1 unsupported response')
+                print('PASS HTTP/1 duplex rejection and SSE drain')
             finally:
                 stop(process)
                 process.stdout.close()

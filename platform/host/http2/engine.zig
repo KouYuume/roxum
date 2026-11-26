@@ -42,11 +42,14 @@ const Slot = struct {
     peer_reset: bool = false,
     responded: bool = false,
     streaming: bool = false,
+    remaining_length: ?u64 = null,
     streaming_headers_sent: bool = false,
     awaiting_trailers: bool = false,
     body_done: bool = false,
     head_request: bool = false,
     response: ?[]u8 = null,
+    keep_alive: []u8 = &.{},
+    sending_keep_alive: bool = false,
     offset: usize = 0,
     final_fields: [64]Header = undefined,
     final_count: usize = 0,
@@ -116,6 +119,7 @@ pub const Engine = struct {
         for (&self.slots) |*slot| {
             self.releaseInput(slot);
             if (slot.response) |bytes| self.memory.release(bytes.ptr);
+            self.memory.allocator().free(slot.keep_alive);
             if (slot.final_bytes) |bytes| self.memory.allocator().free(bytes);
         }
         std.debug.assert(self.memory.used == 0);
@@ -278,21 +282,38 @@ pub const Engine = struct {
     /// Copies response bytes; callers may release their buffers on return.
     /// Submits a finite response with automatic end-of-stream framing.
     pub fn respond(self: *Engine, id: StreamId, status: u16, headers: []const Header, body: []const u8) Error!void {
-        return self.submitResponse(id, status, headers, body, false);
+        return self.submitResponse(id, status, headers, body, false, null);
     }
 
     /// Keep the response open for explicit trailers after the finite DATA provider ends.
     pub fn beginResponse(self: *Engine, id: StreamId, status: u16, headers: []const Header, body: []const u8) Error!void {
-        return self.submitResponse(id, status, headers, body, true);
+        return self.submitResponse(id, status, headers, body, true, null);
     }
 
     /// Commits headers without ending output. Streaming has no declared length.
     pub fn beginStreamingResponse(self: *Engine, id: StreamId, status: u16, headers: []const Header) Error!void {
+        return self.beginStreamingResponseWithKeepAlive(id, status, headers, &.{});
+    }
+
+    pub fn beginStreamingResponseWithKeepAlive(self: *Engine, id: StreamId, status: u16, headers: []const Header, payload: []const u8) Error!void {
         for (headers) |header| {
             if (std.mem.eql(u8, header.name, "content-length")) return error.InvalidHeaders;
         }
+        // Reserve the stream's copy before the initial HEADERS become sendable.
+        const owned = try self.memory.allocator().dupe(u8, payload);
+        errdefer self.memory.allocator().free(owned);
         try self.beginResponse(id, status, headers, "");
-        self.find(@backingInt(id)).?.streaming = true;
+        const slot = self.find(@backingInt(id)).?;
+        slot.keep_alive = owned;
+        slot.streaming = true;
+    }
+
+    /// The caller supplies the matching host-generated Content-Length field.
+    pub fn beginSizedStreamingResponse(self: *Engine, id: StreamId, status: u16, headers: []const Header, length: u64) Error!void {
+        try self.submitResponse(id, status, headers, "", true, length);
+        const slot = self.find(@backingInt(id)).?;
+        slot.streaming = true;
+        slot.remaining_length = length;
     }
 
     /// Readiness for a streaming write or finish, under the serialized owner.
@@ -313,6 +334,9 @@ pub const Engine = struct {
         const slot = self.find(@backingInt(id)) orelse return error.Closed;
         if (slot.rejected) return error.Closed;
         if (!slot.streaming or !slot.awaiting_trailers) return error.InvalidState;
+        if (slot.remaining_length) |left| {
+            if (bytes.len > left) return error.InvalidState;
+        }
         if (bytes.len > self.limits.stream_chunk_bytes) return error.LimitExceeded;
         if (!slot.streaming_headers_sent or !slot.body_done or self.pending.len != 0) return false;
         if (bytes.len == 0) return true;
@@ -321,15 +345,30 @@ pub const Engine = struct {
         var retained = false;
         defer if (!retained) self.memory.release(copy.ptr);
         @memcpy(copy, bytes);
+        if (!try self.submitStreamingData(slot)) return false;
+        slot.response = copy;
+        if (slot.remaining_length) |*left| left.* -= bytes.len;
+        retained = true;
+        return true;
+    }
+
+    pub fn writeKeepAlive(self: *Engine, id: StreamId) Error!usize {
+        if (!try self.streamingReady(id)) return 0;
+        try self.enter();
+        defer self.entered = false;
+        const slot = self.find(@backingInt(id)).?;
+        if (slot.keep_alive.len == 0 or !try self.submitStreamingData(slot)) return 0;
+        slot.sending_keep_alive = true;
+        return slot.keep_alive.len;
+    }
+
+    fn submitStreamingData(self: *Engine, slot: *Slot) Error!bool {
         const provider = c.nghttp2_data_provider2{ .source = .{ .ptr = slot }, .read_callback = readResponse };
         const result = c.nghttp2_submit_data2(self.session, c.NGHTTP2_FLAG_NONE, slot.id, &provider);
-        // Do not replace a DATA provider still owned by nghttp2.
         if (result == c.NGHTTP2_ERR_DATA_EXIST) return false;
         try check(result);
-        slot.response = copy;
         slot.offset = 0;
         slot.body_done = false;
-        retained = true;
         return true;
     }
 
@@ -363,10 +402,10 @@ pub const Engine = struct {
     pub fn validateFiniteResponse(self: *Engine, id: StreamId, status: u16, headers: []const Header, body: []const u8, trailers: []const Header) Error!void {
         if (self.entered) return error.ReentrantCall;
         try self.validateTrailers(trailers);
-        try self.validateResponseHead(id, status, headers, body, trailers.len > 0);
+        try self.validateResponseHead(id, status, headers, body, trailers.len > 0, null);
     }
 
-    fn validateResponseHead(self: *Engine, id: StreamId, status: u16, headers: []const Header, body: []const u8, trailers: bool) Error!void {
+    fn validateResponseHead(self: *Engine, id: StreamId, status: u16, headers: []const Header, body: []const u8, trailers: bool, streamed_length: ?u64) Error!void {
         const slot = self.find(@backingInt(id)) orelse return error.Closed;
         if (slot.rejected) return error.Closed;
         if (slot.responded) return error.InvalidState;
@@ -385,23 +424,24 @@ pub const Engine = struct {
                 const length = std.fmt.parseInt(u64, header.value, 10) catch return error.InvalidHeaders;
                 // HEAD and 304 describe a representation that is not sent here.
                 if (status == 205 or (!slot.head_request and status != 304)) {
-                    if (length != body.len) return error.InvalidHeaders;
+                    if (length != (streamed_length orelse body.len)) return error.InvalidHeaders;
                 }
             }
             total = std.math.add(usize, total, header.name.len) catch return error.LimitExceeded;
             total = std.math.add(usize, total, header.value.len) catch return error.LimitExceeded;
             total = std.math.add(usize, total, 32) catch return error.LimitExceeded;
         }
+        if (streamed_length != null and !has_content_length) return error.InvalidHeaders;
         if (total > self.limits.header_bytes) return error.LimitExceeded;
     }
 
-    fn submitResponse(self: *Engine, id: StreamId, status: u16, headers: []const Header, body: []const u8, trailers: bool) Error!void {
+    fn submitResponse(self: *Engine, id: StreamId, status: u16, headers: []const Header, body: []const u8, trailers: bool, streamed_length: ?u64) Error!void {
         try self.enter();
         defer self.entered = false;
         const slot = self.find(@backingInt(id)) orelse return error.Closed;
         if (slot.rejected) return error.Closed;
         if (slot.responded) return error.InvalidState;
-        try self.validateResponseHead(id, status, headers, body, trailers);
+        try self.validateResponseHead(id, status, headers, body, trailers, streamed_length);
         var status_buffer: [3]u8 = undefined;
         const status_text = std.fmt.bufPrint(&status_buffer, "{d}", .{status}) catch unreachable;
         var fields: [65]c.nghttp2_nv = undefined;
@@ -436,7 +476,7 @@ pub const Engine = struct {
         const slot = self.find(@backingInt(id)) orelse return error.Closed;
         if (slot.rejected) return error.Closed;
         if (!slot.awaiting_trailers or !slot.body_done) return error.InvalidState;
-        if (slot.final_bytes != null) return error.InvalidState;
+        if ((slot.remaining_length orelse 0) != 0 or slot.final_bytes != null) return error.InvalidState;
         if (slot.streaming and (!slot.streaming_headers_sent or self.pending.len != 0)) return error.InvalidState;
         try self.submitTrailers(slot, trailers);
     }
@@ -645,6 +685,7 @@ fn streamClosed(_: ?*c.nghttp2_session, id: i32, error_code: u32, user: ?*anyopa
     if (self.discardInput(slot) != 0) return c.NGHTTP2_ERR_CALLBACK_FAILURE;
     if (slot.response) |bytes| self.memory.release(bytes.ptr);
     if (slot.final_bytes) |bytes| self.memory.allocator().free(bytes);
+    self.memory.allocator().free(slot.keep_alive);
     self.close_peer_reset = slot.peer_reset;
     slot.* = .{};
     self.close_error = error_code;
@@ -653,7 +694,7 @@ fn streamClosed(_: ?*c.nghttp2_session, id: i32, error_code: u32, user: ?*anyopa
 }
 fn readResponse(_: ?*c.nghttp2_session, _: i32, buffer: [*c]u8, length: usize, flags: [*c]u32, source: [*c]c.nghttp2_data_source, user: ?*anyopaque) callconv(std.builtin.CallingConvention.c) isize {
     const slot: *Slot = @ptrCast(@alignCast(source.*.ptr.?));
-    const bytes = slot.response orelse &.{};
+    const bytes = if (slot.sending_keep_alive) slot.keep_alive else slot.response orelse &.{};
     const count = @min(length, bytes.len - slot.offset);
     @memcpy(buffer[0..count], bytes[slot.offset..][0..count]);
     slot.offset += count;
@@ -662,6 +703,7 @@ fn readResponse(_: ?*c.nghttp2_session, _: i32, buffer: [*c]u8, length: usize, f
         flags.* = c.NGHTTP2_DATA_FLAG_EOF;
         if (slot.awaiting_trailers) flags.* |= c.NGHTTP2_DATA_FLAG_NO_END_STREAM;
         if (slot.streaming) {
+            slot.sending_keep_alive = false;
             if (slot.response) |owned| engine(user).memory.release(owned.ptr);
             slot.response = null;
         }
@@ -1254,6 +1296,53 @@ fn drainTestOutput(self: *Engine) !void {
     }
 }
 
+test "keep-alive admission failure leaves headers uncommitted and restores the budget" {
+    var context: u8 = 0;
+    const self = try Engine.create(std.testing.allocator, .{}, TestObserver.observer(&context));
+    defer self.destroy();
+    try openTestStream(self);
+    try drainTestOutput(self);
+    const id: StreamId = @fromBackingInt(1);
+    const used = self.memory.used;
+    const limit = self.memory.limit;
+    self.memory.limit = used;
+    try std.testing.expectError(error.OutOfMemory, self.beginStreamingResponseWithKeepAlive(id, 200, &.{}, ":"));
+    self.memory.limit = limit;
+    try std.testing.expectError(error.InvalidHeaders, self.beginStreamingResponseWithKeepAlive(id, 199, &.{}, ":"));
+    try std.testing.expectEqual(used, self.memory.used);
+    try std.testing.expectEqual(@as(usize, 0), (try self.output()).len);
+    try self.beginStreamingResponseWithKeepAlive(id, 200, &.{}, ":");
+}
+
+test "periodic payload is owned once and cannot interleave with an application write" {
+    var context: u8 = 0;
+    const self = try Engine.create(std.testing.allocator, .{}, TestObserver.observer(&context));
+    defer self.destroy();
+    try openTestStream(self);
+    const id: StreamId = @fromBackingInt(1);
+    // A keep-alive may span multiple default DATA frames.
+    var payload: [16 * 1024 + 1]u8 = @splat(42);
+    try self.beginStreamingResponseWithKeepAlive(id, 200, &.{}, &payload);
+    @memset(&payload, 0);
+    try drainTestOutput(self);
+    for (0..2) |_| {
+        try std.testing.expectEqual(payload.len, try self.writeKeepAlive(id));
+        try std.testing.expectEqual(@as(usize, 0), try self.writeKeepAlive(id));
+        try std.testing.expect(!try self.writeStreamingResponse(id, "later"));
+        var length: usize = 0;
+        while (true) {
+            const frame = try self.output();
+            if (frame.len == 0) break;
+            try std.testing.expectEqual(@as(u8, c.NGHTTP2_DATA), frame[3]);
+            for (frame[9..]) |byte| try std.testing.expectEqual(@as(u8, 42), byte);
+            length += frame.len - 9;
+            try self.consumeOutput(frame.len);
+        }
+        try std.testing.expectEqual(payload.len, length);
+    }
+    try std.testing.expect(try self.writeStreamingResponse(id, "done"));
+}
+
 test "streaming chunks bound retained memory and preserve partial output before completion" {
     for ([_]usize{ 15, 16, 17 }) |size| {
         var context: u8 = 0;
@@ -1296,6 +1385,28 @@ test "streaming chunks bound retained memory and preserve partial output before 
         try std.testing.expectError(error.InvalidState, self.finishResponse(id, &.{}));
         try drainTestOutput(self);
     }
+}
+
+test "sized streaming counts only admitted bytes and requires the declared length at finish" {
+    var context: u8 = 0;
+    const self = try Engine.create(std.testing.allocator, .{}, TestObserver.observer(&context));
+    defer self.destroy();
+    try openTestStream(self);
+    const id: StreamId = @fromBackingInt(@intCast(1));
+    const fields = [_]Header{.{ .name = "content-length", .value = "2" }};
+    try std.testing.expectError(error.InvalidHeaders, self.beginSizedStreamingResponse(id, 200, &.{}, 2));
+    try std.testing.expectError(error.InvalidHeaders, self.beginSizedStreamingResponse(id, 200, &fields, 1));
+    try self.beginSizedStreamingResponse(id, 200, &fields, 2);
+    try std.testing.expect(!try self.writeStreamingResponse(id, "ab"));
+    try drainTestOutput(self);
+    try std.testing.expect(try self.writeStreamingResponse(id, "a"));
+    try drainTestOutput(self);
+    try std.testing.expectError(error.InvalidState, self.finishResponse(id, &.{}));
+    try std.testing.expectError(error.InvalidState, self.writeStreamingResponse(id, "bc"));
+    try std.testing.expect(try self.writeStreamingResponse(id, "b"));
+    try drainTestOutput(self);
+    try self.finishResponse(id, &.{});
+    try drainTestOutput(self);
 }
 
 test "streaming zero credit permits terminal headers but reset releases queued data" {

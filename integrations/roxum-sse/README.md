@@ -1,8 +1,7 @@
 # roxum-sse
 
-`roxum-sse` is the first platform-dependent roxum integration package. It converts validated SSE events into
-roxum's existing response-stream capability and adds the required response headers. It adds no hosted effect and
-does not own sockets, backpressure, timeouts, or disconnect cleanup.
+`roxum-sse` builds `text/event-stream` replies and encodes events for roxum's
+response writer. The host handles backpressure, timeouts and disconnects.
 
 ```roc
 import sse.Sse
@@ -15,10 +14,9 @@ events = |_context|
 	}))
 ```
 
-`Sse.reply` sends a keep-alive comment (`:`) every 15 seconds without an event, and ends the stream when the server
-stops, so the client connects again to another worker. `Sse.reply_with(Sse.Options.{ ... }, ...)` changes either, and
-can send a `retry` field first. `Sse.last_event_id(request)` reads the `Last-Event-ID` of a client that connects again.
-`Sse.from_events` sends a finite list. See [Streaming responses and server-sent events](../../docs/guides/streaming.md).
+`Sse.from_events` sends a finite list. For a live feed, use `Sse.reply` as above.
+See the [streaming guide](../../docs/guides/streaming.md#server-sent-events) for keep-alive
+and retry settings, reconnection with event IDs, and publishing from another request.
 
 `with_event` rejects CR/LF and `with_id` rejects CR/LF/NUL so a field value cannot inject another SSE field.
 Event data accepts CRLF, CR, and LF and encodes every resulting line with its own `data:` prefix.
@@ -26,4 +24,4 @@ Event data accepts CRLF, CR, and LF and encodes every resulting line with its ow
 
 Each event is written whole, and a keep-alive comment never goes into the middle of one. Memory includes the current
 encoded event and any events held by the caller. The host's response write deadline (30 seconds by default) applies
-to each write.
+to each stalled write on HTTP/1 and to the entire response on HTTP/2.

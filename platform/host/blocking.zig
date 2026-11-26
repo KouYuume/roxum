@@ -90,6 +90,9 @@ pub fn run(job: *Job) void {
     const guard = locals.stream_guard;
     locals.stream_guard = null;
     defer locals.stream_guard = guard;
+    const drain = locals.http2_drain;
+    locals.http2_drain = null;
+    defer locals.http2_drain = drain;
     job.target = target;
     // The wait below is the next one `waitSocket` numbers. The fiber always
     // enters it, even when the job is already done: a wake that came first

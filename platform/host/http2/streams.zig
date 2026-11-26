@@ -10,6 +10,8 @@ const Entry = struct {
     buffer: ?input.Input = null,
     cancel_pending: bool = false,
     finished: bool = false,
+    /// The protocol close callback may run after execution cleanup.
+    drain_completion: bool = false,
     expiry_response: ?@import("deferred_response.zig").Response = null,
 };
 pub const Work = union(enum) {

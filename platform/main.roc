@@ -262,7 +262,7 @@ handle_for_host! = |model, request| {
 	# A file: the platform opens it and sends it here. A body in
 	# memory is compressed for `Compression.layer`.
 	response = match Reply.file_target(answered.reply) {
-		Ok(target) => FileReply.send!(request, answered.response, target, Reply.compression(answered.reply))
+		Ok(target) => FileReply.send!(request, answered.response, target, Reply.compression(answered.reply), route)
 		Err(NotFile) =>
 			match (Reply.writer(answered.reply), Reply.compression(answered.reply)) {
 				(Err(NotStreamed), Ok(options)) => Compression.respond!(request, options, answered.response)
