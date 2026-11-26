@@ -26,9 +26,21 @@ and the [0.4 acceptance checks](inbound-tls-0.4.md) for verification.
   to check handler responses, extractor rejection and middleware short-circuiting
   without opening a listener.
 
-Review limits, defaults, errors and cancellation with representative HTTP,
-SSE and gRPC applications. Record intended breaking changes and migration
-steps before taking the performance baseline.
+The [0.5 migration guide](../guides/migrating-to-0.5.md) records the toolchain
+update and the HTTP/2 behavior changes. The following application checks cover
+limits and failure behavior before performance measurement:
+
+| Application | Acceptance evidence |
+|---|---|
+| HTTP | [Admission](../../tests/admission/verify.py) checks 503 responses under load and successful requests once capacity returns. The [HTTP/2 listener](../../tests/http2-listener/verify.py) checks body limits, expiry and release of writer slots. |
+| SSE | The [subscription test](../../tests/sse-subscription/verify.py) checks idle disconnect and resubscription. The HTTP/2 listener check also verifies that keep-alives do not extend the write deadline. |
+| gRPC | [Unary](../../tests/grpc-unary/README.md) and [streaming](../../tests/grpc-streaming/README.md) check wire status, message bounds and resource release after cancellation. |
+
+Compared with `v0.4.0`, the Roc source changes in the platform are confined to
+the internal file-response path and API comments. The platform entry contract
+and integration APIs are unchanged. RC2's `roc bump` reports no API change for
+`Server` with `Http.IpAddr`. It cannot compare the complete platform because
+`Config.load!` exposes a type from the local TOML package.
 
 ## Improve performance
 
