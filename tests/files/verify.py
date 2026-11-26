@@ -253,7 +253,7 @@ def run_checks(server, port, public):
 
 def main(executable):
     with tempfile.TemporaryDirectory() as directory:
-        from http2_files import verify as verify_http2
+        from http2_files import verify as verify_http2, verify_quota
 
         public = prepare(directory)
         config = pathlib.Path(directory) / "config"
@@ -274,21 +274,33 @@ def main(executable):
                 if server.poll() is None:
                     server.kill()
                     server.wait(timeout=6)
-        (config / "local.toml").write_text("http2 = true")
-        with tempfile.TemporaryFile(mode="w+") as log, subprocess.Popen(
-            [executable], cwd=directory, stdout=subprocess.PIPE, stderr=log, text=True, start_new_session=True
-        ) as server:
-            try:
-                port = read_port(server)
-                worker = ready_workers(server)[0]
-                verify_http2(port, worker, public, check_http_features, TRANSFER_SIZES, open_files)
-            finally:
-                stop(server)
-            log.seek(0)
-            entries = [json.loads(line) for line in log if line.startswith("{")]
-            reset_file = [entry for entry in entries if entry.get("path") == "/files/big.bin"]
-            check("reset file access log", [(e.get("route"), e["outcome"]) for e in reset_file],
-                  [("/files/{*path}", "client_closed")])
+        for single_writer in (False, True):
+            (config / "local.toml").write_text(f"http2 = true\nsingle_writer = {str(single_writer).lower()}\n")
+            with tempfile.TemporaryFile(mode="w+") as log, subprocess.Popen(
+                [executable], cwd=directory, stdout=subprocess.PIPE, stderr=log, text=True, start_new_session=True
+            ) as server:
+                try:
+                    try:
+                        port = read_port(server)
+                        worker = ready_workers(server)[0]
+                        if single_writer:
+                            verify_quota(port, worker, open_files)
+                        else:
+                            verify_http2(port, public, check_http_features, TRANSFER_SIZES)
+                    finally:
+                        status = stop(server)
+                    check("HTTP/2 server exit status", status, 0)
+                    if single_writer:
+                        log.seek(0)
+                        entries = [json.loads(line) for line in log if line.startswith("{")]
+                        reset_file = [entry for entry in entries if entry.get("path") == "/files/big.bin"]
+                        check("reset file access log", [(e.get("route"), e["outcome"]) for e in reset_file],
+                              [("/files/{*path}", "client_closed")])
+                except Exception:
+                    mode = "single writer" if single_writer else "normal file serving"
+                    log.seek(0)
+                    print(f"HTTP/2 {mode} server log:\n{log.read()[-4000:]}", file=sys.stderr)
+                    raise
         # A root that cannot be opened stops startup.
         (pathlib.Path(directory) / "public").rename(pathlib.Path(directory) / "elsewhere")
         server = subprocess.Popen([executable], cwd=directory, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
