@@ -168,6 +168,17 @@ ticks = |context| {
 
 What an `id` means, and whether the events after it can still be sent, is the app's to decide.
 
+### Publishing from another request
+
+A GET handler can use `Sse.reply` to forward events from a broker while a separate POST handler publishes
+to it. The [subscription example](../../tests/sse-subscription/app.roc) holds a broker connection inside
+the SSE callback using `Tcp.with!`. It calls `Tcp.discard!` so the connection closes when the callback
+ends. If the client disconnects while the feed is idle, the broker sees EOF and removes the subscription.
+Allow enough connections in the pool for publishers as well as active subscribers.
+
+The example delivers live events only. To replay missed events, the application or broker must retain
+history and use the reconnecting client's last event ID.
+
 ## Reading a large request body
 
 A handler made with `Handler.pure`, `stateful`, `effectful`, or `static` runs after the router has received the whole
