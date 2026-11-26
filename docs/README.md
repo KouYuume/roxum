@@ -30,6 +30,7 @@ These documents describe implementation plans, acceptance evidence, and remainin
 gates. Completed evidence is distinguished from proposed capabilities.
 
 - [Roadmap to 1.0](plans/roadmap-to-1.0.md) covers inbound TLS, HTTP feature completion, performance, refactoring and release criteria.
+- [0.6 HTTP performance](plans/performance-0.6.md) defines the axum comparison and the evidence needed to defer and resume optimization.
 - [0.4 inbound TLS](plans/inbound-tls-0.4.md) covers packaging, transport acceptance and the public API comparison.
 - [gRPC server support](plans/grpc.md): host/integration boundaries, transport, codec, and service milestones
 - [0.3 gRPC streaming](plans/grpc-streaming-0.3.md): production acceptance, distribution, and release gates

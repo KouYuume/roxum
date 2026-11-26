@@ -111,8 +111,7 @@ def check_measurement(config, args):
     if expected is None:
         return
     actual = {'runs': args.runs, 'seconds': args.seconds, 'warmup_seconds': args.warmup_seconds,
-              'scenarios': [row[0] for row in bench.SCENARIOS
-                            if not args.scenario or row[0] in args.scenario]}
+              'scenarios': [row[0] for row in bench.selected_scenarios(args.scenario)]}
     if getattr(args, 'rate', None) is not None or 'rate' in expected:
         actual['rate'] = getattr(args, 'rate', None)
     if expected != actual:
@@ -127,7 +126,7 @@ def main():
     parser.add_argument("--runs", type=bench.positive, default=6)
     parser.add_argument("--seconds", type=bench.positive, default=30)
     parser.add_argument("--warmup-seconds", type=bench.positive, default=5)
-    parser.add_argument("--scenario", action="append", choices=[s[0] for s in bench.SCENARIOS])
+    parser.add_argument("--scenario", action="append", choices=[s[0] for s in bench.SCENARIOS + bench.PERFORMANCE_SCENARIOS])
     parser.add_argument('--rate', type=bench.positive, help='global requests/s with coordinated-omission correction')
     args = parser.parse_args()
     config = json.loads(args.config.read_text())
@@ -151,9 +150,7 @@ def main():
                          "oha_version": bench.command_output([args.oha, "--version"])},
               "samples": []}
     bench.save(args.output, result)
-    for scenario in bench.SCENARIOS:
-        if args.scenario and scenario[0] not in args.scenario:
-            continue
+    for scenario in bench.selected_scenarios(args.scenario):
         for repetition in range(args.runs):
             offset = repetition % len(candidates)
             for candidate in candidates[offset:] + candidates[:offset]:

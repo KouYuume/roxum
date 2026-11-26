@@ -20,6 +20,25 @@ def raw(count=1):
 
 
 class AcceptanceTests(unittest.TestCase):
+    def test_extended_workloads_require_explicit_selection(self):
+        self.assertEqual(bench.selected_scenarios(None), bench.SCENARIOS)
+        names = ["routing", "dynamic-json", "file-64k"]
+        self.assertEqual([row[0] for row in bench.selected_scenarios(names)], names)
+
+    def test_file_load_requires_exact_received_byte_count(self):
+        expected = 2 * 65536
+        for received in (None, 0, expected - 1, expected, expected + 1):
+            value = raw(count=2)
+            if received is not None:
+                value["summary"]["totalData"] = received
+            with self.subTest(received=received), patch.object(bench.subprocess, "Popen") as popen:
+                proc = popen.return_value.__enter__.return_value
+                proc.returncode = 0
+                proc.communicate.return_value = (json.dumps(value), "")
+                result = bench.run_oha("oha", 8080, "GET", "/file-64k", 64, None, "1s")
+                self.assertEqual(result["valid"], received == expected)
+                self.assertEqual(result.get("payload_bytes_per_sec"), 655360 if received == expected else None)
+
     def test_process_window_does_not_claim_traffic_phase_boundaries(self):
         # Successful, malformed, and failed outputs all retain process bounds.
         for stdout, code in [(json.dumps(raw()), 0), ('truncated', 0), (json.dumps(raw()), 1)]:

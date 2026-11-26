@@ -60,9 +60,26 @@ body, and media type before and after every trial. Validate correctness separate
 under concurrent load with the integration tests; a throughput tool checking
 status codes is not a complete correctness test.
 
-Dynamic JSON serialization, middleware, streaming, and database workloads must
-have their own equivalent contracts before being added. Do not describe the
-fixed JSON test as general API or DDD performance.
+### 0.6 workloads
+
+Select these workloads explicitly in either runner when comparing roxum and
+axum. Omitting `--scenario` runs the original six workloads, including for Go.
+
+| Scenario | Measured request and response | Checks before warmup and after load |
+|---|---|---|
+| `dynamic-json` | GET `/dynamic/42` with `x-bench-source: bench`. Route middleware passes the header to the handler, which serializes the decoded path parameter and header as a JSON array. Middleware adds `x-bench-layer: active`. | Validate 200, media type, layer header and body while varying the header and path independently, including a quote requiring JSON escaping. |
+| `file-64k` | GET `/file-64k` serves `bench-payload.bin` from disk with the filesystem cache warmed. | Validate 200, octet-stream, content length and all 65,536 bytes. During warmup and measurement, require the received byte total to equal 65,536 times the completed request count before reporting payload bytes/s. |
+
+Before a file trial, create the fixture in the server working directory
+(the directory you run the local runner from, or the service working directory
+on the remote host). In a fresh directory, run:
+
+```sh
+python3 -c 'with open("bench-payload.bin", "xb") as f: f.write(bytes(range(256)) * 256)'
+```
+
+Pass `--scenario routing --scenario dynamic-json --scenario file-64k` for the
+three [0.6 primary workloads](../../docs/plans/performance-0.6.md).
 
 ## Trial procedure and acceptance
 
