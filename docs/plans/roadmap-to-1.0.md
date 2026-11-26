@@ -19,9 +19,9 @@ and the [0.4 acceptance checks](inbound-tls-0.4.md) for verification.
   HTTP/1.1 and HTTP/2, including ranges and precompressed files.
 - [SSE writers](../guides/streaming.md#server-sent-events) support periodic keep-alive
   comments and graceful drain over HTTP/1.1 and HTTP/2.
-- Exercise an SSE subscription in which a separate request publishes an event.
-  Check delivery and cleanup when the subscriber leaves. The application or an
-  external service owns subscriptions and history.
+- The [SSE subscription test](../guides/streaming.md#publishing-from-another-request)
+  checks delivery from a separate publishing request and cleanup when an idle
+  subscriber disconnects over HTTP/1.1 or HTTP/2.
 - [Finite route tests](../guides/routing.md#testing-route-responses) use `Router.dispatch!`
   to check handler responses, extractor rejection and middleware short-circuiting
   without opening a listener.

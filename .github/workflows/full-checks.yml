@@ -99,7 +99,9 @@ jobs:
       - name: Verify roxum SSE integration
         env:
           ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
-        run: zig build test-m9p4
+        run: |
+          zig build test-m9p4
+          zig build test-sse-subscription
       - name: Verify core Middleware contract
         env:
           ROC_BIN: ${{ github.workspace }}/.roc-bin/roc
