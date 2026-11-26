@@ -18,7 +18,7 @@ To keep its focus on backend services, roxum does not aim to provide:
 
 Serving HTML, static assets, or an API used by a browser remains in scope. Applications can use rendering libraries and database integrations without roxum owning the surrounding UI or database toolchain. Existing static-page support is not excluded by this boundary.
 
-IPv4/IPv6 and Unix listeners are core networking capabilities. HTTP/2 listeners, streamed bodies, trailers, and request execution deadlines support the [gRPC integration](../../integrations/roxum-grpc/README.md). The [roadmap to 1.0](../plans/roadmap-to-1.0.md) covers HTTP/2 file and SSE support in the feature phase following 0.4. TCP listeners support [direct TLS](../guides/deployment.md#inbound-tls) as of 0.4.
+IPv4/IPv6 and Unix listeners are core networking capabilities. HTTP/2 listeners, streamed bodies, trailers, and request execution deadlines support the [gRPC integration](../../integrations/roxum-grpc/README.md). HTTP/2 supports [known-length files](../guides/files.md#serving-a-directory) and [server-sent events](../guides/streaming.md#server-sent-events). TCP listeners support [direct TLS](../guides/deployment.md#inbound-tls) as of 0.4.
 
 ## Choosing a Roc platform for your application
 
@@ -60,22 +60,18 @@ The core supplies generic HTTP/2 transport, response trailers, and request-scope
 
 ### HTML templates and AOT generation
 
-Applications should be able to author HTML as HTML templates and use the rendered output in responses or SSE events. Template parsing, ahead-of-time (AOT) generation, and HTML escaping belong in independent tools and libraries, not in the roxum core.
+HTML authoring belongs in independent tools and libraries. An application can run
+a template generator before the Roc build to produce typed rendering functions.
+At runtime those functions combine data with the template, escape it for the
+output context, and return a `Str`. Content known entirely at build time can
+instead be a [static page](../guides/static-pages.md).
 
-The preferred integration approach is to generate ordinary Roc rendering functions before compiling the application:
-
-```text
-Build: HTML templates -> generator -> Roc types and rendering functions -> Roc compiler
-Runtime: rendering function + application data -> Str -> HTML response or SSE event
-```
-
-The generator checks template structure and emits code that Roc can type-check against application data. A rendering library handles escaping appropriate to the output context. Dynamic data is still formatted and inserted at runtime; AOT does not precompute values that depend on a request or a later event. This differs from [build-time pages](../guides/static-pages.md), where the complete content can be a constant.
-
-The rendering layer need not depend on roxum: a pure function returning `Str` can be reused by other platforms. An optional roxum integration can adapt that output to an HTML response or a frontend-specific SSE event format. Existing response APIs and `roxum-sse` provide the transport; SSE framing does not replace HTML escaping. Browser-side code determines how an event updates the DOM.
-
-The application build or the independent generator's wrapper runs template generation before the Roc build. This approach requires no dedicated host effect or host rendering runtime. Runtime bytecode rendering and template hot replacement are separate designs, not prerequisites for authoring HTML templates or sending HTML fragments over SSE.
-
-This is an integration direction, not an existing bundled template generator. Start with existing public APIs and consider a general-purpose core addition only if a concrete implementation demonstrates a missing capability.
+The same rendered HTML can go into an [HTTP reply](../guides/responses.md#html)
+or an [SSE event](../guides/streaming.md#server-sent-events). SSE handles event
+framing; the rendering library handles HTML escaping and browser code applies
+the DOM update. A roxum integration can adapt the rendered output using the
+existing APIs. Consider a core addition only if an implementation needs a
+missing general-purpose capability.
 
 ### Sessions, CSRF, OAuth, and JWT
 

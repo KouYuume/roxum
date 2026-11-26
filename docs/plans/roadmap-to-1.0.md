@@ -13,7 +13,7 @@ credentials, bounds concurrent handshakes and negotiates HTTP/1.1 or HTTP/2.
 See the [deployment guide](../guides/deployment.md#inbound-tls) for configuration
 and the [0.4 acceptance checks](inbound-tls-0.4.md) for verification.
 
-## 0.5 target — complete the HTTP feature set
+## 0.5 — HTTP feature completion
 
 - [File responses](../guides/files.md#serving-a-directory) serve known-length files over
   HTTP/1.1 and HTTP/2, including ranges and precompressed files.

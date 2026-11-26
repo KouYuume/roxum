@@ -4,6 +4,8 @@ Changes to the roxum platform and its integrations, newest first. The platform a
 
 ## Unreleased
 
+## 0.5.0
+
 ### Breaking changes
 
 - Rebuild 0.4 applications with Roc `0.1.0-RC2` and the matching platform and host archives. See [migrating from 0.4](docs/guides/migrating-to-0.5.md).

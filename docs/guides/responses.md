@@ -62,11 +62,11 @@ Reply.bytes(data, "application/octet-stream")   # bytes of no known type
 
 ## HTML
 
-There is no HTML helper yet: roxum's HTML authoring is a later milestone, and its output type decides the shape of one. A
-reply can name the type itself. The text is sent as it is, so escape what comes from a request.
+Return rendered HTML with its media type. Escape request data for the context
+where the renderer inserts it. See [build-time pages](static-pages.md) for static content.
 
 ```roc
-Reply.text(page).replace_headers([ResponseHeader.{ name: HeaderName.("content-type"), value: "text/html; charset=utf-8" }])
+Reply.bytes(page.to_utf8(), "text/html; charset=utf-8")
 ```
 
 ## Redirects
