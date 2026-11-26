@@ -23,8 +23,8 @@ program = { init!, routes: Router.build(routes, {}) }
 
 init! : {} => Try({ model : Model, listen : Server.ListenOptions }, [StartupErr(Str)])
 init! = |{}| {
-	settings : { http2 : Bool }
-	settings = Config.load!("http2 = false").map_err(|ConfigErr(message)| StartupErr(message))?
+	settings : { http2 : Bool, single_writer : Bool }
+	settings = Config.load!("http2 = false\nsingle_writer = false").map_err(|ConfigErr(message)| StartupErr(message))?
 	public = match Files.open_root!("public") {
 		Ok(root) => root
 		Err(_) => return Err(StartupErr("public cannot be opened"))
@@ -37,10 +37,25 @@ init! = |{}| {
 		model: { public, precompressed },
 		listen: {
 			endpoint: Server.Endpoint.Tcp({ address: IpAddr.V4((127, 0, 0, 1)), port: 0 }),
-			access_log: if settings.http2 { Server.AccessLog.JsonLinesWithPath } else { Server.AccessLog.Off },
-			protocol: if settings.http2 { Server.Protocol.Http2 } else { Server.Protocol.Http1 },
+			access_log: if settings.http2 {
+				Server.AccessLog.JsonLinesWithPath
+			} else {
+				Server.AccessLog.Off
+			},
+			protocol: if settings.http2 {
+				Server.Protocol.Http2
+			} else {
+				Server.Protocol.Http1
+			},
 			timeouts: Server.Timeouts.defaults,
-			limits: { ..Server.Limits.defaults, maximum_streams: if settings.http2 { Server.Count.Fixed(1) } else { Server.Count.Auto } },
+			limits: {
+				..Server.Limits.defaults,
+				maximum_streams: if settings.single_writer {
+					Server.Count.Fixed(1)
+				} else {
+					Server.Count.Auto
+				},
+			},
 		},
 	})
 }
