@@ -53,6 +53,9 @@ Either way:
 - The host reads the file in 64 KiB parts on threads of its own, so a slow disk does not hold other requests, and
   sends it with `Content-Length`. A file being sent counts as a stream in `Server.Limits.maximum_streams`
 
+On HTTP/2, file responses use flow-controlled DATA frames. Ranges and
+precompressed files work on both protocols. Dynamic gzip for a file requires HTTP/1.
+
 ### Precompressed files
 
 Compress the files when the app is built (`app.js.br`, `app.js.gz` beside `app.js`), and open the root with them:

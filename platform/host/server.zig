@@ -742,7 +742,7 @@ fn RequestFiber(comptime Environment: type) type {
             const self: *Self = @ptrCast(@alignCast(ptr));
             self.http2_stream_attempted = true;
             // These HTTP/1 writer modes need their own HTTP/2 lifecycle contract.
-            if (keep_alive != 0 or ends_on_drain or content_length != null or gzip_body or response.trailers.items().len != 0) return false;
+            if (keep_alive != 0 or ends_on_drain or gzip_body or response.trailers.items().len != 0) return false;
             const item = &self.shared.handoff.connections[self.dispatch.slot];
             item.lock.lock();
             defer item.lock.unlock();
@@ -779,12 +779,26 @@ fn RequestFiber(comptime Environment: type) type {
                 fields[field_count] = field;
                 field_count += 1;
             }
+            var length_buffer: [20]u8 = undefined;
+            if (content_length) |length| {
+                if (status != 204 and status != 304) {
+                    if (field_count == fields.len) return false;
+                    const value = std.fmt.bufPrint(&length_buffer, "{d}", .{if (status == 205) @as(u64, 0) else length}) catch unreachable;
+                    fields[field_count] = .{ .name = "content-length", .value = value };
+                    field_count += 1;
+                }
+            }
             if (bodyless or (status == 503 and !self.http2_stream_counted)) {
                 // Bodyless and quota replies skip the callback and use the finite
                 // response cleanup path after rocHandle returns.
                 self.http2_stream_head = @import("http2/deferred_response.zig").Response.init(protocol.budget.allocator(), protocol.owner.engine, id, status, if (bodyless) fields[0..field_count] else &.{}, "", &.{}) catch return false;
             } else {
-                protocol.owner.engine.beginStreamingResponse(id, status, fields[0..field_count]) catch return false;
+                const engine = protocol.owner.engine;
+                if (content_length) |length| {
+                    engine.beginSizedStreamingResponse(id, status, fields[0..field_count], length) catch return false;
+                } else {
+                    engine.beginStreamingResponse(id, status, fields[0..field_count]) catch return false;
+                }
                 self.http2_stream_started = true;
             }
             protocol.owner.runnable = true;
