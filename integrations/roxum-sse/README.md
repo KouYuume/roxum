@@ -17,7 +17,7 @@ events = |_context|
 
 `Sse.reply` sends a keep-alive comment (`:`) every 15 seconds without an event, and ends the stream when the server
 stops, so the client connects again to another worker. `Sse.reply_with(Sse.Options.{ ... }, ...)` changes either, and
-can send a `retry` field first. `Sse.last_event_id(request)` reads the `Last-Event-ID` of a client that connects again.
+can send a `retry` field first. For HTTP/2, set `keep_alive: Sse.KeepAlive.Off`. `Sse.last_event_id(request)` reads the `Last-Event-ID` of a client that connects again.
 `Sse.from_events` sends a finite list. See [Streaming responses and server-sent events](../../docs/guides/streaming.md).
 
 `with_event` rejects CR/LF and `with_id` rejects CR/LF/NUL so a field value cannot inject another SSE field.
@@ -26,4 +26,4 @@ Event data accepts CRLF, CR, and LF and encodes every resulting line with its ow
 
 Each event is written whole, and a keep-alive comment never goes into the middle of one. Memory includes the current
 encoded event and any events held by the caller. The host's response write deadline (30 seconds by default) applies
-to each write.
+to each stalled write on HTTP/1 and to the entire response on HTTP/2.

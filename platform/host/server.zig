@@ -656,10 +656,10 @@ fn RequestFiber(comptime Environment: type) type {
                 self.releaseHttp2Stream();
                 if (self.heap) |*heap| environment.abandonStream(heap) else try environment.abandonRequest();
                 self.heap = null;
-                self.thread.io.finishHttp2(self.dispatch, if (self.decode_response_sent) null else switch (stop) {
+                self.thread.io.finishHttp2(self.dispatch, if (self.decode_response_sent or (stop == fiber.Stop.drained and self.http2_stream_finished)) null else switch (stop) {
                     fiber.Stop.none => access_log.Outcome.crashed,
                     fiber.Stop.client_gone => access_log.Outcome.client_closed,
-                    fiber.Stop.drained => access_log.Outcome.drained,
+                    fiber.Stop.drained => access_log.Outcome.encode_failed,
                 });
                 return;
             }
@@ -705,7 +705,8 @@ fn RequestFiber(comptime Environment: type) type {
             const protocol = item.http2 orelse unreachable;
             const ticket = self.dispatch.http2.?;
             const execution = protocol.execution(ticket) orelse unreachable;
-            execution.waiter = if (parked) .{ .target = target, .serial = target.wait_serial, .body_limit = self.http2_body.waiting_limit, .output = self.http2_output_waiting, .completion = self.http2_completion_waiting } else null;
+            const ends_on_drain = target.locals.http2_drain != null and !self.http2_stream_finished;
+            execution.waiter = if (parked) .{ .target = target, .serial = target.wait_serial, .body_limit = self.http2_body.waiting_limit, .output = self.http2_output_waiting, .completion = self.http2_completion_waiting, .ends_on_drain = ends_on_drain } else null;
             if (self.http2_completion_waiting and execution.finishing and !protocol.failed and !protocol.closed and
                 (execution.response_complete or protocol.terminals[ticket.slot].selection == @import("http2/terminal_fields.zig").Selection.normal))
             {
@@ -717,6 +718,12 @@ fn RequestFiber(comptime Environment: type) type {
                     fiber_wait.wakeStopped(target, target.wait_serial, fiber.Stop.client_gone);
                 } else {
                     target.stop.store(fiber.Stop.client_gone, std.builtin.AtomicOrder.release);
+                }
+            } else if (protocol.draining and ends_on_drain and !execution.finishing) {
+                if (parked) {
+                    fiber_wait.wakeStopped(target, target.wait_serial, fiber.Stop.drained);
+                } else {
+                    _ = target.stop.cmpxchgStrong(fiber.Stop.none, fiber.Stop.drained, std.builtin.AtomicOrder.acq_rel, std.builtin.AtomicOrder.acquire);
                 }
             } else if (parked) {
                 if (protocol.waitReady(ticket, self.http2_body.waiting_limit, self.http2_output_waiting) != 0)
@@ -742,7 +749,7 @@ fn RequestFiber(comptime Environment: type) type {
             const self: *Self = @ptrCast(@alignCast(ptr));
             self.http2_stream_attempted = true;
             // These HTTP/1 writer modes need their own HTTP/2 lifecycle contract.
-            if (keep_alive != 0 or ends_on_drain or gzip_body or response.trailers.items().len != 0) return false;
+            if (keep_alive != 0 or gzip_body or response.trailers.items().len != 0) return false;
             const item = &self.shared.handoff.connections[self.dispatch.slot];
             item.lock.lock();
             defer item.lock.unlock();
@@ -800,6 +807,7 @@ fn RequestFiber(comptime Environment: type) type {
                     engine.beginStreamingResponse(id, status, fields[0..field_count]) catch return false;
                 }
                 self.http2_stream_started = true;
+                if (ends_on_drain) fiber.currentLocals().?.http2_drain = .{ .context = self, .finish = finishDrainedHttp2Stream };
             }
             protocol.owner.runnable = true;
             protocol.deadlines[ticket.slot] = protocol.now +| protocol.write_timeout;
@@ -815,6 +823,11 @@ fn RequestFiber(comptime Environment: type) type {
         fn writeHttp2Stream(ptr: *anyopaque, bytes: []const u8) bool {
             const self: *Self = @ptrCast(@alignCast(ptr));
             if (!self.http2_stream_started or self.http2_stream_finished) return false;
+            // Complete one application write across all its DATA chunks.
+            const locals = fiber.currentLocals().?;
+            const drain = locals.http2_drain;
+            locals.http2_drain = null;
+            defer locals.http2_drain = drain;
             const ok = self.writeHttp2Bytes(bytes);
             if (!ok) {
                 self.http2_stream_started = false;
@@ -964,6 +977,11 @@ fn RequestFiber(comptime Environment: type) type {
             if (protocol.access[ticket.slot]) |*entry| entry.route.set(route);
         }
 
+        fn finishDrainedHttp2Stream(ptr: *anyopaque) void {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            _ = self.finishHttp2WriterImpl(&.{}, true);
+        }
+
         fn finishHttp2Stream(self: *Self) bool {
             if (self.http2_stream_finished) return true;
             return finishHttp2Writer(self, &.{}) == 0;
@@ -971,7 +989,7 @@ fn RequestFiber(comptime Environment: type) type {
 
         fn finishHttp2Writer(ptr: *anyopaque, trailers: []const abi.HttpResponseHeader) u8 {
             const self: *Self = @ptrCast(@alignCast(ptr));
-            const result = self.finishHttp2WriterImpl(trailers);
+            const result = self.finishHttp2WriterImpl(trailers, false);
             if (result == 3) {
                 self.http2_stream_started = false;
                 self.stopHttp2IfCancelled();
@@ -979,7 +997,7 @@ fn RequestFiber(comptime Environment: type) type {
             return result;
         }
 
-        fn finishHttp2WriterImpl(self: *Self, trailers: []const abi.HttpResponseHeader) u8 {
+        fn finishHttp2WriterImpl(self: *Self, trailers: []const abi.HttpResponseHeader, drained: bool) u8 {
             if (!self.http2_stream_started or self.http2_stream_finished) return 4;
             if (trailers.len > 64) return 2;
             var fields: [64]@import("http2/engine.zig").Header = undefined;
@@ -1006,6 +1024,7 @@ fn RequestFiber(comptime Environment: type) type {
                     error.InvalidState => 4,
                     else => 3,
                 };
+                protocol.streams.entries[self.dispatch.http2.?.slot].drain_completion = drained;
                 self.thread.io.driveHttp2Output(self.dispatch);
             }
             self.http2_completion_waiting = true;

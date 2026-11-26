@@ -51,9 +51,9 @@ HTTP/2 routing and `BeforeBody` middleware run after initial headers; ordinary
 handlers receive complete finite bodies. Request IDs and effects use the worker's
 existing request fibers. A reset cancels the affected suspended request without
 closing its peers. Finite responses may include trailers. Uncompressed
-`Reply.stream` responses with default writer options send incremental DATA; see
+`Reply.stream` responses send incremental DATA; see
 [streaming](streaming.md) for their limits. Use `Handler.streaming` for incremental input or `Handler.duplex` for
-independent input and output. File responses support ranges and precompressed files. Dynamic gzip for files and SSE writer options require HTTP/1.
+independent input and output. File responses support ranges and precompressed files. Dynamic gzip for files and periodic writer keep-alives require HTTP/1.
 For uncompressed Unary and streaming RPCs, use the [integration](../../integrations/roxum-grpc/README.md).
 
 To bound HTTP/2 execution, set a listener-wide cap:

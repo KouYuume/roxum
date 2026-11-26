@@ -20,7 +20,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'support'))
 from roxum_process import stop, STOP_TIMEOUT_SECONDS
 from incremental import verify_incremental
 from half_close import verify_half_close
-from duplex import verify_duplex, verify_duplex_http1
+from duplex import verify_duplex, verify_http1
 
 
 def verify(executable, unix, debug=False):
@@ -1125,7 +1125,10 @@ def verify_completion_timeout(executable, unix):
     print('PASS write timeout after terminal selection ' + ('Unix' if unix else 'TCP'))
 
 
-def verify_stream_shutdown(executable, unix, forced):
+def verify_stream_shutdown(executable, unix, forced, sse=False, idle=False, disconnect=False):
+    expected = b"data: " + b"x" * 20000 + b"\n\n" if sse else b"firstend"
+    window = len(expected) if idle else 5
+    route = "/stream-drain" if sse else "/stream-terminal-wins"
     with tempfile.TemporaryDirectory(prefix='roxum-h2-finish-drain-', dir='/tmp') as directory:
         path = str(pathlib.Path(directory) / 'http.sock') if unix else ''
         config = pathlib.Path(directory) / 'config'
@@ -1142,9 +1145,9 @@ def verify_stream_shutdown(executable, unix, forced):
                     sock.connect(path if unix else ('127.0.0.1', int(endpoint)))
                     client = H2Connection(config=H2Configuration(client_side=True, header_encoding='utf-8'))
                     client.initiate_connection()
-                    client.update_settings({SettingCodes.INITIAL_WINDOW_SIZE: 5})
+                    client.update_settings({SettingCodes.INITIAL_WINDOW_SIZE: window})
                     client.send_headers(1, [(':method', 'GET'), (':scheme', 'http'),
-                                           (':authority', 'localhost'), (':path', '/stream-terminal-wins')], end_stream=True)
+                                           (':authority', 'localhost'), (':path', route)], end_stream=True)
                     sock.sendall(client.data_to_send())
                     pending, body, trailers = b'', b'', []
                     ended, reset, goaway = False, False, False
@@ -1171,45 +1174,55 @@ def verify_stream_shutdown(executable, unix, forced):
                         outgoing = client.data_to_send()
                         if outgoing:
                             sock.sendall(outgoing)
-                    while body != b'first':
+                    while len(body) < window:
                         wire = sock.recv(65536)
                         assert wire
                         consume(wire)
+                    assert body == expected[:window]
                     os.killpg(process.pid, signal.SIGTERM)
                     while not goaway:
                         wire = sock.recv(65536)
                         assert wire
                         consume(wire)
-                    assert not ended
-                    if not forced:
-                        client.increment_flow_control_window(3, stream_id=1)
+                    if not idle:
+                        assert not ended
+                    if disconnect:
+                        client.reset_stream(1)
+                        sock.sendall(client.data_to_send())
+                    elif not forced and not idle:
+                        client.increment_flow_control_window(len(expected) - window, stream_id=1)
                         sock.sendall(client.data_to_send())
                     while True:
                         wire = sock.recv(65536)
                         if not wire:
                             break
                         consume(wire)
-                    if forced:
-                        assert body == b'first' and not ended and not trailers
+                    if forced or disconnect:
+                        assert body == expected[:window] and not ended and not trailers
                     else:
-                        assert body == b'firstend' and ended and not reset
-                        assert trailers == [{'x-result': 'normal'}]
+                        assert body == expected and ended and not reset
+                        assert trailers == ([{}] if sse else [{'x-result': 'normal'}]), trailers
                 exit_status = process.wait(timeout=STOP_TIMEOUT_SECONDS)
                 errors.seek(0)
                 diagnostic = errors.read()
                 assert exit_status == (1 if forced else 0), (exit_status, diagnostic)
+                if sse and not forced:
+                    entries = [json.loads(line) for line in diagnostic.splitlines() if line.startswith("{")]
+                    assert [e["outcome"] for e in entries if e.get("route") == route] == ["client_closed" if disconnect else "drained"], diagnostic
+                assert "drained writer resumed application code" not in diagnostic, diagnostic
                 if forced:
                     assert "the drain timeout passed; 1 connections were cut" in diagnostic, diagnostic
                 assert 'cancelled finish returned' not in diagnostic and 'panic' not in diagnostic.lower(), diagnostic
             finally:
                 stop(process)
                 process.stdout.close()
-    print('PASS streaming completion ' + ('forced' if forced else 'graceful') + ' shutdown ' + ('Unix' if unix else 'TCP'))
+    scenario = 'disconnect' if disconnect else 'forced' if forced else 'idle' if idle else 'backpressure'
+    print(f'PASS {route} shutdown ({scenario}) over {"Unix" if unix else "TCP"}')
 
 
 if __name__ == '__main__':
     executable = str(pathlib.Path(sys.argv[1]).resolve())
-    verify_duplex_http1(executable)
+    verify_http1(executable)
     verify_duplex(executable, False)
     verify_duplex(executable, True)
     verify_half_close(executable, False)
@@ -1224,6 +1237,9 @@ if __name__ == '__main__':
         verify_completion_timeout(executable, unix)
         for forced in (False, True):
             verify_stream_shutdown(executable, unix, forced)
+            verify_stream_shutdown(executable, unix, forced, sse=True)
+        verify_stream_shutdown(executable, unix, False, sse=True, idle=True)
+        verify_stream_shutdown(executable, unix, False, sse=True, disconnect=True)
     verify(executable, False)
     verify(executable, True)
     verify(executable, False, True)

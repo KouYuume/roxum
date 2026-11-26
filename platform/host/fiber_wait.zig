@@ -111,7 +111,19 @@ pub fn stopIfStreamEnds() void {
     switch (target.stop.load(std.builtin.AtomicOrder.acquire)) {
         fiber.Stop.none => return,
         fiber.Stop.client_gone => {},
-        fiber.Stop.drained => if ((fiber.currentLocals() orelse unreachable).stream_guard) |guard| guard.end(guard.context),
+        fiber.Stop.drained => {
+            const locals = fiber.currentLocals() orelse unreachable;
+            if (locals.stream_guard) |guard| guard.end(guard.context);
+            if (locals.http2_drain) |action| {
+                locals.http2_drain = null;
+                // Completion can itself wait for credit. A subsequent reset
+                // must still wake that wait as client_gone.
+                if (target.stop.cmpxchgStrong(fiber.Stop.drained, fiber.Stop.none, std.builtin.AtomicOrder.acq_rel, std.builtin.AtomicOrder.acquire) == null) {
+                    action.finish(action.context);
+                    _ = target.stop.cmpxchgStrong(fiber.Stop.none, fiber.Stop.drained, std.builtin.AtomicOrder.acq_rel, std.builtin.AtomicOrder.acquire);
+                }
+            }
+        },
     }
     cancelCurrent();
 }

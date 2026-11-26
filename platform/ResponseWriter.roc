@@ -5,8 +5,8 @@ import Http
 ## `Reply.stream`. The handle is opaque and valid only inside that function.
 ResponseWriter :: U64.{
 	## How a written body behaves while its function waits, for
-	## `Reply.stream_with`. Fields left out keep their defaults. HTTP/2
-	## currently supports only the default options.
+	## `Reply.stream_with`. Fields left out keep their defaults. Periodic
+	## keep-alive writes require HTTP/1.
 	##
 	## `ends_on_drain: Bool.True` lets the server end the body when it stops
 	##: once a drain starts, the function stops at its next wait, as

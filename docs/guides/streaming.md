@@ -11,7 +11,7 @@ Choose the API according to which side produces data incrementally:
 |---|---|---|
 | Upload a request in parts | [`Handler.streaming`](#reading-a-large-request-body) | HTTP/1 and HTTP/2 |
 | Send a response in parts | [`Reply.stream`](#writing-a-body) | HTTP/1 and HTTP/2 |
-| Send events with keep-alive comments | [`roxum-sse`](#server-sent-events) | HTTP/1 |
+| Send server-sent events | [`roxum-sse`](#server-sent-events) | HTTP/1 and HTTP/2 (periodic keep-alive comments require HTTP/1) |
 | Keep reading while response output is blocked | [`Handler.duplex`](#independent-http2-input-and-output) | HTTP/2 |
 
 ## Independent HTTP/2 input and output
@@ -80,7 +80,7 @@ wait: the code after it never runs, and what the request held is given back. The
 
 `Reply.json_lines` is the same for [JSON Lines](responses.md#json-lines).
 
-On HTTP/2, use default writer options and uncompressed output. To attach trailers,
+On HTTP/2, use uncompressed output. To attach trailers,
 call `ResponseWriter.finish!(writer, trailers)` inside the callback. Invalid
 trailers can be corrected and retried. Successful finish closes the writer after
 terminal output is written to the socket. Returning `Err(StreamClosed)` aborts
@@ -89,11 +89,11 @@ unfinished output on either protocol. For execution expiry after headers, see
 
 ### Options
 
-On HTTP/1, `Reply.stream_with` accepts the following writer options:
+`Reply.stream_with` accepts the following writer options:
 
 | field | default | |
 |---|---|---|
-| `keep_alive` | `ResponseWriter.KeepAlive.None` | `Every({ milliseconds, bytes })` writes `bytes` each time `milliseconds` pass without a write, so proxies keep a quiet connection |
+| `keep_alive` | `ResponseWriter.KeepAlive.None` | `Every({ milliseconds, bytes })` (HTTP/1 only) writes `bytes` each time `milliseconds` pass without a write, so proxies keep a quiet connection |
 | `ends_on_drain` | `Bool.False` | when the server stops, end the body at the function's next wait |
 
 The keep-alive bytes are a part of the body like any other, so they must mean nothing to the client (an SSE comment,
@@ -139,6 +139,8 @@ send_time! = |sse, at| {
 | `keep_alive` | `Sse.KeepAlive.Every(15_000)` | `Sse.KeepAlive.Off` sends no comments |
 | `retry_milliseconds` | `Sse.Retry.None` | `Sse.Retry.Value(ms)` sends a `retry` field first: how long the client waits before it connects again |
 | `ends_on_drain` | `Bool.True` | `Bool.False` makes a drain wait for the stream to end |
+
+For HTTP/2, set `keep_alive: Sse.KeepAlive.Off`. Graceful drain works on both protocols.
 
 `Sse.with_retry` sets `retry` on a single event instead.
 
