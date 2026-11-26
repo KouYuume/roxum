@@ -19,10 +19,7 @@ Also run the affected integration E2E tests; refreshing hashes is not compatibil
 
 See [versioning](versioning.md) for compatibility policy. Release tooling builds the platform and integration bundles together and records URLs, versions, and hashes in release metadata.
 
-The gRPC release gate exercises all four RPC forms in the
-[greeting service](../../integrations/roxum-grpc/example/README.md) outside the
-checkout using the distributed generator and URL imports of the platform,
-roxum-grpc and roc-protobuf. `zig build test-m13a` checks all three compiler
-backends with fresh download caches; it also validates the gRPC artifact hash,
-version, platform range and expanded-size metadata. See the
-[gRPC distribution guide](../../integrations/roxum-grpc/DISTRIBUTION.md).
+`zig build test-m13a` builds and runs a release-bundle consumer on all three Roc
+backends. Its gRPC check uses dev and speed builds to verify all four RPC forms
+over cleartext HTTP/2 and direct TLS. See the [distribution guide](../../integrations/roxum-grpc/DISTRIBUTION.md#release-compatibility-and-verification)
+for the artifact and generated-service checks.

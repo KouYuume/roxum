@@ -53,7 +53,7 @@ Each worker then writes one JSON line on stderr per response:
 | `method` | The request method; left out when the host answered before reading a request line |
 | `route` | The route pattern that answered, with any nest prefix, such as `/api/{tenant}/users/{id}`, or `fallback` for a custom fallback; left out for a 405, the default 404, and answers the app did not give |
 | `path` | The request path without its query; only with `Server.AccessLog.JsonLinesWithPath` |
-| `status` | The status code sent |
+| `status` | The recorded response status, or 0 if no status was recorded before an HTTP/2 reset |
 | `outcome` | Why the response is what it is; see below |
 | `body_bytes` | Response body bytes, without the head; for a stream, every chunk; none for `HEAD` |
 | `duration_us` | Microseconds from the complete request head to the response being done |
@@ -70,17 +70,17 @@ The `outcome` tells apart responses with the same status:
 | Outcome | Status | Meaning |
 |---|---|---|
 | `handled` | any | The app answered, and the whole response was written |
-| `crashed` | 500 | The app's code crashed while handling the request |
+| `crashed` | 500, 0, or a started response’s status | On HTTP/1 a crash before headers produces 500. On HTTP/2 it resets the stream. A crash after headers interrupts the response. |
 | `bad_request` | 400, 414, 417, 431, 501, 505 | The host refused a malformed or unsupported request |
-| `timeout` | 408 | The request head or body did not arrive in time |
+| `timeout` | 408 on HTTP/1; varies on HTTP/2 | An I/O or execution deadline expired. An HTTP/2 expiry response can carry its own status. |
 | `too_large` | 413 | The request body was over the limit |
-| `queue_full` | 503 | The worker's queue was full (`Server.Limits.maximum_queued_requests`) |
-| `queue_timeout` | 503 | The request waited past `Server.Limits.queue_timeout_milliseconds` |
-| `in_progress_full` | 503 | The worker had `Server.Limits.maximum_requests_in_progress` requests |
+| `queue_full` | HTTP/1: 503, HTTP/2: 0 | The worker's queue was full (`Server.Limits.maximum_queued_requests`) |
+| `queue_timeout` | HTTP/1: 503, HTTP/2: 0 | The request waited past `Server.Limits.queue_timeout_milliseconds` |
+| `in_progress_full` | HTTP/1: 503, HTTP/2: 0 | The worker had `Server.Limits.maximum_requests_in_progress` requests |
 | `overloaded` | 503 | An overloaded worker answered a new connection without reading it |
 | `body_budget` | 503 | The request bodies the worker was receiving filled its buffer |
 | `stream_limit` | 503 | The worker already wrote `Server.Limits.maximum_streams` streams |
-| `encode_failed` | 500 | The app's reply could not be sent, such as an invalid header value |
+| `encode_failed` | 500 on HTTP/1; varies on HTTP/2 | The app's reply could not be sent, such as an invalid header value |
 | `client_closed` | any | The connection closed or failed before the whole response was written |
 | `drained` | any | The worker stopped while the app wrote a body marked `ends_on_drain`; the body ended cleanly there |
 

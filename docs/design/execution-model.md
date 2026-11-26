@@ -66,7 +66,8 @@ Initialize Roc on one thread before creating the remaining Roc threads. The comp
 
 ## Failure and shutdown
 
-A Roc crash on a request fiber abandons that fiber, releases its heap, and closes borrowed TCP resources. Before the response head, the host returns 500 with connection close; after the head, it closes without attempting another response. Other requests in the worker continue.
+A Roc crash on a request fiber abandons that fiber, releases its heap, and closes borrowed TCP resources. On HTTP/1 the host sends 500 if the response head is still pending, then closes the connection.
+On HTTP/2 it resets the affected stream. Other requests in the worker continue.
 
 A crash outside a request fiber, host panic, or stack overflow terminates the worker. All of that worker's connections are lost; the supervisor can restart it. Stack overflow is fatal because host or libc code may hold locks.
 

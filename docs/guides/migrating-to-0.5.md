@@ -1,9 +1,9 @@
 # Migrating from 0.4 to 0.5
 
 Build applications with the pinned Roc `0.1.0-RC2` compiler and matching host
-archives. Once 0.5 is released, update the platform and integration URLs in
-your app together using its `release.json`. Each published integration embeds
-the platform URL it was built against. For local builds, follow the
+archives. Use the 0.5 release's `release.json` to update your app's platform
+and integration URLs together. Each published integration embeds the platform
+URL it was built against. For local builds, follow the
 [toolchain setup](../toolchain.md).
 The public Roc handler signatures, listener options and their defaults are
 unchanged from 0.4.

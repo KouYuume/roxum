@@ -129,7 +129,6 @@ nginx configuration with verified TLS and TCP/Unix upstreams.
 ## Server behavior
 
 - Bind to `127.0.0.1` when only a proxy on the same host should connect.
-- Request heads are limited to 32 KiB. Buffered bodies default to 2 MiB; streaming bodies have no default size limit. Configure `Server.Limits` and route `BodyLimit` values deliberately.
-- A handler crash before sending the head returns 500 and closes the connection. A crash after a streaming head closes without another status line.
-- An initialization crash terminates the worker and drops its connections. Restrict proxy retries to requests safe to repeat.
-- HTTP/2 or HTTP/3 may be used between clients and the proxy; the general HTTP examples use HTTP/1.1 upstreams; native gRPC uses HTTP/2.
+- Match proxy limits to the upstream protocol and the application's [body limits and timeouts](deployment.md#keep-alive-and-timeouts).
+- Restrict retries to requests safe to repeat. A failed upstream request can already have produced application effects. See [handler and worker crashes](deployment.md#crashes).
+- The HTTP examples use HTTP/1.1 upstreams. Native gRPC requires an HTTP/2 upstream. Client-facing connections can use any protocol the proxy supports.

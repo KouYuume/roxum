@@ -45,7 +45,7 @@ Use `python3 tools/check.py --only test-grpc-example` to run the two-thread serv
 dev and speed with both allocators. The more exhaustive protocol, deadline and
 cancellation matrices remain in `tests/grpc-unary` and `tests/grpc-streaming`.
 
-For direct TLS with core 0.4, replace `Server.Protocol.Http2`
+For direct TLS, replace `Server.Protocol.Http2`
 in `app.roc` with the following listener setting and rebuild:
 
 ```roc
