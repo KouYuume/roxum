@@ -11,7 +11,7 @@ Choose the API according to which side produces data incrementally:
 |---|---|---|
 | Upload a request in parts | [`Handler.streaming`](#reading-a-large-request-body) | HTTP/1 and HTTP/2 |
 | Send a response in parts | [`Reply.stream`](#writing-a-body) | HTTP/1 and HTTP/2 |
-| Send server-sent events | [`roxum-sse`](#server-sent-events) | HTTP/1 and HTTP/2 (periodic keep-alive comments require HTTP/1) |
+| Send server-sent events | [`roxum-sse`](#server-sent-events) | HTTP/1 and HTTP/2 |
 | Keep reading while response output is blocked | [`Handler.duplex`](#independent-http2-input-and-output) | HTTP/2 |
 
 ## Independent HTTP/2 input and output
@@ -93,11 +93,13 @@ unfinished output on either protocol. For execution expiry after headers, see
 
 | field | default | |
 |---|---|---|
-| `keep_alive` | `ResponseWriter.KeepAlive.None` | `Every({ milliseconds, bytes })` (HTTP/1 only) writes `bytes` each time `milliseconds` pass without a write, so proxies keep a quiet connection |
+| `keep_alive` | `ResponseWriter.KeepAlive.None` | `Every({ milliseconds, bytes })` writes `bytes` each time `milliseconds` pass without a write, so proxies keep a quiet connection |
 | `ends_on_drain` | `Bool.False` | when the server stops, end the body at the function's next wait |
 
 The keep-alive bytes are a part of the body like any other, so they must mean nothing to the client (an SSE comment,
-a blank line of NDJSON). They never go into the middle of a write.
+a blank line of NDJSON). They never go into the middle of a write. HTTP/2 checks the interval every 50 ms.
+A shorter interval still permits at most one send per tick. A busy connection or a slow reader can delay delivery,
+and missed sends do not accumulate.
 
 ### Stopping the server
 
@@ -140,7 +142,7 @@ send_time! = |sse, at| {
 | `retry_milliseconds` | `Sse.Retry.None` | `Sse.Retry.Value(ms)` sends a `retry` field first: how long the client waits before it connects again |
 | `ends_on_drain` | `Bool.True` | `Bool.False` makes a drain wait for the stream to end |
 
-For HTTP/2, set `keep_alive: Sse.KeepAlive.Off`. Graceful drain works on both protocols.
+On HTTP/2, set `Server.Timeouts.response_write_milliseconds` for the intended lifetime of the stream. Sending events or keep-alive comments does not extend this deadline.
 
 `Sse.with_retry` sets `retry` on a single event instead.
 

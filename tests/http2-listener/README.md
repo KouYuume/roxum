@@ -37,7 +37,8 @@ request completes, then verify exact DATA and zero-credit completion. Resetting
 more than sixteen writers exercises lease reuse. A configured two-writer quota
 returns 503 for the next writer and recovers after cleanup. HEAD and 204/205/304
 skip the callback; these finite responses and quota 503 preserve the matched
-route in the access log. Unsupported writer options reset only their stream. Two large responses
+route in the access log. SSE checks hold back stream credit mid-event, verify repeated
+keep-alive comments after the event, and drain with a comment partly sent. Two large responses
 with ample HTTP/2 credit and a small client socket buffer also leave another
 connection responsive, then complete when the client resumes reading. Execution
 expiry after commit cannot substitute its registered finite response, and callback

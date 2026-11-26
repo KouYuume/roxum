@@ -15,7 +15,7 @@ Its focus is independently deployable HTTP APIs and backend services. See [scope
 - **Build-time route checks.** Invalid patterns and duplicate routes fail compilation when routers are top-level values.
 - **Tags and staged middleware.** Filter by application-defined typed tags and place work at `BeforeBody`, `OnChunk`, `AfterBody`, or `AfterHandler`. See [middleware](docs/guides/middleware.md) and the [tags and middleware example](examples/middleware/README.md).
 
-HTTP/1.1 is the default and supports streaming, SSE, and file serving. [HTTP/2](docs/guides/deployment.md#opt-in-http2) supports incremental input and output, trailers, and all four uncompressed gRPC call forms. Both protocols run over IPv4/IPv6 TCP or filesystem Unix sockets. On TCP, a [TLS listener](docs/guides/deployment.md#inbound-tls) can negotiate either protocol.
+HTTP/1.1 (the default) and [HTTP/2](docs/guides/deployment.md#opt-in-http2) support streaming, SSE, and file serving. HTTP/2 also supports trailers and all four uncompressed gRPC call forms. Both protocols run over IPv4/IPv6 TCP or filesystem Unix sockets. On TCP, a [TLS listener](docs/guides/deployment.md#inbound-tls) can negotiate either protocol.
 
 ## Comparison with axum and Go
 

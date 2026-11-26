@@ -17,9 +17,8 @@ and the [0.4 acceptance checks](inbound-tls-0.4.md) for verification.
 
 - [File responses](../guides/files.md#serving-a-directory) serve known-length files over
   HTTP/1.1 and HTTP/2, including ranges and precompressed files.
-- SSE writers support graceful drain on both protocols. Add periodic keep-alive
-  comments on HTTP/2. Exercise the same application routes
-  over HTTP/1.1 and HTTP/2, including a slow reader and a disconnect.
+- [SSE writers](../guides/streaming.md#server-sent-events) support periodic keep-alive
+  comments and graceful drain over HTTP/1.1 and HTTP/2.
 - Exercise an SSE subscription in which a separate request publishes an event.
   Check delivery and cleanup when the subscriber leaves. The application or an
   external service owns subscriptions and history.

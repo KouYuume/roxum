@@ -5,8 +5,7 @@ import Http
 ## `Reply.stream`. The handle is opaque and valid only inside that function.
 ResponseWriter :: U64.{
 	## How a written body behaves while its function waits, for
-	## `Reply.stream_with`. Fields left out keep their defaults. Periodic
-	## keep-alive writes require HTTP/1.
+	## `Reply.stream_with`. Fields left out keep their defaults.
 	##
 	## `ends_on_drain: Bool.True` lets the server end the body when it stops
 	##: once a drain starts, the function stops at its next wait, as
@@ -20,7 +19,8 @@ ResponseWriter :: U64.{
 
 	## Bytes the host writes when the body has been quiet for a while:
 	## `Every({ milliseconds, bytes })` writes `bytes` each time `milliseconds`
-	## pass without a write, while the function waits for anything. They go
+	## pass without a write, while the function waits. HTTP/2 checks the interval
+	## on a 50 ms timer and skips missed sends under load or backpressure. The bytes go
 	## out as a part of the body, never inside another; proxies that close
 	## quiet connections then keep this one. `None` writes nothing.
 	KeepAlive := [None, Every({ milliseconds : U64, bytes : List(U8) })]

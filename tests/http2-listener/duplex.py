@@ -191,14 +191,16 @@ def verify_http1(executable):
                     response = client.getresponse()
                     assert response.status == 501
                     response.read()
-                    client.request('GET', '/stream-drain', headers={'x-request-id': 'http1-drain'})
+                    client.request('GET', '/stream-keep-alive', headers={'x-request-id': 'http1-drain'})
                     response = client.getresponse()
                     assert response.status == 200
                     event = b'data: ' + b'x' * 20000 + b'\n\n'
                     assert response.read(len(event)) == event
+                    assert response.read(6) == b':\n\n:\n\n'
                     os.killpg(process.pid, signal.SIGTERM)
                     # The chunked reader requires the final zero-length chunk.
-                    assert response.read() == b''
+                    remaining = response.read()
+                    assert remaining == b':\n\n' * (len(remaining) // 3)
                 finally:
                     client.close()
                 assert process.wait(timeout=10) == 0
