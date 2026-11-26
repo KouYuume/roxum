@@ -22,12 +22,14 @@ Server :: [].{
 		## Time to receive a whole request head after its first byte.
 		request_head_milliseconds : U64,
 
-		## Time to receive a whole request body.
+		## On HTTP/1, time for a whole buffered body or for each wait for streamed
+		## input. On HTTP/2, time from metadata completion until the body arrives,
+		## including time spent in callbacks.
 		request_body_milliseconds : U64,
 
-		## Time to write a whole response, or, for a streamed response, each of
-		## its parts: the head and every chunk get this long, so a stream may
-		## run longer in total while the client keeps reading.
+		## Time to write a whole response. HTTP/1 gives the head and each chunk
+		## of a streamed response their own write timeout. On HTTP/2 the deadline
+		## covers the whole response, even while data or keep-alives are sent.
 		response_write_milliseconds : U64,
 	}.{
 
@@ -101,13 +103,12 @@ Server :: [].{
 
 		request_memory : Server.MemoryLimit ?? Server.MemoryLimit.Auto,
 
-		## A request body received whole before the handler runs, as every handler
-		## but `Handler.streaming` has it: past this many bytes the request is
-		## answered `413 Content Too Large` and the handler does not run.
+		## Maximum size of a buffered request body. A larger body receives
+		## `413 Content Too Large` before the handler runs.
 		maximum_body_bytes : U64 ?? 2_097_152,
 
-		## A request body read by a `Handler.streaming` handler, which holds only
-		## the part being read. `Unlimited` by default: the request's
+		## A request body read incrementally by `Handler.streaming` or
+		## `Handler.duplex`. `Unlimited` by default: the request's
 		## memory limit still holds.
 		##
 		## A route's `BodyLimit` layers change either for its requests.
@@ -171,8 +172,10 @@ Server :: [].{
 	Tls := {
 		certificate_chain_path : Str,
 		private_key_path : Str,
+
 		## Absolute time from admission, in milliseconds (1 to 3,600,000).
 		handshake_timeout_milliseconds : U64 ?? 5_000,
+
 		## Concurrent handshakes per worker (1 to 65,536). Each uses a connection slot.
 		maximum_pending_handshakes : U32 ?? 64,
 	}
