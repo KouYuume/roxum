@@ -39,6 +39,21 @@ SCENARIOS = [
     ("keep-alive-heavy", "GET", "/plaintext", 16, None),
     ("many-connections", "GET", "/plaintext", 1000, None),
 ]
+PERFORMANCE_SCENARIOS = [
+    ("dynamic-json", "GET", "/dynamic/42", 64, None),
+    ("file-64k", "GET", "/file-64k", 64, None),
+]
+FILE_CONTENTS = bytes(range(256)) * 256
+SOURCE_HEADER = "x-bench-source"
+MEASURED_SOURCE = "bench"
+
+
+def selected_scenarios(names):
+    if not names:
+        return SCENARIOS
+    return [row for row in SCENARIOS + PERFORMANCE_SCENARIOS if row[0] in names]
+
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -86,6 +101,16 @@ def run_server(executable):
 
 
 def validate_response(port, method, path, body, host="127.0.0.1"):
+    if path.startswith("/dynamic/"):
+        for target, source in ((path, MEASURED_SOURCE), (path, 'probe"two'), ("/dynamic/73", MEASURED_SOURCE)):
+            payload = json.dumps([target.rsplit("/", 1)[1], source], separators=(",", ":")).encode()
+            check_response(port, method, target, body, host, payload, "application/json",
+                           headers={SOURCE_HEADER: source}, expected_headers={"x-bench-layer": "active"})
+        return
+    if path == "/file-64k":
+        check_response(port, method, path, body, host, FILE_CONTENTS, "application/octet-stream",
+                       expected_headers={"content-length": str(len(FILE_CONTENTS))})
+        return
     if path == "/plaintext":
         expected, media_type = b"Hello, World!", "text/plain"
     elif path == "/json":
@@ -96,11 +121,18 @@ def validate_response(port, method, path, body, host="127.0.0.1"):
         expected, media_type = path.rsplit("/", 1)[1].encode(), "text/plain"
     else:
         raise ValueError(f"no response contract for {path}")
+    check_response(port, method, path, body, host, expected, media_type)
+
+
+def check_response(port, method, path, body, host, expected, media_type, headers=None, expected_headers=None):
     connection = http.client.HTTPConnection(host, port, timeout=10)
     try:
-        connection.request(method, path, body=body)
+        connection.request(method, path, body=body, headers=headers or {})
         response = connection.getresponse()
         received = response.read(len(expected) + 1)
+        for name, value in (expected_headers or {}).items():
+            if response.getheader(name) != value:
+                raise ValueError(f"response contract failed for {path}: expected {name}={value}")
         actual_type = (response.getheader("content-type") or "").split(";", 1)[0].strip().lower()
         if response.status != 200 or received != expected or actual_type != media_type:
             raise ValueError(f"response contract failed for {path}: status={response.status}, "
@@ -147,6 +179,8 @@ def run_oha(oha, port, method, path, connections, body, duration=None, host="127
     duration = duration or DURATION
     command = [oha, "-z", duration, "-w", "-t", "10s", "--http-version", "1.1",
                "-c", str(connections), "--no-tui", "--output-format", "json", "-m", method]
+    if path.startswith("/dynamic/"):
+        command += ["-H", f"{SOURCE_HEADER}: {MEASURED_SOURCE}"]
     if rate is not None:
         if type(rate) is not int or rate <= 0:
             raise ValueError('rate must be a positive integer')
@@ -183,6 +217,14 @@ def run_oha(oha, port, method, path, connections, body, duration=None, host="127
         if completed.returncode:
             record["invalid_reasons"].append("load generator exited unsuccessfully")
             record["valid"] = False
+        if path == "/file-64k" and record["valid"]:
+            expected = record["status"]["200"] * len(FILE_CONTENTS)
+            received = record["raw"]["summary"].get("totalData")
+            if type(received) is int and received == expected:
+                record["payload_bytes_per_sec"] = record["rps"] * len(FILE_CONTENTS)
+            else:
+                record["valid"] = False
+                record["invalid_reasons"].append(f"expected {expected} payload bytes, oha reported {received!r}")
         if rate is not None:
             record['offered_load'] = {'target_rps': rate, 'latency_correction': True,
                                      'minimum_target_fraction': 0.99,
@@ -268,7 +310,7 @@ def main():
     parser.add_argument("--runs", type=positive, default=6)
     parser.add_argument("--seconds", type=positive, default=30)
     parser.add_argument("--warmup-seconds", type=positive, default=5)
-    parser.add_argument("--scenario", action="append", choices=[row[0] for row in SCENARIOS])
+    parser.add_argument("--scenario", action="append", choices=[row[0] for row in SCENARIOS + PERFORMANCE_SCENARIOS])
     parser.add_argument("oha")
     parser.add_argument("output", type=Path)
     parser.add_argument("servers", nargs="+")
@@ -305,9 +347,7 @@ def main():
         print("warning: repetitions are not a multiple of candidate count; order positions are unbalanced",
               file=sys.stderr)
     save(args.output, result)
-    for scenario, method, path, connections, body in SCENARIOS:
-        if args.scenario and scenario not in args.scenario:
-            continue
+    for scenario, method, path, connections, body in selected_scenarios(args.scenario):
         runs = {name: [] for name, _ in servers}
         for index in range(args.runs):
             order = servers[index % len(servers):] + servers[:index % len(servers)]

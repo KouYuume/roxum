@@ -42,19 +42,12 @@ and integration APIs are unchanged. RC2's `roc bump` reports no API change for
 `Server` with `Http.IpAddr`. It cannot compare the complete platform because
 `Config.load!` exposes a type from the local TOML package.
 
-## Improve performance
+## 0.6 — HTTP performance
 
-Measure the feature-complete implementation under the
-[HTTP comparison protocol](../../bench/m13/protocol.md). Include dynamic JSON
-with middleware and file or streaming traffic alongside fixed responses.
-Record resource budgets, raw repetitions, failures, throughput, tail latency
-and memory. Use the [investigation procedure](../../bench/m13/investigation.md)
-to attribute a reproducible bottleneck before optimizing it.
-
-Close the phase with before/after measurements for each retained optimization,
-correctness checks and results for other affected workloads. Record remaining
-gaps and the conditions of the measurements in [performance status](../performance.md).
-These results serve as the baseline for the refactoring phase.
+The [0.6 performance plan](performance-0.6.md) defines the axum comparison,
+workloads and acceptance criteria. Close the phase with measured parity or a
+reproducible Roc constraint and a concrete test for reopening each remaining
+gap. The results become the baseline for refactoring.
 
 ## Refactor before 1.0
 
