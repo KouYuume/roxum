@@ -37,8 +37,10 @@ at a time and sends a known Content-Length. Only accepted DATA counts toward
 that length. A short read at EOF aborts the stream. Cancellation releases the
 file descriptor, read buffer and writer slot.
 
-This callback API currently supports default writer options and uncompressed
-output only. Keep-alive payloads, `ends_on_drain`, and
+With `ends_on_drain`, shutdown wakes the callback at its next eligible wait.
+A write in progress completes its DATA parts before the host ends the stream.
+Socket backpressure remains subject to the write and drain deadlines.
+The callback API supports uncompressed output. Periodic keep-alive payloads and
 trailers attached with `Reply.with_trailers` remain unsupported for callback
 writers. Use `ResponseWriter.finish!` for streamed trailers; unsupported writer
 options reset the attempted stream. Request reads use bounded incremental input;
@@ -87,7 +89,7 @@ needs no reset and does not stop response writes. This follows
 [RFC 9113 section 8.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.1).
 The protocol lease remains reserved until closure, and request resources remain
 pinned until callback cleanup. A normal completion remains `handled` in access
-logs; an expiry completion remains `timeout`. A subsequent callback wait is
+logs. Graceful writer drain records `drained`, and expiry records `timeout`. A subsequent callback wait is
 cancelled after closure, just as when request EOF precedes completion.
 
 ## Engine output

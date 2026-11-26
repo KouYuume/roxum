@@ -439,6 +439,11 @@ fn lend(pool: *Pool, pool_index: usize, deadline: tcp.Deadline, connect_deadline
             _ = wait_hook(-1, 0, deadline.expires_at_nanoseconds);
             state_lock.lock();
             pool.removeWaiter(self);
+            if (self.stop.load(std.builtin.AtomicOrder.acquire) != fiber.Stop.none) {
+                // A release may have woken this waiter just before cancellation.
+                pool.wakeOne();
+                break :busy true;
+            }
             break :busy false;
         };
         if (busy) {
@@ -879,6 +884,41 @@ fn received(tag: abi.HostTcpReceivedTag) abi.HostTcpReceived {
     result.payload = std.mem.zeroes(@TypeOf(result.payload));
     result.tag = tag;
     return result;
+}
+
+test "a stopped pool waiter leaves the queue before the acquire deadline" {
+    const Probe = struct {
+        fn run(_: *fiber.Fiber) void {
+            _ = hostedTcpAcquire(1);
+        }
+    };
+    var connections = [_]Connection{.{ .state = State.lent }};
+    var pool = Pool{
+        .host = &.{},
+        .port = 1,
+        .bundle = null,
+        .tls_later = false,
+        .connect_timeout_milliseconds = 1,
+        .acquire_timeout_milliseconds = 60_000,
+        .connections = &connections,
+    };
+    pools[0] = &pool;
+    defer pools[0] = null;
+    defer pool.waiters.deinit(std.heap.smp_allocator);
+    const previous = tcp.fiber_wait;
+    tcp.fiber_wait = fiber_wait.waitSocketHook;
+    defer tcp.fiber_wait = previous;
+    const target = try fiber.Fiber.create();
+    defer target.destroy();
+    for ([_]fiber.Stop{ fiber.Stop.drained, fiber.Stop.client_gone }) |stop| {
+        target.prepare(Probe.run, null);
+        fiber.resumeFiber(target);
+        try std.testing.expectEqual(@as(usize, 1), pool.waiters.items.len);
+        fiber_wait.wakeStopped(target, target.wait_serial, stop);
+        fiber.resumeFiber(target);
+        try std.testing.expect(target.cancelled);
+        try std.testing.expectEqual(@as(usize, 0), pool.waiters.items.len);
+    }
 }
 
 test "handles name the pool, the slot, and the lease" {
