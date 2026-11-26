@@ -33,6 +33,10 @@ fn closeCurrent() void {
 
 /// Closes the file a request held when it stopped or ended.
 pub fn closeHeldBy(target: *fiber.Fiber) void {
+    if (target.locals.file_buffer) |buffer| {
+        raw_bytes.free(buffer);
+        target.locals.file_buffer = null;
+    }
     if (target.locals.file < 0) return;
     files.close(target.locals.file);
     target.locals.file = -1;
@@ -107,7 +111,12 @@ fn send(token: u64, offset: u64, length: u64) bool {
     const descriptor = slot().*;
     if (descriptor < 0) return false;
     const buffer = raw_bytes.alloc(@intCast(@min(length, part_bytes))) catch return false;
-    defer raw_bytes.free(buffer);
+    const locals = fiber.currentLocals();
+    if (locals) |state| state.file_buffer = buffer;
+    defer {
+        if (locals) |state| state.file_buffer = null;
+        raw_bytes.free(buffer);
+    }
     var position = offset;
     var left = length;
     while (left != 0) {
@@ -115,7 +124,7 @@ fn send(token: u64, offset: u64, length: u64) bool {
         var read = ReadJob{ .descriptor = descriptor, .buffer = buffer[0..wanted], .offset = position };
         blocking.run(&read.job);
         const count = read.result catch return false;
-        // The file shrank: the body ends short and the connection closes.
+        // EOF before the declared length aborts the response.
         if (count == 0) return false;
         if (!response_writer.write(token, buffer[0..count])) return false;
         position += count;

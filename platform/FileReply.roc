@@ -16,14 +16,14 @@ FileReply := [].{
 	## already sent.
 	## With `compression` from `Compression.layer`, a file sent whole is
 	## gzip-compressed as it goes unless a precompressed one is.
-	send! : Http.Request, Http.Response, { root : FileRoot, path : Str }, Try({ above_bytes : U64 }, [NotCompressible]) => Http.Response
-	send! = |request, response, target, compression| {
+	send! : Http.Request, Http.Response, { root : FileRoot, path : Str }, Try({ above_bytes : U64 }, [NotCompressible]), Str => Http.Response
+	send! = |request, response, target, compression, route| {
 		root = target.root
 		path = relative(target.path)
 		answer = match HostFiles.open!(FileRoot.handle(root), path) {
 			HostFiles.FileOpened.Opened(entry) =>
 				if !entry.directory {
-					file_answer!(request, response, root, path, entry, compression)
+					file_answer!(request, response, root, path, entry, compression, route)
 				} else if Str.ends_with(request.path, "/") {
 					index = if path == "" or Str.ends_with(path, "/") { "${path}index.html" } else { "${path}/index.html" }
 					match HostFiles.open!(FileRoot.handle(root), index) {
@@ -31,7 +31,7 @@ FileReply := [].{
 							if index_entry.directory {
 								Missing
 							} else {
-								file_answer!(request, response, root, index, index_entry, compression)
+								file_answer!(request, response, root, index, index_entry, compression, route)
 							}
 						HostFiles.FileOpened.NotFound => Missing
 						HostFiles.FileOpened.Failed => Broken
@@ -240,8 +240,8 @@ FileReply := [].{
 
 ## A file opened under the root, or the precompressed one the client takes:
 ## its response, sent or to send.
-file_answer! : Http.Request, Http.Response, FileRoot, Str, { size : U64, modified_seconds : I64, directory : Bool }, Try({ above_bytes : U64 }, [NotCompressible]) => [Answered(Http.Response), Missing, Broken, Redirect(Str)]
-file_answer! = |request, response, root, path, entry, compression| {
+file_answer! : Http.Request, Http.Response, FileRoot, Str, { size : U64, modified_seconds : I64, directory : Bool }, Try({ above_bytes : U64 }, [NotCompressible]), Str => [Answered(Http.Response), Missing, Broken, Redirect(Str)]
+file_answer! = |request, response, root, path, entry, compression, route| {
 	variants = FileRoot.precompressed(root)
 	accepted = match header_value(request, "accept-encoding") {
 		Ok(value) => value
@@ -295,11 +295,11 @@ file_answer! = |request, response, root, path, entry, compression| {
 					}
 				Err(NotCompressible) => { headers, gzip: Bool.False }
 			}
-			Answered(stream!(request, { ..response, headers: planned.headers }, 0, chosen.size, planned.gzip))
+			Answered(stream!(request, { ..response, headers: planned.headers }, 0, chosen.size, planned.gzip, route))
 		}
 		Part({ start, length }) => {
 			partial = with_header(headers, "content-range", "bytes ${start.to_str()}-${(start + length - 1).to_str()}/${chosen.size.to_str()}")
-			Answered(stream!(request, { ..response, status: 206, headers: partial }, start, length, Bool.False))
+			Answered(stream!(request, { ..response, status: 206, headers: partial }, start, length, Bool.False, route))
 		}
 	}
 }
@@ -336,10 +336,10 @@ choose_variant! = |root, path, entry, variants, accepted| {
 ## `response`: the head with `Content-Length`, then the bytes, unless the
 ## request is `HEAD`. With `gzip`, the host compresses them as they go, and
 ## the length is not known in the head.
-stream! : Http.Request, Http.Response, U64, U64, Bool => Http.Response
-stream! = |request, response, start, length, gzip| {
+stream! : Http.Request, Http.Response, U64, U64, Bool, Str => Http.Response
+stream! = |request, response, start, length, gzip, route| {
 	head = { ..response, body: Http.ResponseBody.Empty }
-	token = HostStream.start!(head, 0, [], Bool.False, if gzip { 18_446_744_073_709_551_615 } else { length }, gzip, "")
+	token = HostStream.start!(head, 0, [], Bool.False, if gzip { 18_446_744_073_709_551_615 } else { length }, gzip, route)
 	if token != 0 and request.method != Http.Method.HEAD and length != 0 {
 		_ = HostFiles.send!(token, start, length)
 	}

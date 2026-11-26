@@ -279,7 +279,7 @@ model and the existing worker threads serve both protocols. The HTTP/2 path
 executes routing and `BeforeBody` stages after initial headers. Ordinary handlers
 wait for finite input EOF. It accepts finite responses with trailers and
 [incremental callback responses](http2-streaming.md#production-callback-writer).
-File streams and non-default writer modes reset their stream. `Handler.streaming`
+Files with a known length use bounded DATA writes. Unsupported writer options reset the stream. `Handler.streaming`
 receives bounded input chunks before EOF.
 
 Each connection table slot optionally owns `http2/connection.zig`. Its connection

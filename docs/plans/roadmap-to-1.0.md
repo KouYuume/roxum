@@ -15,9 +15,10 @@ and the [0.4 acceptance checks](inbound-tls-0.4.md) for verification.
 
 ## 0.5 target — complete the HTTP feature set
 
-- Support file responses and SSE writer options over HTTP/2. Exercise the same
-  application routes over HTTP/1.1 and HTTP/2, including a slow reader and a
-  disconnect. Verify bounded file reads and release of file and stream resources.
+- [File responses](../guides/files.md#serving-a-directory) serve known-length files over
+  HTTP/1.1 and HTTP/2, including ranges and precompressed files.
+- Support SSE writer options over HTTP/2. Exercise the same application routes
+  over HTTP/1.1 and HTTP/2, including a slow reader and a disconnect.
 - Exercise an SSE subscription in which a separate request publishes an event.
   Check delivery and cleanup when the subscriber leaves. The application or an
   external service owns subscriptions and history.

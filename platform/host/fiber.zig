@@ -158,6 +158,8 @@ pub const Locals = struct {
     /// The file the request sends, or -1. Closed when the request
     /// ends, however it ends.
     file: c_int = -1,
+    /// A file write can suspend and abandon its stack while waiting for credit.
+    file_buffer: ?[]u8 = null,
     /// The keys the request holds. Given back when the
     /// request ends, however it ends.
     concurrency: concurrency_effect.Held = .{},

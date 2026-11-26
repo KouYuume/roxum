@@ -9,6 +9,7 @@ on beside a client that does not read, and no file left open by clients
 that go half way.
 """
 import http.client
+import json
 import os
 import pathlib
 import platform
@@ -60,6 +61,7 @@ def prepare(directory):
     base = pathlib.Path(directory)
     public = base / "public"
     (public / "sub").mkdir(parents=True)
+    (public / "empty").mkdir()
     (public / "a.txt").write_text("hello")
     for size in TRANSFER_SIZES:
         (public / f"boundary-{size}.bin").write_bytes(bytes(index % 251 for index in range(size)))
@@ -120,7 +122,7 @@ def request(port, path, headers=None, method="GET"):
         connection.close()
 
 
-def check_http_features(port):
+def check_http_features(port, request=request):
     """M22b: validators, conditional requests, ranges, directories, and
     precompressed files, for Files.serve and Reply.file alike."""
     for prefix in ("/serve", "/files"):
@@ -155,7 +157,7 @@ def check_http_features(port):
         check(f"{prefix}: a directory redirects", (status, headers.get("location")), (301, f"{prefix}/sub/?x=1"))
         status, headers, body = request(port, f"{prefix}/sub/")
         check(f"{prefix}: a directory's index", (status, headers.get("content-type"), body), (200, "text/html; charset=utf-8", b"<p>index</p>"))
-        check(f"{prefix}: a directory without an index", request(port, f"{prefix}/link_sub/../outside/")[0] in (400, 404), True)
+        check(f"{prefix}: a directory without an index", request(port, f"{prefix}/empty/")[0], 404)
 
     for accept, body, coding in (("br, gzip", b"brotli-bytes", "br"), ("gzip", b"gzip-bytes", "gzip"),
                                  ("br;q=0, gzip", b"gzip-bytes", "gzip"), ("identity", b"console.log(1)", None),
@@ -236,6 +238,8 @@ def run_checks(server, port, public):
     check_answers(port, public)
     print("files, HEAD, links, and paths out of the root: PASS")
     check_http_features(port)
+    for prefix in ("/serve", "/files"):
+        check("path with parent segment", request(port, f"{prefix}/link_sub/../outside/")[0] in (400, 404), True)
     print("validators, conditional requests, ranges, directories, precompressed files: PASS")
     check_big(port, workers[0], public)
     print("a 32 MiB file: PASS")
@@ -249,7 +253,12 @@ def run_checks(server, port, public):
 
 def main(executable):
     with tempfile.TemporaryDirectory() as directory:
+        from http2_files import verify as verify_http2
+
         public = prepare(directory)
+        config = pathlib.Path(directory) / "config"
+        config.mkdir()
+        (config / "local.toml").write_text("")
         with tempfile.TemporaryFile() as output:
             server = subprocess.Popen([executable], cwd=directory, stdout=subprocess.PIPE, stderr=output,
                                       text=True, start_new_session=True)
@@ -265,6 +274,21 @@ def main(executable):
                 if server.poll() is None:
                     server.kill()
                     server.wait(timeout=6)
+        (config / "local.toml").write_text("http2 = true")
+        with tempfile.TemporaryFile(mode="w+") as log, subprocess.Popen(
+            [executable], cwd=directory, stdout=subprocess.PIPE, stderr=log, text=True, start_new_session=True
+        ) as server:
+            try:
+                port = read_port(server)
+                worker = ready_workers(server)[0]
+                verify_http2(port, worker, public, check_http_features, TRANSFER_SIZES, open_files)
+            finally:
+                stop(server)
+            log.seek(0)
+            entries = [json.loads(line) for line in log if line.startswith("{")]
+            reset_file = [entry for entry in entries if entry.get("path") == "/files/big.bin"]
+            check("reset file access log", [(e.get("route"), e["outcome"]) for e in reset_file],
+                  [("/files/{*path}", "client_closed")])
         # A root that cannot be opened stops startup.
         (pathlib.Path(directory) / "public").rename(pathlib.Path(directory) / "elsewhere")
         server = subprocess.Popen([executable], cwd=directory, stdout=subprocess.PIPE, stderr=subprocess.PIPE,

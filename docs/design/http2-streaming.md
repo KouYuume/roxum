@@ -32,8 +32,13 @@ counts active callback writers; excess writers receive 503. HEAD and bodyless st
 and do not enter the callback. Normal cleanup and abandoned fibers release the
 writer's quota once.
 
+File responses use the same bounded output path. The host reads at most 64 KiB
+at a time and sends a known Content-Length. Only accepted DATA counts toward
+that length. A short read at EOF aborts the stream. Cancellation releases the
+file descriptor, read buffer and writer slot.
+
 This callback API currently supports default writer options and uncompressed
-output only. Keep-alive payloads, `ends_on_drain`, known-length file writes and
+output only. Keep-alive payloads, `ends_on_drain`, and
 trailers attached with `Reply.with_trailers` remain unsupported for callback
 writers. Use `ResponseWriter.finish!` for streamed trailers; unsupported writer
 options reset the attempted stream. Request reads use bounded incremental input;
