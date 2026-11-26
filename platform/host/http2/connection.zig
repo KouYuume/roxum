@@ -17,6 +17,8 @@ pub const Execution = struct {
     claimed: bool = false,
     response_complete: bool = false,
     finishing: bool = false,
+    keep_alive_interval: u64 = 0,
+    last_write_at: u64 = 0,
     input_discard_limit: ?u64 = null,
     waiter: ?struct { target: *fiber.Fiber, serial: u64, body_limit: ?u64 = null, output: bool = false, completion: bool = false, ends_on_drain: bool = false } = null,
 };
@@ -96,6 +98,30 @@ pub const Connection = struct {
         const current = value.ticket orelse return null;
         if (current.connection != ticket.connection or current.sequence != ticket.sequence) return null;
         return value;
+    }
+
+    /// The owner emits only between application writes, while the callback is
+    /// parked. Keep its original effect wait and deadline intact.
+    pub fn sendKeepAlives(self: *Connection) void {
+        if (self.failed or self.closed) return;
+        for (&self.executions) |*active| {
+            if (active.keep_alive_interval == 0 or active.finishing or self.now -| active.last_write_at < active.keep_alive_interval) continue;
+            const waiter = active.waiter orelse continue;
+            if (waiter.output or waiter.completion or (self.draining and waiter.ends_on_drain)) continue;
+            const ticket = active.ticket orelse continue;
+            const id = self.streams.leases.runningStream(ticket) orelse continue;
+            const count = self.owner.engine.writeKeepAlive(id) catch |err| {
+                if (err != error.Closed) {
+                    if (self.access[ticket.slot]) |*entry| entry.outcome = @import("../access_log.zig").Outcome.encode_failed;
+                    self.cancelTimedOut(id);
+                }
+                continue;
+            };
+            if (count == 0) continue;
+            active.last_write_at = self.now;
+            if (self.access[ticket.slot]) |*entry| entry.body_bytes += count;
+            self.owner.runnable = true;
+        }
     }
 
     pub fn wakeClosed(self: *Connection) void {
@@ -1098,6 +1124,54 @@ test "streamed completion retires input deadline before reset serialization" {
             try std.testing.expectEqual(@as(usize, 1), resets);
             try std.testing.expectEqual(@as(usize, 0), connection.owner.engine.activeStreams());
         }
+    }
+}
+
+test "keep-alive admission observes the quiet deadline and the current application wait" {
+    var pair: [2]c_int = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), std.c.socketpair(std.c.AF.UNIX, std.c.SOCK.STREAM, 0, &pair));
+    defer net.closeSocket(pair[1]);
+    var readiness = try poller.Poller.init();
+    defer readiness.deinit();
+    const connection = try Connection.create(pair[0], &readiness, 1, .{});
+    defer {
+        connection.executions = @splat(.{});
+        connection.disconnect();
+        connection.destroy();
+    }
+    const encoder = connection.owner.engine;
+    try encoder.receive("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" ++
+        "\x00\x00\x00\x04\x00\x00\x00\x00\x00" ++
+        "\x00\x00\x0e\x01\x05\x00\x00\x00\x01\x83\x86\x84\x01\x09localhost");
+    const work = connection.streams.nextMetadata().?.execute;
+    defer _ = connection.streams.finish(work.ticket);
+    try encoder.beginStreamingResponseWithKeepAlive(work.id, 200, &.{}, ":\n\n");
+    const active = &connection.executions[work.ticket.slot];
+    active.* = .{ .ticket = work.ticket, .keep_alive_interval = 10 };
+    var target = fiber.Fiber{ .memory = undefined };
+    connection.access[work.ticket.slot] = .{ .status = 200 };
+    for ([_]u64{ 109, 110, 111 }) |now| {
+        while (true) {
+            const output = try encoder.output();
+            if (output.len == 0) break;
+            try encoder.consumeOutput(output.len);
+        }
+        connection.now = now;
+        active.last_write_at = 100;
+        active.waiter = null;
+        connection.sendKeepAlives();
+        active.waiter = .{ .target = &target, .serial = 1, .output = true };
+        connection.sendKeepAlives();
+        active.waiter.?.output = false;
+        active.waiter.?.ends_on_drain = true;
+        connection.draining = true;
+        connection.sendKeepAlives();
+        try std.testing.expectEqual(@as(u64, 100), active.last_write_at);
+        connection.draining = false;
+        const before = connection.access[work.ticket.slot].?.body_bytes;
+        connection.sendKeepAlives();
+        const expected: u64 = if (now >= 110) 3 else 0;
+        try std.testing.expectEqual(before + expected, connection.access[work.ticket.slot].?.body_bytes);
     }
 }
 

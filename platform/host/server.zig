@@ -745,11 +745,11 @@ fn RequestFiber(comptime Environment: type) type {
             }
         }
 
-        fn startHttp2Stream(ptr: *anyopaque, response: *const bridge.HttpResponse, keep_alive: u64, _: []const u8, ends_on_drain: bool, content_length: ?u64, gzip_body: bool) bool {
+        fn startHttp2Stream(ptr: *anyopaque, response: *const bridge.HttpResponse, keep_alive: u64, keep_alive_bytes: []const u8, ends_on_drain: bool, content_length: ?u64, gzip_body: bool) bool {
             const self: *Self = @ptrCast(@alignCast(ptr));
             self.http2_stream_attempted = true;
             // These HTTP/1 writer modes need their own HTTP/2 lifecycle contract.
-            if (keep_alive != 0 or gzip_body or response.trailers.items().len != 0) return false;
+            if (gzip_body or response.trailers.items().len != 0) return false;
             const item = &self.shared.handoff.connections[self.dispatch.slot];
             item.lock.lock();
             defer item.lock.unlock();
@@ -801,10 +801,17 @@ fn RequestFiber(comptime Environment: type) type {
                 self.http2_stream_head = @import("http2/deferred_response.zig").Response.init(protocol.budget.allocator(), protocol.owner.engine, id, status, if (bodyless) fields[0..field_count] else &.{}, "", &.{}) catch return false;
             } else {
                 const engine = protocol.owner.engine;
+                const payload = if (keep_alive == 0) &.{} else keep_alive_bytes;
                 if (content_length) |length| {
+                    if (payload.len != 0) return false;
                     engine.beginSizedStreamingResponse(id, status, fields[0..field_count], length) catch return false;
                 } else {
-                    engine.beginStreamingResponse(id, status, fields[0..field_count]) catch return false;
+                    engine.beginStreamingResponseWithKeepAlive(id, status, fields[0..field_count], payload) catch return false;
+                }
+                if (payload.len != 0) {
+                    const active = protocol.execution(ticket).?;
+                    active.keep_alive_interval = keep_alive *| std.time.ns_per_ms;
+                    active.last_write_at = protocol.now;
                 }
                 self.http2_stream_started = true;
                 if (ends_on_drain) fiber.currentLocals().?.http2_drain = .{ .context = self, .finish = finishDrainedHttp2Stream };
@@ -869,6 +876,7 @@ fn RequestFiber(comptime Environment: type) type {
                     const count = @min(bytes.len - offset, protocol.owner.engine.limits.stream_chunk_bytes);
                     if (!(protocol.owner.engine.writeStreamingResponse(id, bytes[offset..][0..count]) catch return false)) break :blk false;
                     offset += count;
+                    if (count != 0) protocol.executions[ticket.slot].last_write_at = protocol.now;
                     protocol.owner.runnable = true;
                     if (protocol.access[ticket.slot]) |*entry| entry.body_bytes += count;
                     self.thread.io.driveHttp2Output(self.dispatch);
@@ -905,6 +913,7 @@ fn RequestFiber(comptime Environment: type) type {
             if (protocol.failed or protocol.closed) return 3;
             const id = protocol.streams.leases.runningStream(ticket) orelse return 3;
             if (!(protocol.owner.engine.writeStreamingResponse(id, bytes) catch return 3)) return 2;
+            if (bytes.len != 0) protocol.executions[ticket.slot].last_write_at = protocol.now;
             if (protocol.access[ticket.slot]) |*entry| entry.body_bytes += bytes.len;
             protocol.owner.runnable = true;
             self.thread.io.driveHttp2Output(self.dispatch);

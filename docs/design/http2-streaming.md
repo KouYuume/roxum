@@ -40,8 +40,11 @@ file descriptor, read buffer and writer slot.
 With `ends_on_drain`, shutdown wakes the callback at its next eligible wait.
 A write in progress completes its DATA parts before the host ends the stream.
 Socket backpressure remains subject to the write and drain deadlines.
-The callback API supports uncompressed output. Periodic keep-alive payloads and
-trailers attached with `Reply.with_trailers` remain unsupported for callback
+The connection timer sends configured keep-alive bytes while a callback waits.
+Each stream retains one copy within the connection memory budget. A slow reader
+can have one keep-alive in flight. Missed intervals do not accumulate, and
+keep-alives do not extend the response-write deadline.
+The callback API supports uncompressed output. Trailers attached with `Reply.with_trailers` remain unsupported for callback
 writers. Use `ResponseWriter.finish!` for streamed trailers; unsupported writer
 options reset the attempted stream. Request reads use bounded incremental input;
 `Handler.duplex` continues reading after streaming headers, until completion is selected.

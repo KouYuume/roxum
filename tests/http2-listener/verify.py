@@ -769,7 +769,7 @@ def verify_stream_output(executable, unix):
                         client.reset_stream(wire_ids[sid])
                     def request(sid, route, method='GET'):
                         retry = method == 'GET' and sid != 5 and route in {
-                            '/stream-output', '/stream-empty', '/stream-cancel',
+                            '/stream-output', '/stream-empty', '/stream-cancel', '/stream-keep-alive',
                             '/stream-expiry', '/stream-crash', '/stream-finish',
                             '/stream-finish-empty', '/stream-terminal-pending',
                             '/stream-terminal-expiry', '/stream-terminal-wins',
@@ -876,8 +876,18 @@ def verify_stream_output(executable, unix):
                         until(lambda: sid in ended)
                         assert headers[sid][':status'] == status and bodies[sid] == b''
                         assert sid not in reset
-                    request(65, '/stream-options')
-                    until(lambda: 65 in reset)
+                    request(65, '/stream-keep-alive')
+                    until(lambda: bodies[65] == b'data:')
+                    # Hold stream credit across several heartbeat intervals mid-event.
+                    time.sleep(.15)
+                    event = b'data: ' + b'x' * 20000 + b'\n\n'
+                    expected = event + b':\n\n' * 2
+                    grant(65, len(expected) - 5)
+                    flush()
+                    until(lambda: len(bodies[65]) >= len(expected))
+                    assert bodies[65] == expected and 65 not in ended
+                    reset_stream(65)
+                    flush()
                     request(67, '/stream-empty')
                     until(lambda: 67 in ended)
                     assert headers[67][':status'] == '200'
@@ -1074,7 +1084,7 @@ def verify_completion_timeout(executable, unix):
         path = str(pathlib.Path(directory) / 'http.sock') if unix else ''
         config = pathlib.Path(directory) / 'config'
         config.mkdir()
-        (config / 'local.toml').write_text('path = ' + json.dumps(path) + '\nwrite_milliseconds = 150\n')
+        (config / 'local.toml').write_text('path = ' + json.dumps(path) + '\nwrite_milliseconds = 500\n')
         with tempfile.TemporaryFile(mode='w+') as errors:
             process = subprocess.Popen([executable], cwd=directory, stdout=subprocess.PIPE,
                                        stderr=errors, text=True, start_new_session=True)
@@ -1110,11 +1120,21 @@ def verify_completion_timeout(executable, unix):
                     request(1, '/stream-terminal-wins')
                     receive(lambda: 1 in reset)
                     assert bodies[1] == b'first' and 1 not in ended
-                    request(3, '/echo')
-                    client.increment_flow_control_window(64, stream_id=3)
+                    request(5, '/stream-keep-alive')
+                    client.increment_flow_control_window(30000, stream_id=5)
                     sock.sendall(client.data_to_send())
-                    receive(lambda: 3 in ended)
-                    assert bodies[3] == b'42|h2|' and 3 not in reset
+                    stop_at = time.monotonic() + 5
+                    def heartbeat_timeout():
+                        assert time.monotonic() < stop_at, 'heartbeat extended the write deadline'
+                        return 5 in reset
+                    receive(heartbeat_timeout)
+                    event = b'data: ' + b'x' * 20000 + b'\n\n'
+                    assert bodies[5].startswith(event + b':\n\n') and 5 not in ended
+                    request(7, '/echo')
+                    client.increment_flow_control_window(64, stream_id=7)
+                    sock.sendall(client.data_to_send())
+                    receive(lambda: 7 in ended)
+                    assert bodies[7] == b'42|h2|' and 7 not in reset
                 assert stop(process) == 0
                 errors.seek(0)
                 diagnostic = errors.read()
@@ -1125,10 +1145,14 @@ def verify_completion_timeout(executable, unix):
     print('PASS write timeout after terminal selection ' + ('Unix' if unix else 'TCP'))
 
 
-def verify_stream_shutdown(executable, unix, forced, sse=False, idle=False, disconnect=False):
+def verify_stream_shutdown(executable, unix, forced, route="/stream-terminal-wins", idle=False, disconnect=False):
+    sse = route != "/stream-terminal-wins"
     expected = b"data: " + b"x" * 20000 + b"\n\n" if sse else b"firstend"
     window = len(expected) if idle else 5
-    route = "/stream-drain" if sse else "/stream-terminal-wins"
+    if route == "/stream-keep-alive":
+        # Withhold the last two bytes of the first comment through GOAWAY.
+        window = len(expected) + 1
+        expected += b":\n\n"
     with tempfile.TemporaryDirectory(prefix='roxum-h2-finish-drain-', dir='/tmp') as directory:
         path = str(pathlib.Path(directory) / 'http.sock') if unix else ''
         config = pathlib.Path(directory) / 'config'
@@ -1237,9 +1261,10 @@ if __name__ == '__main__':
         verify_completion_timeout(executable, unix)
         for forced in (False, True):
             verify_stream_shutdown(executable, unix, forced)
-            verify_stream_shutdown(executable, unix, forced, sse=True)
-        verify_stream_shutdown(executable, unix, False, sse=True, idle=True)
-        verify_stream_shutdown(executable, unix, False, sse=True, disconnect=True)
+            verify_stream_shutdown(executable, unix, forced, route="/stream-drain")
+        verify_stream_shutdown(executable, unix, False, route="/stream-keep-alive")
+        verify_stream_shutdown(executable, unix, False, route="/stream-drain", idle=True)
+        verify_stream_shutdown(executable, unix, False, route="/stream-drain", disconnect=True)
     verify(executable, False)
     verify(executable, True)
     verify(executable, False, True)
